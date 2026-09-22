@@ -72,3 +72,8 @@ Plugins/**/Intermediate/*
 
 # Cache files for the editor to use
 DerivedDataCache/*
+
+# Reproducible Fab Marketplace content (Warehouse)
+/Content/Scene_Warehouse/
+/Content/__ExternalActors__/Scene_Warehouse/
+/Content/__ExternalObjects__/Scene_Warehouse/
