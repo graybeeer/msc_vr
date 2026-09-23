@@ -11,6 +11,8 @@ class UInputComponent;
 class USkeletalMeshComponent;
 class UCameraComponent;
 class UInputAction;
+class UInputMappingContext;
+class AStaticMeshActor;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -48,6 +50,15 @@ protected:
 	/** Mouse Look Input Action */
 	UPROPERTY(EditAnywhere, Category ="Input")
 	class UInputAction* MouseLookAction;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> CarryAction;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputMappingContext> CarryMappingContext;
+
+	UPROPERTY(Transient)
+	TObjectPtr<AStaticMeshActor> HeldCargo;
 	
 public:
 	Amsc_vrCharacter();
@@ -76,10 +87,14 @@ protected:
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoJumpEnd();
 
+	/** Pick up or drop a nearby tagged box or crate. */
+	void ToggleCarry();
+
 protected:
 
 	/** Set up input action bindings */
 	virtual void SetupPlayerInputComponent(UInputComponent* InputComponent) override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	
 
 public:

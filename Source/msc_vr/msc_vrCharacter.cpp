@@ -6,8 +6,16 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "EnhancedInputComponent.h"
+#include "EnhancedInputSubsystems.h"
+#include "Engine/LocalPlayer.h"
+#include "Engine/StaticMeshActor.h"
+#include "EngineUtils.h"
+#include "InputAction.h"
 #include "InputActionValue.h"
+#include "InputMappingContext.h"
+#include "InputCoreTypes.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PlayerController.h"
 #include "msc_vr.h"
 
 Amsc_vrCharacter::Amsc_vrCharacter()
@@ -59,10 +67,111 @@ void Amsc_vrCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 		// Looking/Aiming
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &Amsc_vrCharacter::LookInput);
 		EnhancedInputComponent->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &Amsc_vrCharacter::LookInput);
+
+		if (!CarryAction)
+		{
+			CarryAction = NewObject<UInputAction>(this, TEXT("CarryCargo"));
+			CarryMappingContext = NewObject<UInputMappingContext>(this, TEXT("CarryCargoKeys"));
+			CarryMappingContext->MapKey(CarryAction, EKeys::E);
+		}
+		EnhancedInputComponent->BindAction(CarryAction, ETriggerEvent::Started, this, &Amsc_vrCharacter::ToggleCarry);
+		if (const APlayerController* PC = Cast<APlayerController>(GetController()))
+		{
+			if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
+			{
+				Subsystem->AddMappingContext(CarryMappingContext, 1);
+			}
+		}
 	}
 	else
 	{
 		UE_LOG(Logmsc_vr, Error, TEXT("'%s' Failed to find an Enhanced Input Component! This template is built to use the Enhanced Input system. If you intend to use the legacy system, then you will need to update this C++ file."), *GetNameSafe(this));
+	}
+}
+
+void Amsc_vrCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (const APlayerController* PC = Cast<APlayerController>(GetController()))
+	{
+		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
+		{
+			Subsystem->RemoveMappingContext(CarryMappingContext);
+		}
+	}
+	Super::EndPlay(EndPlayReason);
+}
+
+void Amsc_vrCharacter::ToggleCarry()
+{
+	if (IsValid(HeldCargo))
+	{
+		AStaticMeshActor* Cargo = HeldCargo;
+		HeldCargo = nullptr;
+		Cargo->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		UStaticMeshComponent* Mesh = Cargo->GetStaticMeshComponent();
+		Mesh->SetCollisionProfileName(TEXT("PhysicsActor"));
+		Mesh->SetSimulatePhysics(true);
+		if (!Mesh->IsSimulatingPhysics())
+		{
+			// Imported meshes without a simple shape still land on the floor.
+			FVector Origin, Extent;
+			Cargo->GetActorBounds(false, Origin, Extent);
+			FHitResult Floor;
+			FCollisionQueryParams Query(SCENE_QUERY_STAT(CargoDrop), false, this);
+			Query.AddIgnoredActor(Cargo);
+			if (GetWorld()->LineTraceSingleByChannel(Floor, Origin, Origin - FVector(0, 0, 300), ECC_Visibility, Query))
+			{
+				Cargo->SetActorLocation(Cargo->GetActorLocation() + FVector(0, 0, Floor.ImpactPoint.Z + Extent.Z - Origin.Z + 2));
+			}
+			Mesh->SetCollisionProfileName(TEXT("BlockAllDynamic"));
+		}
+		return;
+	}
+
+	const FVector Eye = FirstPersonCameraComponent->GetComponentLocation();
+	const FVector Forward = FirstPersonCameraComponent->GetForwardVector();
+	AStaticMeshActor* Best = nullptr;
+	float BestOffset = TNumericLimits<float>::Max();
+	for (TActorIterator<AStaticMeshActor> It(GetWorld()); It; ++It)
+	{
+		AStaticMeshActor* Cargo = *It;
+		if (!Cargo->ActorHasTag(TEXT("Carryable")))
+		{
+			continue;
+		}
+		FVector Origin, Extent;
+		Cargo->GetActorBounds(false, Origin, Extent);
+		const FVector ToCargo = Origin - Eye;
+		const float AlongView = FVector::DotProduct(ToCargo, Forward);
+		if (AlongView < 20.f || AlongView > 250.f)
+		{
+			continue;
+		}
+		const float Offset = (ToCargo - Forward * AlongView).SizeSquared();
+		if (Offset < 65.f * 65.f && Offset < BestOffset)
+		{
+			Best = Cargo;
+			BestOffset = Offset;
+		}
+	}
+	if (!Best)
+	{
+		return;
+	}
+
+	UStaticMeshComponent* Mesh = Best->GetStaticMeshComponent();
+	Mesh->SetMobility(EComponentMobility::Movable);
+	Mesh->SetSimulatePhysics(false);
+	Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	if (Best->AttachToComponent(FirstPersonCameraComponent, FAttachmentTransformRules::KeepWorldTransform))
+	{
+		Best->SetActorRelativeLocation(FVector(170, 55, -45));
+		Best->SetActorRelativeRotation(FRotator::ZeroRotator);
+		HeldCargo = Best;
+	}
+	else
+	{
+		Mesh->SetCollisionProfileName(TEXT("BlockAllDynamic"));
 	}
 }
 
