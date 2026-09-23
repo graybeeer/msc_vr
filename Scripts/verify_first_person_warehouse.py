@@ -10,8 +10,9 @@ assert len([name for name in labels if name.startswith('WH_Collider_Rack_')]) ==
 assert len([name for name in labels if name.startswith('WH_Collider_LightFixture_')]) == 6
 carryables = [actor for actor in actors if unreal.Name('Carryable') in actor.get_editor_property('tags')]
 assert len(carryables) == 68
-assert all(isinstance(actor, unreal.StaticMeshActor) and
-           actor.static_mesh_component.get_editor_property('mobility') == unreal.ComponentMobility.MOVABLE
+assert all(actor.get_class().get_name() == 'WarehouseCargo' and
+           actor.get_component_by_class(unreal.BoxComponent).get_unscaled_box_extent().x > 0 and
+           actor.get_component_by_class(unreal.BoxComponent).get_collision_profile_name() == 'PhysicsActor'
            for actor in carryables)
 assert 'WH_Roof' in labels and 'WH_LoadingDoor_Header' in labels
 assert 'PlayerStart' in labels and 'Floor' in labels
@@ -22,7 +23,8 @@ assert forklift.get_component_by_class(unreal.BoxComponent).get_unscaled_box_ext
 for actor in actors:
     if isinstance(actor, unreal.StaticMeshActor) and (actor.get_actor_label().startswith('WH_') or actor.get_actor_label() == 'Floor'):
         profile = actor.static_mesh_component.get_collision_profile_name()
-        assert profile in (('BlockAll', 'BlockAllDynamic') if actor.get_actor_label() == 'Floor' else ('BlockAll',)), (actor.get_actor_label(), profile)
+        allowed = ('BlockAll', 'BlockAllDynamic') if actor.get_actor_label() == 'Floor' else ('BlockAll',)
+        assert profile in allowed, (actor.get_actor_label(), profile)
     if actor.get_actor_label().startswith('WH_Collider_'):
         assert not actor.static_mesh_component.is_visible()
 print('WAREHOUSE_VERIFIED', len(actors), 'actors', '176 rack parts', '30 collision proxies', '68 carryable cargo')

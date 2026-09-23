@@ -4,12 +4,11 @@
 #include "Animation/AnimInstance.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/BoxComponent.h"
 #include "Components/SkeletalMeshComponent.h"
-#include "Components/StaticMeshComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
-#include "Engine/StaticMeshActor.h"
 #include "EngineUtils.h"
 #include "InputAction.h"
 #include "InputActionValue.h"
@@ -18,6 +17,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "msc_vr.h"
+#include "WarehouseCargo.h"
 
 Amsc_vrCharacter::Amsc_vrCharacter()
 {
@@ -109,40 +109,22 @@ void Amsc_vrCharacter::ToggleCarry()
 {
 	if (IsValid(HeldCargo))
 	{
-		AStaticMeshActor* Cargo = HeldCargo;
+		AWarehouseCargo* Cargo = HeldCargo;
 		HeldCargo = nullptr;
 		Cargo->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-		UStaticMeshComponent* CargoMesh = Cargo->GetStaticMeshComponent();
-		CargoMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
-		CargoMesh->SetSimulatePhysics(true);
-		if (!CargoMesh->IsSimulatingPhysics())
-		{
-			// Imported meshes without a simple shape still land on the floor.
-			FVector Origin, Extent;
-			Cargo->GetActorBounds(false, Origin, Extent);
-			FHitResult Floor;
-			FCollisionQueryParams Query(SCENE_QUERY_STAT(CargoDrop), false, this);
-			Query.AddIgnoredActor(Cargo);
-			if (GetWorld()->LineTraceSingleByChannel(Floor, Origin, Origin - FVector(0, 0, 300), ECC_Visibility, Query))
-			{
-				Cargo->SetActorLocation(Cargo->GetActorLocation() + FVector(0, 0, Floor.ImpactPoint.Z + Extent.Z - Origin.Z + 2));
-			}
-			CargoMesh->SetCollisionProfileName(TEXT("BlockAllDynamic"));
-		}
+		UBoxComponent* Body = Cargo->GetCargoBody();
+		Body->SetCollisionProfileName(TEXT("PhysicsActor"));
+		Body->SetSimulatePhysics(true);
 		return;
 	}
 
 	const FVector Eye = FirstPersonCameraComponent->GetComponentLocation();
 	const FVector Forward = FirstPersonCameraComponent->GetForwardVector();
-	AStaticMeshActor* Best = nullptr;
+	AWarehouseCargo* Best = nullptr;
 	float BestOffset = TNumericLimits<float>::Max();
-	for (TActorIterator<AStaticMeshActor> It(GetWorld()); It; ++It)
+	for (TActorIterator<AWarehouseCargo> It(GetWorld()); It; ++It)
 	{
-		AStaticMeshActor* Cargo = *It;
-		if (!Cargo->ActorHasTag(TEXT("Carryable")))
-		{
-			continue;
-		}
+		AWarehouseCargo* Cargo = *It;
 		FVector Origin, Extent;
 		Cargo->GetActorBounds(false, Origin, Extent);
 		const FVector ToCargo = Origin - Eye;
@@ -163,10 +145,9 @@ void Amsc_vrCharacter::ToggleCarry()
 		return;
 	}
 
-	UStaticMeshComponent* CargoMesh = Best->GetStaticMeshComponent();
-	CargoMesh->SetMobility(EComponentMobility::Movable);
-	CargoMesh->SetSimulatePhysics(false);
-	CargoMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	UBoxComponent* Body = Best->GetCargoBody();
+	Body->SetSimulatePhysics(false);
+	Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	if (Best->AttachToComponent(FirstPersonCameraComponent, FAttachmentTransformRules::KeepWorldTransform))
 	{
 		Best->SetActorRelativeLocation(FVector(170, 55, -45));
@@ -175,7 +156,7 @@ void Amsc_vrCharacter::ToggleCarry()
 	}
 	else
 	{
-		CargoMesh->SetCollisionProfileName(TEXT("BlockAllDynamic"));
+		Body->SetCollisionProfileName(TEXT("PhysicsActor"));
 	}
 }
 

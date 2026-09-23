@@ -12,7 +12,7 @@ class USkeletalMeshComponent;
 class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
-class AStaticMeshActor;
+class AWarehouseCargo;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -58,7 +58,7 @@ protected:
 	TObjectPtr<UInputMappingContext> CarryMappingContext;
 
 	UPROPERTY(Transient)
-	TObjectPtr<AStaticMeshActor> HeldCargo;
+	TObjectPtr<AWarehouseCargo> HeldCargo;
 	
 public:
 	Amsc_vrCharacter();

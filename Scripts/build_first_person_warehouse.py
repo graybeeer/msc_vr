@@ -17,7 +17,8 @@ crate = unreal.load_asset(PACK + 'Ind_War_Storage_Crate_Plastic_Blue_01/SM_Ind_W
 lamp = unreal.load_asset(PACK + 'Ind_War_Light_Ceiling_Metal_Hanging_01/SM_Ind_War_Light_Ceiling_Metal_Hanging_01')
 floor_mat = unreal.load_asset('/Game/Scene_Warehouse/Assets/MS/Surfaces/Ind_War_Floor_Concrete_Smooth_01/MI_Ind_War_Floor_Concrete_Smooth_01_A')
 wall_mat = unreal.load_asset('/Game/Scene_Warehouse/Assets/MS/Surfaces/Ind_War_Wall_Facade_Concrete_New_01/MI_Ind_War_Wall_Facade_Concrete_New_01_A')
-assert all([cube, pallet, box, crate, lamp, floor_mat, wall_mat, *rack_parts.values()]), 'Warehouse pack is incomplete'
+cargo_class = unreal.load_class(None, '/Script/msc_vr.WarehouseCargo')
+assert all([cube, pallet, box, crate, lamp, floor_mat, wall_mat, cargo_class, *rack_parts.values()]), 'Warehouse pack or cargo class is incomplete'
 
 for actor in actors.get_all_level_actors():
     label = actor.get_actor_label()
@@ -33,16 +34,19 @@ for actor in actors.get_all_level_actors():
         actor.set_actor_rotation(unreal.Rotator(0, 90, 0), False)
 
 def place(label, mesh, xyz, scale=(1, 1, 1), yaw=0, material=None, visible=True, carryable=False):
-    actor = actors.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector(*xyz), unreal.Rotator(0, yaw, 0))
+    actor_class = cargo_class if carryable else unreal.StaticMeshActor
+    actor = actors.spawn_actor_from_class(actor_class, unreal.Vector(*xyz), unreal.Rotator(0, yaw, 0))
     assert actor, 'Failed to spawn ' + label
+    if carryable:
+        actor.set_actor_scale3d(unreal.Vector(*scale))
+        actor.set_cargo_mesh(mesh)
+        actor.set_actor_label('WH_' + label)
+        return actor
     actor.set_actor_label('WH_' + label)
     component = actor.static_mesh_component
     component.set_static_mesh(mesh)
     component.set_collision_profile_name('BlockAll')
     component.set_visibility(visible)
-    if carryable:
-        component.set_editor_property('mobility', unreal.ComponentMobility.MOVABLE)
-        actor.set_editor_property('tags', [unreal.Name('Carryable')])
     actor.set_actor_scale3d(unreal.Vector(*scale))
     if material:
         component.set_material(0, material)

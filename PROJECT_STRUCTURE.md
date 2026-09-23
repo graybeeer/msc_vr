@@ -12,7 +12,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | --- | --- | --- |
 | 창고 배치·랙·화물·조명 | `WAREHOUSE.md`, `Scripts/build_first_person_warehouse.py`, `Content/FirstPerson/Lvl_FirstPerson.umap` | `Content/__ExternalActors__/FirstPerson/Lvl_FirstPerson/` (엔진이 생성한 액터 데이터) |
 | 배치·충돌 검증 | `Scripts/verify_first_person_warehouse.py`, `Scripts/build_first_person_warehouse.py` | 실제 에디터의 충돌 뷰/플레이 테스트 |
-| 상자·크레이트 집기 | `Source/msc_vr/msc_vrCharacter.h/.cpp`, `Scripts/configure_carryable_cargo.py` | `Scripts/build_first_person_warehouse.py`의 화물 배치 |
+| 상자·크레이트 집기 | `Source/msc_vr/msc_vrCharacter.h/.cpp`, `Source/msc_vr/WarehouseCargo.h/.cpp` | `Scripts/configure_carryable_cargo.py`, `Scripts/build_first_person_warehouse.py`의 화물 배치 |
 | 지게차 외형·차체 충돌 | `Source/msc_vr/WarehouseForklift.h`, `Source/msc_vr/WarehouseForklift.cpp` | 맵 생성 스크립트의 지게차 배치 부분 |
 | 향후 주행·센서·물리·시나리오 | 현재 전용 구현 없음. 요구사항에 맞는 새 모듈의 책임부터 정한 후 `Source/msc_vr/` 확인 | `Config/DefaultEngine.ini`, 관련 레벨/블루프린트 |
 | 1인칭 조작·카메라 | `Source/msc_vr/msc_vrCharacter.*`, `msc_vrPlayerController.*`, `msc_vrCameraManager.*` | `Content/FirstPerson/Blueprints/`, `Content/Input/`, `Config/DefaultInput.ini` |
@@ -60,6 +60,8 @@ msc_vr/
       msc_vrGameMode.h
       msc_vrPlayerController.cpp
       msc_vrPlayerController.h
+      WarehouseCargo.cpp
+      WarehouseCargo.h
       WarehouseForklift.cpp
       WarehouseForklift.h
       Variant_Horror/
