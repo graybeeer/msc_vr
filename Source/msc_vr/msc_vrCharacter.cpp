@@ -5,6 +5,7 @@
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
@@ -95,7 +96,10 @@ void Amsc_vrCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	{
 		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
 		{
-			Subsystem->RemoveMappingContext(CarryMappingContext);
+			if (CarryMappingContext)
+			{
+				Subsystem->RemoveMappingContext(CarryMappingContext);
+			}
 		}
 	}
 	Super::EndPlay(EndPlayReason);
@@ -108,10 +112,10 @@ void Amsc_vrCharacter::ToggleCarry()
 		AStaticMeshActor* Cargo = HeldCargo;
 		HeldCargo = nullptr;
 		Cargo->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-		UStaticMeshComponent* Mesh = Cargo->GetStaticMeshComponent();
-		Mesh->SetCollisionProfileName(TEXT("PhysicsActor"));
-		Mesh->SetSimulatePhysics(true);
-		if (!Mesh->IsSimulatingPhysics())
+		UStaticMeshComponent* CargoMesh = Cargo->GetStaticMeshComponent();
+		CargoMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
+		CargoMesh->SetSimulatePhysics(true);
+		if (!CargoMesh->IsSimulatingPhysics())
 		{
 			// Imported meshes without a simple shape still land on the floor.
 			FVector Origin, Extent;
@@ -123,7 +127,7 @@ void Amsc_vrCharacter::ToggleCarry()
 			{
 				Cargo->SetActorLocation(Cargo->GetActorLocation() + FVector(0, 0, Floor.ImpactPoint.Z + Extent.Z - Origin.Z + 2));
 			}
-			Mesh->SetCollisionProfileName(TEXT("BlockAllDynamic"));
+			CargoMesh->SetCollisionProfileName(TEXT("BlockAllDynamic"));
 		}
 		return;
 	}
@@ -159,10 +163,10 @@ void Amsc_vrCharacter::ToggleCarry()
 		return;
 	}
 
-	UStaticMeshComponent* Mesh = Best->GetStaticMeshComponent();
-	Mesh->SetMobility(EComponentMobility::Movable);
-	Mesh->SetSimulatePhysics(false);
-	Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	UStaticMeshComponent* CargoMesh = Best->GetStaticMeshComponent();
+	CargoMesh->SetMobility(EComponentMobility::Movable);
+	CargoMesh->SetSimulatePhysics(false);
+	CargoMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	if (Best->AttachToComponent(FirstPersonCameraComponent, FAttachmentTransformRules::KeepWorldTransform))
 	{
 		Best->SetActorRelativeLocation(FVector(170, 55, -45));
@@ -171,7 +175,7 @@ void Amsc_vrCharacter::ToggleCarry()
 	}
 	else
 	{
-		Mesh->SetCollisionProfileName(TEXT("BlockAllDynamic"));
+		CargoMesh->SetCollisionProfileName(TEXT("BlockAllDynamic"));
 	}
 }
 
