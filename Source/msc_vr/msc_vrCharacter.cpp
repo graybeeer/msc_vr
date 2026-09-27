@@ -4,7 +4,8 @@
 #include "Animation/AnimInstance.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
-#include "Components/BoxComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "WarehouseForklift.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
@@ -112,7 +113,7 @@ void Amsc_vrCharacter::ToggleCarry()
 		AWarehouseCargo* Cargo = HeldCargo;
 		HeldCargo = nullptr;
 		Cargo->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-		UBoxComponent* Body = Cargo->GetCargoBody();
+		UStaticMeshComponent* Body = Cargo->GetCargoBody();
 		Body->SetCollisionProfileName(TEXT("PhysicsActor"));
 		Body->SetSimulatePhysics(true);
 		return;
@@ -120,32 +121,21 @@ void Amsc_vrCharacter::ToggleCarry()
 
 	const FVector Eye = FirstPersonCameraComponent->GetComponentLocation();
 	const FVector Forward = FirstPersonCameraComponent->GetForwardVector();
-	AWarehouseCargo* Best = nullptr;
-	float BestOffset = TNumericLimits<float>::Max();
-	for (TActorIterator<AWarehouseCargo> It(GetWorld()); It; ++It)
+	FHitResult Hit;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(Interact), true, this);
+	if (!GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye + Forward * 250.f, ECC_Visibility, Params)) return;
+	if (AWarehouseForklift* Forklift = Cast<AWarehouseForklift>(Hit.GetActor()))
 	{
-		AWarehouseCargo* Cargo = *It;
-		FVector Origin, Extent;
-		Cargo->GetActorBounds(false, Origin, Extent);
-		const FVector ToCargo = Origin - Eye;
-		const float AlongView = FVector::DotProduct(ToCargo, Forward);
-		if (AlongView < 20.f || AlongView > 250.f)
-		{
-			continue;
-		}
-		const float Offset = (ToCargo - Forward * AlongView).SizeSquared();
-		if (Offset < 65.f * 65.f && Offset < BestOffset)
-		{
-			Best = Cargo;
-			BestOffset = Offset;
-		}
+		Forklift->TogglePower();
+		return;
 	}
+	AWarehouseCargo* Best = Cast<AWarehouseCargo>(Hit.GetActor());
 	if (!Best)
 	{
 		return;
 	}
 
-	UBoxComponent* Body = Best->GetCargoBody();
+	UStaticMeshComponent* Body = Best->GetCargoBody();
 	Body->SetSimulatePhysics(false);
 	Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	if (Best->AttachToComponent(FirstPersonCameraComponent, FAttachmentTransformRules::KeepWorldTransform))

@@ -75,5 +75,7 @@ DerivedDataCache/*
 
 # Reproducible Fab Marketplace content (Warehouse)
 /Content/Scene_Warehouse/
+/Content/Warehouse/Collision/
+/Content/Warehouse/Physics/
 /Content/__ExternalActors__/Scene_Warehouse/
 /Content/__ExternalObjects__/Scene_Warehouse/
