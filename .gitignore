@@ -79,3 +79,9 @@ DerivedDataCache/*
 /Content/Warehouse/Physics/
 /Content/__ExternalActors__/Scene_Warehouse/
 /Content/__ExternalObjects__/Scene_Warehouse/
+
+# Reinstall free Fab exterior packs per WAREHOUSE.md instead of committing binaries.
+/Content/GV_FreeShrubsPack/
+/Content/VehicleVarietyPack/
+/Content/EuropeanBeech/
+/Content/MSPresets/

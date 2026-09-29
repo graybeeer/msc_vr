@@ -59,9 +59,35 @@ protected:
 
 	UPROPERTY(Transient)
 	TObjectPtr<AWarehouseCargo> HeldCargo;
+
+	UPROPERTY(VisibleAnywhere, Category="Carry")
+	TObjectPtr<USkeletalMeshComponent> CarryMesh;
+	float CarryBlend = 0.f;
+	float CarryPhase = 0.f;
+	float NormalWalkSpeed = 0.f;
+	float NormalFirstPersonFOV = 70.f;
+	FVector CarryHands[2] = {FVector::ZeroVector,FVector::ZeroVector};
+	FVector CarryElbows[2] = {FVector::ZeroVector,FVector::ZeroVector};
+	FQuat CarryFacing = FQuat::Identity;
+	FTransform PickupTransform;
+	float PickupTime = 0.f;
+	bool InitializeCarryMesh();
 	
 public:
 	Amsc_vrCharacter();
+	virtual void Tick(float DeltaSeconds) override;
+	UFUNCTION(BlueprintCallable, Category="Carry")
+	bool TryPickupCargo(AWarehouseCargo* Cargo);
+	UFUNCTION(BlueprintCallable, Category="Carry")
+	void DropCargo();
+	UFUNCTION(BlueprintCallable, Category="Carry")
+	void UpdateCarryPose(float DeltaSeconds);
+	UFUNCTION(BlueprintPure, Category="Carry")
+	float GetCarryBlend() const { return CarryBlend; }
+	UFUNCTION(BlueprintPure, Category="Carry")
+	FVector GetCarryHandLocation(int Index) const { return CarryHands[FMath::Clamp(Index,0,1)]; }
+	FVector GetCarryElbowLocation(int Index) const { return CarryElbows[Index]; }
+	FQuat GetCarryFacing() const { return CarryFacing; }
 
 protected:
 

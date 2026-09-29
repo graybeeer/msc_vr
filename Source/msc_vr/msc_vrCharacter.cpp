@@ -19,6 +19,8 @@
 #include "GameFramework/PlayerController.h"
 #include "msc_vr.h"
 #include "WarehouseCargo.h"
+#include "WarehouseCarryAnimInstance.h"
+#include "Engine/StaticMesh.h"
 
 Amsc_vrCharacter::Amsc_vrCharacter()
 {
@@ -32,6 +34,13 @@ Amsc_vrCharacter::Amsc_vrCharacter()
 	FirstPersonMesh->SetOnlyOwnerSee(true);
 	FirstPersonMesh->FirstPersonPrimitiveType = EFirstPersonPrimitiveType::FirstPerson;
 	FirstPersonMesh->SetCollisionProfileName(FName("NoCollision"));
+	CarryMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("TwoHandCarryMesh"));
+	CarryMesh->SetupAttachment(FirstPersonMesh);
+	CarryMesh->SetOnlyOwnerSee(true);
+	CarryMesh->FirstPersonPrimitiveType = EFirstPersonPrimitiveType::FirstPerson;
+	CarryMesh->SetCollisionProfileName(TEXT("NoCollision"));
+	CarryMesh->SetVisibility(false);
+	CarryMesh->SetComponentTickEnabled(false);
 
 	// Create the Camera Component	
 	FirstPersonCameraComponent = CreateDefaultSubobject<UCameraComponent>(TEXT("First Person Camera"));
@@ -93,6 +102,7 @@ void Amsc_vrCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 
 void Amsc_vrCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	DropCargo();
 	if (const APlayerController* PC = Cast<APlayerController>(GetController()))
 	{
 		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
@@ -110,12 +120,7 @@ void Amsc_vrCharacter::ToggleCarry()
 {
 	if (IsValid(HeldCargo))
 	{
-		AWarehouseCargo* Cargo = HeldCargo;
-		HeldCargo = nullptr;
-		Cargo->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-		UStaticMeshComponent* Body = Cargo->GetCargoBody();
-		Body->SetCollisionProfileName(TEXT("PhysicsActor"));
-		Body->SetSimulatePhysics(true);
+		DropCargo();
 		return;
 	}
 
@@ -135,19 +140,133 @@ void Amsc_vrCharacter::ToggleCarry()
 		return;
 	}
 
-	UStaticMeshComponent* Body = Best->GetCargoBody();
+	TryPickupCargo(Best);
+}
+
+bool Amsc_vrCharacter::InitializeCarryMesh()
+{
+	if (CarryMesh->GetSkeletalMeshAsset()) return true;
+	if (!FirstPersonMesh->GetSkeletalMeshAsset()) return false;
+	for (FName Bone : {FName(TEXT("hand_l")),FName(TEXT("hand_r"))})
+		if (FirstPersonMesh->GetBoneIndex(Bone)==INDEX_NONE) return false;
+	CarryMesh->SetSkeletalMeshAsset(FirstPersonMesh->GetSkeletalMeshAsset());
+	for (int I=0; I<FirstPersonMesh->GetNumMaterials(); ++I) CarryMesh->SetMaterial(I,FirstPersonMesh->GetMaterial(I));
+	CarryMesh->SetDisablePostProcessBlueprint(true);
+	CarryMesh->SetAnimInstanceClass(UWarehouseCarryAnimInstance::StaticClass());
+	CarryMesh->AddTickPrerequisiteComponent(FirstPersonMesh);
+	CarryMesh->AddTickPrerequisiteActor(this);
+	FirstPersonMesh->VisibilityBasedAnimTickOption=EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+	CarryMesh->VisibilityBasedAnimTickOption=EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+	NormalFirstPersonFOV=FirstPersonCameraComponent->FirstPersonFieldOfView;
+	return true;
+}
+
+bool Amsc_vrCharacter::TryPickupCargo(AWarehouseCargo* Cargo)
+{
+	if (IsValid(HeldCargo) || !IsValid(Cargo) || !Cargo->GetCargoBody()->GetStaticMesh() || !InitializeCarryMesh()) return false;
+	FVector Center, Extent;
+	Cargo->GetActorBounds(false,Center,Extent);
+	if (FVector::Dist(Center,FirstPersonCameraComponent->GetComponentLocation())>300.f) return false;
+	UStaticMeshComponent* Body=Cargo->GetCargoBody();
+	const bool WasSimulating=Body->IsSimulatingPhysics();
 	Body->SetSimulatePhysics(false);
 	Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	if (Best->AttachToComponent(FirstPersonCameraComponent, FAttachmentTransformRules::KeepWorldTransform))
-	{
-		Best->SetActorRelativeLocation(FVector(170, 55, -45));
-		Best->SetActorRelativeRotation(FRotator::ZeroRotator);
-		HeldCargo = Best;
-	}
-	else
+	if (!Cargo->AttachToComponent(GetRootComponent(),FAttachmentTransformRules::KeepWorldTransform))
 	{
 		Body->SetCollisionProfileName(TEXT("PhysicsActor"));
+		Body->SetSimulatePhysics(WasSimulating);
+		return false;
 	}
+	HeldCargo=Cargo;
+	PickupTransform=Cargo->GetActorTransform();
+	PickupTime=0.f;
+	CarryPhase=0.f;
+	NormalWalkSpeed=GetCharacterMovement()->MaxWalkSpeed;
+	GetCharacterMovement()->MaxWalkSpeed=FMath::Min(NormalWalkSpeed,260.f);
+	Body->FirstPersonPrimitiveType=EFirstPersonPrimitiveType::FirstPerson;
+	Body->MarkRenderStateDirty();
+	CarryMesh->SetComponentTickEnabled(true);
+	CarryMesh->SetVisibility(true);
+	FirstPersonMesh->SetVisibility(false,false);
+	FirstPersonCameraComponent->FirstPersonFieldOfView=90.f;
+	UpdateCarryPose(0.f);
+	return true;
+}
+
+void Amsc_vrCharacter::DropCargo()
+{
+	if (IsValid(HeldCargo))
+	{
+		AWarehouseCargo* Cargo=HeldCargo;
+		HeldCargo=nullptr;
+		Cargo->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		auto* Body=Cargo->GetCargoBody();
+		Body->FirstPersonPrimitiveType=EFirstPersonPrimitiveType::None;
+		Body->MarkRenderStateDirty();
+		Body->SetCollisionProfileName(TEXT("PhysicsActor"));
+		Body->SetSimulatePhysics(true);
+	}
+	if (NormalWalkSpeed>0.f)
+	{
+		GetCharacterMovement()->MaxWalkSpeed=NormalWalkSpeed;
+		NormalWalkSpeed=0.f;
+	}
+}
+
+void Amsc_vrCharacter::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	UpdateCarryPose(DeltaSeconds);
+}
+
+void Amsc_vrCharacter::UpdateCarryPose(float DeltaSeconds)
+{
+	const bool Carrying=IsValid(HeldCargo);
+	CarryBlend=FMath::FInterpConstantTo(CarryBlend,Carrying ? 1.f : 0.f,DeltaSeconds,5.f);
+	if (!Carrying)
+	{
+		if (NormalWalkSpeed>0.f) DropCargo(); // Also recover if a carried actor is destroyed.
+		if (CarryBlend<=0.f && CarryMesh->IsVisible())
+		{
+			CarryMesh->SetVisibility(false);
+			CarryMesh->SetComponentTickEnabled(false);
+			FirstPersonMesh->SetVisibility(true,false);
+			FirstPersonCameraComponent->FirstPersonFieldOfView=NormalFirstPersonFOV;
+		}
+		return;
+	}
+	// Anchor the load at the waist, independent of head motion and camera pitch.
+	const FVector CarryOrigin=GetActorLocation();
+	const FQuat Facing=FRotator(0,FirstPersonCameraComponent->GetComponentRotation().Yaw,0).Quaternion();
+	const auto Bounds=HeldCargo->GetCargoBody()->GetStaticMesh()->GetBounds();
+	const FVector Scale=HeldCargo->GetActorScale3D();
+	const FVector Extent=Bounds.BoxExtent*Scale.GetAbs();
+	CarryPhase+=GetVelocity().Size2D()*DeltaSeconds*.025f;
+	const float Sway=FMath::Clamp(GetVelocity().Size2D()/260.f,0.f,1.f);
+	const FVector Center=CarryOrigin+Facing.RotateVector(FVector(8.f+Extent.X,FMath::Sin(CarryPhase)*.6f*Sway,10.f+Extent.Z+FMath::Sin(CarryPhase*2.f)*.6f*Sway));
+	const FVector Pivot=Center-Facing.RotateVector(Bounds.Origin*Scale);
+	PickupTime=FMath::Min(PickupTime+DeltaSeconds,.35f);
+	const float T=FMath::SmoothStep(0.f,1.f,PickupTime/.35f);
+	HeldCargo->SetActorLocationAndRotation(FMath::Lerp(PickupTransform.GetLocation(),Pivot,T),FQuat::Slerp(PickupTransform.GetRotation(),Facing,T));
+	CarryFacing=HeldCargo->GetActorQuat();
+	const FVector ActualCenter=HeldCargo->GetActorTransform().TransformPosition(Bounds.Origin);
+	for (int I=0; I<2; ++I)
+	{
+		const float Side=I==0 ? -1.f : 1.f;
+		CarryHands[I]=ActualCenter+CarryFacing.RotateVector(FVector(-Extent.X+2.f,Side*FMath::Clamp(Extent.Y-4.f,5.f,22.f),-Extent.Z-2.f));
+		CarryElbows[I]=CarryOrigin+Facing.RotateVector(FVector(0,Side*28.f,18.f));
+	}
+#if WITH_EDITOR
+	// Allow the same carry pose to be previewed and checked without starting PIE.
+	if (!GetWorld()->IsGameWorld())
+	{
+		for (USkeletalMeshComponent* PreviewMesh : {GetMesh(),FirstPersonMesh,CarryMesh.Get()})
+		{
+			PreviewMesh->TickAnimation(DeltaSeconds,false);
+			PreviewMesh->RefreshBoneTransforms();
+		}
+	}
+#endif
 }
 
 

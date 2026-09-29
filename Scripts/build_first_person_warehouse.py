@@ -58,6 +58,8 @@ wood = color_material('MI_PalletWood', (.36, .19, .07, 1))
 ground = 25.0
 for actor in actors.get_all_level_actors():
     label = actor.get_actor_label()
+    if label.startswith('EXT_'):
+        continue
     if label.startswith('WH_'):
         actors.destroy_actor(actor)
     elif isinstance(actor, unreal.StaticMeshActor) and label not in ('Floor', 'SM_SkySphere'):

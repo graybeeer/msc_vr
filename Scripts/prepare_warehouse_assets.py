@@ -3,14 +3,28 @@ import unreal
 
 mesh_editor = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
 collision_cache = {}
+EXTERIOR_MESHES = {
+    'truck': '/Game/VehicleVarietyPack/Meshes/SM_Truck_Box',
+    'tree': '/Game/EuropeanBeech/Geometry/SimpleWind/SM_EuropeanBeech_Sapling_01',
+    'shrub': '/Game/GV_FreeShrubsPack/Meshes/Shrubs/Wind/Shrub_I/GV_Vol7_Shrub_I_full_type1',
+}
 def collision_mesh(mesh, dynamic=False):
-    assert mesh, 'Required mesh missing: install Scene_Warehouse from Fab first'
+    assert mesh, 'Required mesh missing: install the documented Fab packs first'
     key = (mesh.get_path_name(), dynamic)
     if key not in collision_cache:
         folder = '/Game/Warehouse/' + ('Physics' if dynamic else 'Collision')
         path = folder + '/' + mesh.get_name()
         result = unreal.load_asset(path) if unreal.EditorAssetLibrary.does_asset_exist(path) else unreal.EditorAssetLibrary.duplicate_asset(mesh.get_path_name(), path)
         assert result, path
+        if mesh.get_path_name().split('.')[0] in (EXTERIOR_MESHES['tree'], EXTERIOR_MESHES['shrub']):
+            # Keep small leaves in fallback rendering and static collision as well.
+            settings = mesh_editor.get_nanite_settings(result)
+            fraction = 1.0 if mesh.get_name().startswith('SM_EuropeanBeech') else .25
+            if settings.generate_fallback != unreal.NaniteGenerateFallback.ENABLED or settings.fallback_percent_triangles != fraction:
+                settings.generate_fallback = unreal.NaniteGenerateFallback.ENABLED
+                settings.fallback_target = unreal.NaniteFallbackTarget.PERCENT_TRIANGLES
+                settings.fallback_percent_triangles = fraction
+                mesh_editor.set_nanite_settings(result, settings)
         expected = unreal.CollisionTraceFlag.CTF_USE_SIMPLE_AND_COMPLEX if dynamic else unreal.CollisionTraceFlag.CTF_USE_COMPLEX_AS_SIMPLE
         if mesh_editor.get_collision_complexity(result) != expected:
             unreal.WarehouseCargo.configure_mesh_collision(result, not dynamic)
@@ -36,4 +50,7 @@ if __name__ == '__main__':
         collision_mesh(unreal.load_asset(pack+rack+'/SM_'+rack+'_'+part))
     for name in ['Ind_War_Storage_Box_Cardboard_Worn_02','Ind_War_Storage_Crate_Plastic_Blue_01']:
         collision_mesh(unreal.load_asset(pack+name+'/SM_'+name), True)
+    for path in EXTERIOR_MESHES.values():
+        assert unreal.EditorAssetLibrary.does_asset_exist(path), 'Install Fab pack: ' + path
+        collision_mesh(unreal.load_asset(path))
     print('WAREHOUSE_COLLISION_ASSETS_READY')

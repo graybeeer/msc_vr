@@ -21,7 +21,7 @@ public class msc_vr : ModuleRules
 			"Slate"
 		});
 
-		PrivateDependencyModuleNames.AddRange(new string[] { });
+		PrivateDependencyModuleNames.AddRange(new string[] { "AnimGraphRuntime" });
 
 		PublicIncludePaths.AddRange(new string[] {
 			"msc_vr",
