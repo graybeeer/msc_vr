@@ -5,7 +5,7 @@ import sys
 import unreal
 
 sys.path.insert(0, os.path.dirname(__file__))
-from apply_real_world_scale import apply_scale, PALLET_MESH
+from apply_real_world_scale import apply_scale, PALLET_MESH, SHELF_TOPS
 
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 assert level.load_level('/Game/FirstPerson/Lvl_FirstPerson')
@@ -27,7 +27,7 @@ ground = bounds(named['Floor'])[1][2]
 dimensions(named['WH_AutonomousForklift'], (99.4, 164.2, 215))  # yaw 90
 dimensions(named['WH_TrainingPallet'], (110, 110, 15))
 pallet_actors = [a for label, a in named.items() if label.startswith(('WH_Pallet_', 'WH_DispatchPallet_')) or label in ('WH_Pickup_Pallet', 'WH_Drop_Pallet', 'WH_TrainingPallet')]
-assert len(pallet_actors) == 75
+assert len(pallet_actors) == 97
 pallet_mesh = unreal.load_asset(PALLET_MESH)
 assert unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem).get_convex_collision_count(pallet_mesh) > 0
 for actor in pallet_actors:
@@ -41,13 +41,13 @@ for side in ('Left', 'Right'):
         rack = [named[f'WH_Rack_{side}_{row:02}_{part}'] for part in 'ABCDEFGH']
         low = [min(bounds(a)[0][i] for a in rack) for i in range(3)]
         high = [max(bounds(a)[1][i] for a in rack) for i in range(3)]
-        assert all(abs(a-b) < .15 for a, b in zip([high[i]-low[i] for i in range(3)], (110, 150, 220))), (low, high)
+        assert all(abs(a-b) < .15 for a, b in zip([high[i]-low[i] for i in range(3)], (100, 266, 250))), (low, high)
         assert abs(low[2]-ground) < .1
-        for tier, top in enumerate((20, 80, 140)):
+        for tier, top in enumerate(SHELF_TOPS):
             pallet = named[f'WH_Pallet_{side}_{row:02}_{tier}']
             cargo = named[f'WH_Cargo_{side}_{row:02}_{tier}']
             dimensions(pallet, (110, 110, 15))
-            dimensions(cargo, (60, 40, 30))
+            dimensions(cargo, (60, 40, 40))
             assert abs(bounds(pallet)[0][2]-ground-top) < .1
             assert abs(bounds(cargo)[0][2]-bounds(pallet)[1][2]) < .1, 'Floating cargo'
             assert top + 12 + 5 <= 160, 'Fork top must reach pallet deck with lifting clearance'
@@ -57,7 +57,35 @@ for side in ('Left', 'Right'):
                 assert not all(a[i] < d[i]-.1 and b[i] > c[i]+.1 for i in range(3)), ('Cargo clips rack', cargo.get_actor_label(), beam.get_actor_label())
         left = bounds(named[f'WH_Rack_Left_{row:02}_G'])[1][0]
         right = bounds(named[f'WH_Rack_Right_{row:02}_G'])[0][0]
-        assert abs(right-left-300) < .1, 'Three metre clear aisle'
+        assert abs(right-left-330) < .1, 'Frame clearance must leave 320 cm between overhanging pallets'
+
+# Both pallets and both box layers fit each commercial bay.
+for side in ('Left', 'Right'):
+    for row in range(11):
+        for tier, top in enumerate(SHELF_TOPS):
+            base=f'{side}_{row:02}_{tier}'
+            for slot in ('', '_B'):
+                pallet=named['WH_Pallet_'+base+slot]
+                dimensions(pallet,(110,110,15))
+                for stacked in ('', '_Top'):
+                    cargo=named['WH_Cargo_'+base+slot+stacked]
+                    dimensions(cargo,(60,40,40))
+                    assert abs(bounds(cargo)[0][2]-ground-top-15-(40 if stacked else 0)) < .1
+            first=bounds(named['WH_Pallet_'+base])
+            second=bounds(named['WH_Pallet_'+base+'_B'])
+            assert abs(second[0][1]-first[1][1]-15) < .1
+        left=bounds(named[f'WH_Pallet_Left_{row:02}_0'])[1][0]
+        right=bounds(named[f'WH_Pallet_Right_{row:02}_0'])[0][0]
+        assert abs(right-left-320)<.1
+for kind, size, levels in [('Medium',(60,180,210),(20,95,170)),('Light',(45,120,180),(20,85,150))]:
+    for index in range(2):
+        parts=[named[f'WH_{kind}Rack_{index}_{part}'] for part in 'ABCDEFGH']
+        low=[min(bounds(a)[0][i] for a in parts) for i in range(3)]
+        high=[max(bounds(a)[1][i] for a in parts) for i in range(3)]
+        assert all(abs(high[i]-low[i]-size[i])<.15 for i in range(3))
+        for tier, top in enumerate(levels):
+            cargo=named[f'WH_{kind}Stock_{index}_{tier}']
+            assert abs(bounds(cargo)[0][2]-ground-top)<.1
 
 for label, actor in named.items():
     if label.startswith('WH_DispatchPallet_') or label in ('WH_Pickup_Pallet', 'WH_Drop_Pallet'):
@@ -82,7 +110,7 @@ start = next(a for a in named.values() if isinstance(a, unreal.PlayerStart))
 assert abs(start.get_actor_location().x-780) < .1
 assert abs(start.get_actor_location().y+1120) < .1
 assert 90 < start.get_actor_location().z-ground < 105
-assert len([a for a in named.values() if isinstance(a, unreal.WarehouseCargo)]) == 140
+assert len([a for a in named.values() if isinstance(a, unreal.WarehouseCargo)]) == 262
 
 before = {label: bounds(a) for label, a in named.items()}
 apply_scale()
@@ -90,4 +118,4 @@ for label, actor in named.items():
     after = bounds(actor)
     assert all(abs(before[label][j][i]-after[j][i]) < .15 for j in range(2) for i in range(3)), ('Repeated application drifts', label)
 # Never save test mutations.
-print('REAL_WORLD_SCALE_VERIFIED', '66 supported shelf loads, 3m aisle, reachable shelves, 140 cargo, truck body/mirrors, repeatable application')
+print('REAL_WORLD_SCALE_VERIFIED', '88 pallet slots, 320cm clear loaded aisle, supplier rack dimensions, 262 cargo, repeatable application')

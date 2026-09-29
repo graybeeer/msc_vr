@@ -1,9 +1,14 @@
 """Fit existing warehouse actors to centimetre dimensions; do not rebuild the map."""
 import re
 import unreal
+import os, sys
+sys.path.insert(0,os.path.dirname(__file__))
 
 LEVEL = '/Game/FirstPerson/Lvl_FirstPerson'
-SHELF_TOPS = (20.0, 80.0, 140.0)
+SHELF_TOPS = (20.0, 140.0)
+RACK_PITCH = 266.0
+RACK_START = -1330.0
+RACK_X = 215.0
 PALLET_MESH = '/Game/Warehouse/Physics/SM_Ind_War_Storage_Pallet_Wood_Worn_01'
 
 
@@ -42,6 +47,11 @@ def apply_scale():
                 if isinstance(vehicle, unreal.WarehouseForklift) and vehicle.get_editor_property('target_pallet') == training:
                     vehicle.modify()
                     vehicle.set_editor_property('target_pallet', replacement)
+                    jobs=list(vehicle.get_editor_property('pending_jobs'))
+                    for job in jobs:
+                        if job.get_editor_property('pallet')==training:
+                            job.set_editor_property('pallet',replacement)
+                    vehicle.set_editor_property('pending_jobs',jobs)
             actors.destroy_actor(training)
             replacement.set_actor_label('WH_TrainingPallet')
             named['WH_TrainingPallet'] = replacement
@@ -51,27 +61,52 @@ def apply_scale():
             actor.modify()
             component.set_static_mesh(pallet_mesh)
             component.set_editor_property('override_materials', [])
+    # Two 110 cm pallets per 250 cm clear bay, with two reachable load levels.
+    for label, actor in list(named.items()):
+        if re.fullmatch(r'WH_(Pallet|Cargo)_(Left|Right)_\d+_2(?:_.*)?', label):
+            actors.destroy_actor(actor)
+            del named[label]
+    box_mesh = unreal.load_asset('/Game/Warehouse/Physics/SM_Ind_War_Storage_Box_Cardboard_Worn_02')
+    def ensure(label, mesh, cargo=False):
+        if label not in named:
+            actor = actors.spawn_actor_from_class(unreal.WarehouseCargo if cargo else unreal.StaticMeshActor, unreal.Vector())
+            actor.set_actor_label(label)
+            if cargo:
+                actor.set_cargo_mesh(mesh)
+            else:
+                actor.static_mesh_component.set_static_mesh(mesh)
+                actor.static_mesh_component.set_collision_profile_name('BlockAll')
+            named[label] = actor
+        return named[label]
+    for side in ('Left', 'Right'):
+        for row in range(11):
+            for tier in range(2):
+                for slot in ('', '_B'):
+                    ensure(f'WH_Pallet_{side}_{row:02}_{tier}{slot}', pallet_mesh)
+                    ensure(f'WH_Cargo_{side}_{row:02}_{tier}{slot}', box_mesh, True)
+                    ensure(f'WH_Cargo_{side}_{row:02}_{tier}{slot}_Top', box_mesh, True)
     floor_center, floor_extent = named['Floor'].get_actor_bounds(False)
     ground = floor_center.z + floor_extent.z
     for label, actor in named.items():
         rack = re.fullmatch(r'WH_Rack_(Left|Right)_(\d+)_(\w)', label)
-        stored = re.fullmatch(r'WH_(Pallet|Cargo)_(Left|Right)_(\d+)_(\d)', label)
+        stored = re.fullmatch(r'WH_(Pallet|Cargo)_(Left|Right)_(\d+)_(\d)(_B)?(_Top)?', label)
         if rack:
             side, row, part = rack.groups()
-            x, y = (-205 if side == 'Left' else 205), -750 + int(row) * 150
+            x, y = (-RACK_X if side == 'Left' else RACK_X), RACK_START + int(row) * RACK_PITCH
             if part in 'GH':
-                fit(actor, (110, 5, 220), (x, y + (72.5 if part == 'G' else -72.5), ground + 110))
+                fit(actor, (100, 8, 250), (x, y + (129 if part == 'G' else -129), ground + 125))
             else:
-                top = {'B': 20, 'D': 20, 'C': 80, 'E': 80, 'A': 140, 'F': 140}[part]
-                fit(actor, (6, 145, 12), (x + (50 if part in 'ABC' else -50), y, ground + top - 6))
+                top = {'B': 20, 'D': 20, 'C': 140, 'E': 140, 'A': 250, 'F': 250}[part]
+                fit(actor, (6, 258, 12), (x + (40.8 if part in 'ABC' else -40.8), y, ground + top - 6))
         elif stored:
-            kind, side, row, tier = stored.groups()
-            x, y = (-205 if side == 'Left' else 205), -750 + int(row) * 150
+            kind, side, row, tier, slot, stacked = stored.groups()
+            x, y = (-RACK_X if side == 'Left' else RACK_X), RACK_START + int(row) * RACK_PITCH
+            y += 62.5 if slot else -62.5
             bottom = ground + SHELF_TOPS[int(tier)]
             if kind == 'Pallet':
                 fit(actor, (110, 110, 15), (x, y, bottom + 7.5))
             else:
-                fit(actor, (60, 40, 30), (x, y, bottom + 30))
+                fit(actor, (60, 40, 40), (x, y, bottom + 35 + (40 if stacked else 0)))
         elif label.startswith('WH_DispatchPallet_') or label in ('WH_Pickup_Pallet', 'WH_Drop_Pallet'):
             # Retain staging positions while correcting dimensions and ground contact.
             pos, _ = actor.get_actor_bounds(False)
@@ -81,9 +116,34 @@ def apply_scale():
             if match:
                 side, index = match.groups()
                 actor.modify()
-                actor.set_actor_location(unreal.Vector(-205 if side == 'A' else 205,
-                                                       -825 + int(index) * 450, ground + 205), False, False)
+                actor.set_actor_location(unreal.Vector(-RACK_X if side == 'A' else RACK_X,
+                                                       RACK_START - 133 + int(index) * 3 * RACK_PITCH, ground + 232), False, False)
                 actor.get_component_by_class(unreal.TextRenderComponent).set_world_size(18)
+
+    # Separate hand-picking racks use the supplier's medium/light dimensions.
+    cube = unreal.load_asset('/Engine/BasicShapes/Cube')
+    steel = unreal.load_asset('/Game/Warehouse/Materials/MI_DarkSteel')
+    for kind, depth, width, height, levels, ys in (
+            ('Medium', 60, 180, 210, (20, 95, 170), (-700, -100)),
+            ('Light', 45, 120, 180, (20, 85, 150), (650, 950))):
+        for index, y in enumerate(ys):
+            x = -1180
+            for part in 'ABCDEFGH':
+                mesh = named[f'WH_Rack_Left_00_{part}'].static_mesh_component.static_mesh
+                actor = ensure(f'WH_{kind}Rack_{index}_{part}', mesh)
+                actor.set_actor_rotation(unreal.Rotator(yaw=90), False)
+                if part in 'GH':
+                    fit(actor, (depth, 4, height), (x, y + (width/2-2)*(1 if part=='G' else -1), ground+height/2))
+                else:
+                    top=levels[{'B':0,'D':0,'C':1,'E':1,'A':2,'F':2}[part]]
+                    fit(actor, (3,width-8,4), (x+(depth*.408)*(1 if part in 'ABC' else -1), y, ground+top-2))
+            for tier, top in enumerate(levels):
+                shelf=ensure(f'WH_{kind}Shelf_{index}_{tier}',cube)
+                shelf.static_mesh_component.set_material(0,steel)
+                fit(shelf,(depth-2,width-8,2),(x,y,ground+top-1))
+                load=ensure(f'WH_{kind}Stock_{index}_{tier}',box_mesh,True)
+                size=(40,30,25) if kind=='Medium' else (30,20,20)
+                fit(load,size,(x,y,ground+top+size[2]/2))
 
     # Pallets are now in place; centre and stack cargo without relying on mesh pivots.
     for label, actor in named.items():
@@ -118,12 +178,16 @@ def apply_scale():
         # Dimensions come from the mechanical rig, including its forks and wheels.
         forklift.modify()
         forklift.set_actor_scale3d(unreal.Vector(1, 1, 1))
-    print('REAL_WORLD_SCALE_APPLIED', 'cm; AGV 164.2x99.4x215, aisle 300, pallet 110x110x15, shelf tops 20/80/140')
+    print('REAL_WORLD_SCALE_APPLIED', 'cm; AGV 164.2x99.4x215, clear pallet aisle 320, pallet 110x110x15, shelf tops 20/140, bay clear 250x100x250')
 
 
 if __name__ == '__main__':
     level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
     assert level.load_level(LEVEL)
     apply_scale()
+    from configure_forklift_autonomy import configure_autonomy
+    configure_autonomy()
+    from configure_warehouse_strength import configure_strength
+    configure_strength()
     assert level.save_current_level()
     assert unreal.EditorLoadingAndSavingUtils.save_dirty_packages(True, True)

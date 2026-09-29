@@ -1,5 +1,6 @@
 #include "WarehouseForklift.h"
 #include "WarehousePallet.h"
+#include "WarehouseDamageSystem.h"
 #include "WarehouseChargingStation.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/PointLightComponent.h"
@@ -34,33 +35,33 @@ AWarehouseForklift::AWarehouseForklift()
   Mesh->SetRelativeScale3D(Scale);
   return Mesh;
  };
- const FVector ChassisScale(47.2/131.,99.4/144.,215./282.55);
+ const FVector ChassisScale(47.2/131.,94./102.,.82);
  const FVector ChassisOffset(-49.2+82.5*ChassisScale.X,0,0);
  Sized(TEXT("Body"),RootComponent,ChassisOffset,ChassisScale);
- Sized(TEXT("MastFrame"),RootComponent,ChassisOffset,ChassisScale);
- Sized(TEXT("SensorTower"),RootComponent,ChassisOffset,ChassisScale);
+ Sized(TEXT("MastFrame"),RootComponent,FVector(-25,0,0),FVector(.5,.6,200./244.5));
+ Sized(TEXT("SensorTower"),RootComponent,FVector::ZeroVector,FVector::OneVector);
  Sized(TEXT("OutriggerL"),RootComponent,FVector(-5-28.5*115/146.,-.2,-.303571),FVector(115/146.,.4,2.5/14.));
  Sized(TEXT("OutriggerR"),RootComponent,FVector(-5-28.5*115/146.,.2,-.303571),FVector(115/146.,.4,2.5/14.));
- Sized(TEXT("Carriage"),Carriage,FVector(-25.111111,0,-.7),FVector(8/18.,.69,.7));
+ Sized(TEXT("Carriage"),Carriage,FVector(-23.555555,0,-.7),FVector(8/18.,.9,.7));
  Sized(TEXT("ForkL"),Carriage,FVector(-50*115/120.,24.5,-4.75),FVector(115/120.,2.25,1.5));
  Sized(TEXT("ForkR"),Carriage,FVector(-50*115/120.,-24.5,-4.75),FVector(115/120.,2.25,1.5));
- LiftStage=Sized(TEXT("LiftStage"),RootComponent,ChassisOffset,ChassisScale);
- Wheels.Add(Sized(TEXT("DriveWheelL"),RootComponent,FVector(-31,-43,10),FVector(10/17.,.6,10/17.)));
- Wheels.Add(Sized(TEXT("DriveWheelR"),RootComponent,FVector(-31,43,10),FVector(10/17.,.6,10/17.)));
+ LiftStage=Sized(TEXT("LiftStage"),RootComponent,FVector(-25,0,0),FVector(.5,.6,200./244.5));
+ Wheels.Add(Sized(TEXT("DriveWheelL"),RootComponent,FVector(-10,-45.428,10),FVector(10/17.,.6,10/17.)));
+ Wheels.Add(Sized(TEXT("DriveWheelR"),RootComponent,FVector(-10,45.428,10),FVector(10/17.,.6,10/17.)));
  Wheels.Add(Sized(TEXT("LoadWheelL"),RootComponent,FVector(106,-24.755,2.5),FVector(2.5/9.8,.35,2.5/9.8)));
  Wheels.Add(Sized(TEXT("LoadWheelR"),RootComponent,FVector(106,25.245,2.5),FVector(2.5/9.8,.35,2.5/9.8)));
  Beacon = CreateDefaultSubobject<UPointLightComponent>(TEXT("Beacon"));
  Beacon->SetupAttachment(RootComponent);
- Beacon->SetRelativeLocation(FVector(-20,-7,213));
- Beacon->SetLightColor(FLinearColor(1.f,.4f,0.f));
+ Beacon->SetRelativeLocation(FVector(-25,0,213));
+ Beacon->SetLightColor(FLinearColor(.03f,.35f,1.f));
  Beacon->SetIntensity(0);
  Beacon->SetAttenuationRadius(250);
  Display = CreateDefaultSubobject<UTextRenderComponent>(TEXT("Status"));
  Display->SetupAttachment(RootComponent);
- Display->SetRelativeLocation(FVector(-45,0,140));
+ Display->SetRelativeLocation(FVector(-33.4,0,144.5));
  Display->SetRelativeRotation(FRotator(0,180,0));
  Display->SetHorizontalAlignment(EHTA_Center);
- Display->SetWorldSize(5);
+ Display->SetWorldSize(.8f);
  Display->SetText(FText::FromString(Status));
 }
 
@@ -72,13 +73,35 @@ void AWarehouseForklift::SetStatus(const FString& Message)
 }
 void AWarehouseForklift::StopFor(const FString& Reason)
 {
+ if (bAutonomousMode)
+ {
+  if (Reason.Contains(TEXT("OBSTACLE")) || Reason.Contains(TEXT("PERSON")))
+  {
+   WaitResumeAI=AIState;
+   TransitionAI(EWarehouseAIState::WaitingObstacle,Reason);
+  }
+  else FaultAI(Reason);
+  return;
+ }
  bPowered=false;
  CurrentSpeedCm=0;
  if (IsValid(ChargingStation)) ChargingStation->ShowCharge(BatteryPercent,false);
  SetStatus(Reason + TEXT("\nE : RETRY / RESUME"));
 }
+void AWarehouseForklift::SetMechanicalFailure()
+{
+ bMechanicalFailure=true;
+ bChargePending=false;
+ if (IsValid(ChargingStation)) ChargingStation->Release(this);
+ StopFor(TEXT("MECHANICAL FAILURE - REPAIR REQUIRED"));
+ SetStatus(TEXT("MECHANICAL FAILURE - REPAIR REQUIRED"));
+ Beacon->SetLightColor(FLinearColor::Red);
+ Beacon->SetIntensity(1800);
+}
 void AWarehouseForklift::TogglePower()
 {
+ if (bAutonomousMode) { ToggleAutonomy(); return; }
+ if (bMechanicalFailure) { SetMechanicalFailure(); return; }
  if (bPowered) { StopFor(TEXT("PAUSED")); return; }
  if (BatteryPercent<=0 && !(State==EWarehouseCycle::Charging && IsValid(ChargingStation) && ChargingStation->IsDocked(this))) { StopFor(TEXT("BATTERY EMPTY - RECOVERY REQUIRED")); return; }
  if ((State==EWarehouseCycle::Idle || State==EWarehouseCycle::Complete) && (BatteryPercent<=FMath::Clamp(ChargeBelowPercent,0.f,70.f) || bChargePending)) { BeginChargeTrip(); return; }
@@ -99,7 +122,10 @@ float AWarehouseForklift::GetBatteryEnergyWh() const
 }
 float AWarehouseForklift::GetLoadMassKg() const
 {
- return IsValid(TargetPallet) ? FMath::Max(0.f,TargetPallet->PayloadMassKg)+FMath::Max(0.f,TargetPallet->PalletMassKg) : 0.f;
+ if (!IsValid(TargetPallet)) return 0.f;
+ float Payload=FMath::Max(0.f,TargetPallet->PayloadMassKg);
+ if (auto* Strength=AWarehouseDamageSystem::Find(this)) Payload=FMath::Max(Payload,Strength->GetSupportedMass(TargetPallet));
+ return Payload+FMath::Max(0.f,TargetPallet->PalletMassKg);
 }
 void AWarehouseForklift::ConsumeEnergy(float Wh)
 {
@@ -117,11 +143,17 @@ void AWarehouseForklift::RequestCharging(bool ToFull)
 {
  bChargePending=true;
  bChargeToFull=ToFull;
+ if (bAutonomousMode)
+ {
+  if (AIState==EWarehouseAIState::Off) ToggleAutonomy();
+  RefreshDisplay(); return;
+ }
  if (State==EWarehouseCycle::Idle || State==EWarehouseCycle::Complete) BeginChargeTrip();
  else RefreshDisplay();
 }
 bool AWarehouseForklift::BeginChargeTrip()
 {
+ if (bMechanicalFailure) { SetMechanicalFailure(); return false; }
  if (!IsValid(ChargingStation)) { StopFor(TEXT("NO CHARGING STATION")); return false; }
  if (bSupportingPallet || LiftOffset>.01f) { StopFor(TEXT("UNLOAD BEFORE CHARGING")); return false; }
  // ponytail: reserved straight charging aisle; use a route planner for other layouts.
@@ -166,7 +198,12 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
   TargetPallet->GetComponents(LoadParts);
   Parts.Append(LoadParts);
  }
+ for (AActor* Load : CarriedCargo) if (bSupportingPallet && IsValid(Load))
+ {
+  TArray<UStaticMeshComponent*> LoadParts; Load->GetComponents(LoadParts); Parts.Append(LoadParts);
+ }
  FComponentQueryParams Params(SCENE_QUERY_STAT(ForkliftSweep),this);
+ for (AActor* Load : CarriedCargo) if (bSupportingPallet && IsValid(Load)) Params.AddIgnoredActor(Load);
  if (bSupportingPallet) Params.AddIgnoredActor(TargetPallet);
  for (auto* Part : Parts)
  {
@@ -183,6 +220,8 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
    if (Hit.bBlockingHit && (FVector::DotProduct(Delta,Hit.Normal)<-.001f || (Hit.bStartPenetrating && Hit.PenetrationDepth>.2f)))
    {
     UE_LOG(LogTemp,Verbose,TEXT("Forklift contact %s -> %s, lift %.3f, support %.3f, penetration %.3f, normal %s"),*Part->GetName(),*GetNameSafe(Hit.GetActor()),LiftOffset,PalletContactLiftCm,Hit.PenetrationDepth,*Hit.Normal.ToString());
+    AWarehouseDamageSystem::ReportContact(this,Hit,LiftOnly ? Delta.GetSafeNormal()*11.5f : GetActorForwardVector()*CurrentSpeedCm,VehicleMassKg+(bSupportingPallet ? GetLoadMassKg() : 0.f));
+    if (bMechanicalFailure) return false;
     StopFor(TEXT("OBSTACLE / CONTACT"));
     return false;
    }
@@ -193,6 +232,7 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
 bool AWarehouseForklift::MoveVehicle(FVector Delta)
 {
  if (!ClearToMove(Delta,false)) return false;
+ WaitSeconds=0;
  SetActorLocation(GetActorLocation()+Delta);
  const float Distance=FVector::DotProduct(Delta,GetActorForwardVector());
  // Rolling resistance and drivetrain efficiency are tunable-model assumptions, not factory measurements.
@@ -234,7 +274,8 @@ bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt)
 void AWarehouseForklift::AdvanceSimulation(float DeltaSeconds)
 {
  if (FMath::Abs(BatteryPercent-LastDisplayedBattery)>=.1f) RefreshDisplay();
- if (!bPowered) return;
+ if (bAutonomousMode) { AdvanceAutonomy(FMath::Clamp(DeltaSeconds,0.f,.05f)); return; }
+ if (bMechanicalFailure || !bPowered) return;
  const float Dt=FMath::Clamp(DeltaSeconds,0.f,.05f);
  if (Dt<=0) return;
  if (State==EWarehouseCycle::Charging)
@@ -273,6 +314,7 @@ void AWarehouseForklift::AdvanceSimulation(float DeltaSeconds)
   return;
  }
  if (!IsValid(TargetPallet)) { StopFor(TEXT("TARGET LOST")); return; }
+ if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->HasFailed(TargetPallet)) { StopFor(TEXT("PALLET DAMAGED - REPLACE")); return; }
  if (GetLoadMassKg()>FMath::Min(1400.f,RatedLoadKg)) { StopFor(TEXT("OVERLOAD - REMOVE LOAD")); return; }
  if (TaskForkHeightCm<12 || TaskForkHeightCm>FMath::Min(160.f,MaxForkHeightCm)) { StopFor(TEXT("TASK EXCEEDS LIFT LIMIT")); return; }
  const FVector Forward=GetActorForwardVector();

@@ -28,8 +28,17 @@ def collision_mesh(mesh, dynamic=False):
         expected = unreal.CollisionTraceFlag.CTF_USE_SIMPLE_AND_COMPLEX if dynamic else unreal.CollisionTraceFlag.CTF_USE_COMPLEX_AS_SIMPLE
         if mesh_editor.get_collision_complexity(result) != expected:
             unreal.WarehouseCargo.configure_mesh_collision(result, not dynamic)
-        if dynamic and mesh_editor.get_convex_collision_count(result) == 0:
-            assert mesh_editor.set_convex_decomposition_collisions(result, 32, 32, 100000), path
+        # Replace imported carton collision with a tested outer hull, even if it
+        # already contains one convex: the hull count does not identify its geometry.
+        sealed_carton = mesh.get_name() == 'SM_Ind_War_Storage_Box_Cardboard_Worn_02'
+        hull_count = mesh_editor.get_convex_collision_count(result)
+        carton_version = 'sealed-carton-v1'
+        needs_carton_hull = sealed_carton and (hull_count != 1 or unreal.EditorAssetLibrary.get_metadata_tag(result, 'WarehouseCollisionVersion') != carton_version)
+        if dynamic and (hull_count == 0 or needs_carton_hull):
+            assert mesh_editor.set_convex_decomposition_collisions(result, 1 if sealed_carton else 32, 32, 100000), path
+            if sealed_carton:
+                unreal.WarehouseCargo.configure_mesh_collision(result, False)
+                unreal.EditorAssetLibrary.set_metadata_tag(result, 'WarehouseCollisionVersion', carton_version)
         if dynamic and mesh.get_name() == 'SM_Ind_War_Storage_Pallet_Wood_Worn_01':
             unreal.WarehousePallet.fit_collision_bounds(result)
         unreal.EditorAssetLibrary.save_loaded_asset(result)

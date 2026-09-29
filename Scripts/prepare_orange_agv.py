@@ -80,7 +80,7 @@ SURFACES = {
     'Graphite_powder-coated_steel': ((.065,.075,.085), 0,.46,.04,0),
     'Black_rubber': ((.022,.026,.029), 0,.74,.06,0),
     'Machined_steel': ((.35,.38,.41), 1,.25,.07,0),
-    'Safety_orange_-_painted_body': ((.72,.12,.016), 0,.36,.035,0),
+    'Safety_orange_-_painted_body': ((.65,.045,.018), 0,.36,.035,0),
     'Control_enclosure_-_charcoal': ((.038,.045,.052), 0,.48,.04,0),
     'White_print': ((.79,.81,.78), 0,.48,.02,0),
     'Polyurethane_roller': ((.22,.19,.13), 0,.55,.05,0),
@@ -114,6 +114,37 @@ def import_source():
                           factory=unreal.FbxFactory()).items():
         task.set_editor_property(key,value)
     asset_tools.import_asset_tasks([task])
+
+
+def reference_sensor(name, center, size):
+    """Visible photo features in cm; unobserved surfaces retain the supplied FBX."""
+    if name.startswith(('Sensor_crossbar', 'Front_perception_riser', 'Side_status_indicator')):
+        return None
+    if name.endswith('_001') and name.startswith(('Stereo_sensor', 'Navigation_camera', 'Green_status')):
+        return None
+    dimensions = {
+        'Navigation_computer_tower': ((-25,0,155),(10,12,95)),
+        'Navigation_tower_foot': ((-25,0,108),(14,18,5)),
+        'Navigation_power_cable': ((-24,-8,115),(8,7,14)),
+        'Stereo_sensor_housing': ((-25,0,184),(15,23,16)),
+        'Navigation_camera_lens': ((-16.7,0,184),(1.5,6,6)),
+        'Green_status_indicator': ((-25,-12,186),(2,1,2)),
+        'Lidar_black_housing': ((-25,0,207),(14,14,6)),
+        'Lidar_riser': ((-25,0,201),(6,6,6)),
+        'Lidar_silver_cap': ((-25,0,211.5),(12,12,1)),
+        'Lidar_status_band': ((-25,0,213),(10,10,4)),
+        'Emergency_stop_bracket': ((-25,-5,122),(8,4,12)),
+        'Emergency_stop_button': ((-25,-8,124),(5,3,5)),
+        'Upper_mast_optical_unit': ((-22,-9,169),(7,6,9)),
+        'Upper_optical_lens': ((-17.6,-9,169),(1,4,4)),
+        'Tower_fleet_number': ((-25,-6.3,157),(5,.06,5)),
+    }
+    if name.startswith(('HMI_', 'Display_status')):
+        return ((-30-(center.x-48)*.8,-(center.y-11)*.55,142+(center.z-168)*.64),
+                (size.x*.8,size.y*.55,size.z*.64))
+    if name.startswith(('Warning_decal','Warning_symbol')):
+        return ((-25,-6.7,158+(center.z-178)*.5),(size.x*.5,size.y*.5,size.z*.5))
+    return dimensions.get(name)
 
 
 def build():
@@ -159,9 +190,9 @@ def build():
             target.z = 5.5+(center.z-23.5)*scale.z
         elif name.startswith('Vertical_fork_heel'):
             group = 'Carriage'
-            scale.y = 8/14
+            scale.y = 20/14
             scale.x = 8/7
-            target.x, target.y = 49,side*22
+            target.x, target.y = 49,side*25/.9
             target.z -= 19.5
         elif name.startswith(('Fork_carriage','Load_backrest','Carriage_locking')):
             group = 'Carriage'
@@ -170,13 +201,22 @@ def build():
             group = 'LiftStage'
         elif name.startswith(('Outer_mast','Polished_mast','Mast_cross','Hydraulic_cylinder','Hydraulic_hose')):
             group = 'MastFrame'
-        elif any(key in name for key in ('Navigation','Sensor_crossbar','Stereo_sensor','Lidar','HMI','Display_status','Upper_','Front_perception','Tower_fleet')):
+        elif any(key in name for key in ('Navigation','Sensor_crossbar','Stereo_sensor','Lidar','HMI','Display_status','Upper_','Front_perception','Tower_fleet','Emergency_stop','Green_status','Side_status','Warning_')):
             group = 'SensorTower'
+        if group == 'SensorTower':
+            photo = reference_sensor(name, center, extent*2)
+            if photo is None:
+                actors.destroy_actor(actor)
+                continue
+            target = unreal.Vector(*photo[0])
+            scale = unreal.Vector(photo[1][0]/(extent.x*2),photo[1][1]/(extent.y*2),photo[1][2]/(extent.z*2))
         actor.set_actor_rotation(unreal.Rotator(yaw=180),False)
         actor.set_actor_scale3d(scale)
         actor.set_actor_location(target-unreal.Vector(-center.x*scale.x,-center.y*scale.y,center.z*scale.z)-pivot,False,False)
         for index in range(comp.get_num_materials()):
             original = str(mesh.static_materials[index].material_slot_name).replace(' ','_')
+            if name == 'Lidar_status_band': original = 'Screen_blue'
+            if name.startswith('Driven_rubber_wheel'): original = 'Polyurethane_roller'
             assert original in palette, original
             mesh.set_material(index,palette[original])
             comp.set_material(index,palette[original])
@@ -190,7 +230,7 @@ def build():
         unreal.WarehouseCargo.configure_mesh_collision(mesh,False)
         groups.setdefault(group,[]).append(actor)
     # Solid crossmembers connect the wider straddle legs and exposed wheel axles to the chassis.
-    for center,size in [((28.5,0,11.5),(25,144,12)),((-46.5,0,17),(12,112,12))]:
+    for center,size in [((28.5,0,11.5),(25,90,12)),((-10,0,10),(12,90,12))]:
         brace = actors.spawn_actor_from_class(unreal.StaticMeshActor,unreal.Vector(*center))
         brace.static_mesh_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Cube'))
         brace.static_mesh_component.set_material(0,palette['Graphite_powder-coated_steel'])

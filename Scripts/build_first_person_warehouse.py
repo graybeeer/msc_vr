@@ -1,5 +1,7 @@
 """Build the example-inspired warehouse and a guarded pallet training lane."""
 import unreal
+import os, sys
+sys.path.insert(0,os.path.dirname(__file__))
 
 LEVEL = '/Game/FirstPerson/Lvl_FirstPerson'
 PACK = '/Game/Scene_Warehouse/Assets/MS/3D/'
@@ -85,7 +87,7 @@ def place(label, mesh, xyz, scale=(1, 1, 1), yaw=0, material=None, visible=True,
     actor.set_actor_label('WH_' + label)
     component = actor.static_mesh_component
     component.set_static_mesh(mesh if mesh == cube else collision_mesh(mesh, mesh == pallet))
-    component.set_collision_profile_name('BlockAll')
+    component.set_collision_profile_name('NoCollision' if label.startswith(('TrainingLine_', 'TrainingEnd_', 'Walkway_', 'Crosswalk_')) else 'BlockAll')
     component.set_visibility(visible)
     actor.set_actor_scale3d(unreal.Vector(*scale))
     if material:
@@ -216,5 +218,9 @@ for side,x in [('A',-290),('B',290)]:
         sign(f'Rack{side}{i}',f'{side}-{i+1:02}',(x,y-100,530),-90,24)
 from apply_real_world_scale import apply_scale
 apply_scale()
+from configure_forklift_autonomy import configure_autonomy
+configure_autonomy()
+from configure_warehouse_strength import configure_strength
+configure_strength()
 assert level.save_current_level(), 'Could not save the default first-person level'
 print('WAREHOUSE_BUILT', LEVEL, 'actors', len(actors.get_all_level_actors()), 'ground',ground)

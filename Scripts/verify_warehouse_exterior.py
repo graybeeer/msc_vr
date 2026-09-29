@@ -62,6 +62,6 @@ for prefix,count in [('EXT_ParkedTruck_',1),('EXT_Beech_',5),('EXT_Shrub_',15)]:
             assert b[0]<-3020 or a[0]>3020,(actor.get_actor_label(),a,b)
 assert not any(a.get_actor_label().startswith(('EXT_TreeTrunk_','EXT_TreeCrown_')) for a in actors)
 clear((-150,-2200,5),(150,-1800,185),'warehouse doorway')
-assert len([a for a in actors if isinstance(a,unreal.WarehouseCargo)])==140
+assert len([a for a in actors if isinstance(a,unreal.WarehouseCargo)])==262
 assert not named['WH_AutonomousForklift'].get_editor_property('powered')
 print('WAREHOUSE_EXTERIOR_VERIFIED','Fab truck/foliage, collisions, clear entry/dock 01, ramp and original interior preserved')

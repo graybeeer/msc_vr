@@ -1,6 +1,7 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "WarehouseAutonomyTypes.h"
 #include "WarehouseForklift.generated.h"
 
 class AWarehousePallet;
@@ -18,6 +19,33 @@ class MSC_VR_API AWarehouseForklift : public AActor
  GENERATED_BODY()
 public:
  AWarehouseForklift();
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Autonomy") bool bAutonomousMode = true;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Autonomy") TArray<FWarehouseWorkOrder> PendingJobs;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Autonomy") TArray<FTransform> NavigationAnchors;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Self Check") bool bSafetyScannerHealthy = true;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Self Check") bool bEStopReleased = true;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Self Check") bool bBrakeHealthy = true;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Self Check") bool bSteeringHealthy = true;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Self Check") bool bForkSensorHealthy = true;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Self Check") bool bLocalizationHealthy = true;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Self Check") bool bBatteryHealthy = true;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Self Check") bool bPalletSensorHealthy = true;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Self Check") bool bLoadSensorHealthy = true;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Perception") FVector PalletPositionBiasCm = FVector::ZeroVector;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Perception") float PalletYawBiasDegrees = 0;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Perception", meta=(ClampMin="100",ClampMax="1000")) float PalletDetectionRangeCm = 400;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") EWarehouseAIState AIState = EWarehouseAIState::Off;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") FWarehouseWorkOrder ActiveJob;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") TArray<FWarehouseRoutePoint> PlannedRoute;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") TArray<FWarehouseJobReport> JobReports;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") TArray<FString> CompletedJobIds;
+ UPROPERTY(BlueprintAssignable, Category="Autonomy") FWarehouseReportEvent OnJobReport;
+ UFUNCTION(BlueprintCallable, Category="Autonomy") bool SubmitJob(const FWarehouseWorkOrder& Job);
+ UFUNCTION(BlueprintCallable, Category="Autonomy") bool PlanAutonomousRoute(const FTransform& Goal);
+ UFUNCTION(BlueprintPure, Category="Autonomy") FString CheckSystems() const;
+
+ UFUNCTION(BlueprintCallable, Category="Strength") void SetMechanicalFailure();
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Strength") bool bMechanicalFailure = false;
  virtual void Tick(float DeltaSeconds) override;
  virtual void EndPlay(const EEndPlayReason::Type Reason) override;
  UFUNCTION(BlueprintCallable, Category="Training") void TogglePower();
@@ -42,7 +70,7 @@ public:
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1", ClampMax="130")) float EmptyTravelSpeedCm = 130;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1", ClampMax="100")) float LoadedTravelSpeedCm = 100;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1", ClampMax="30")) float ForkLeadingSpeedCm = 30;
- // Reference only: the current training route is straight, without steering.
+ // Minimum curvature radius used by the autonomous pose graph planner.
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Specification") float MinimumTurningRadiusCm = 117.3f;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") float CurrentSpeedCm = 0;
  UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="Training") TObjectPtr<AWarehousePallet> TargetPallet;
@@ -50,6 +78,32 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") EWarehouseCycle State = EWarehouseCycle::Idle;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") FString Status = TEXT("E : START");
 private:
+ void AdvanceAutonomy(float Dt);
+ void ToggleAutonomy();
+ void TransitionAI(EWarehouseAIState Next,const FString& Message);
+ void FaultAI(const FString& Reason);
+ void ReportJob(const FString& Result,const FString& Detail);
+ bool NavigationClear(const FTransform& Pose) const;
+ bool ConnectPoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost) const;
+ bool FollowRoute(float Speed,float Dt);
+ bool MovePrecise(FVector Destination,float Speed,float Dt);
+ bool SeePallet(FTransform& Pose) const;
+ bool DestinationClear() const;
+ void HoldCargo(bool Attach);
+ FTransform PalletApproach(const FTransform& PalletPose,float Distance) const;
+ EWarehouseAIState ResumeAI = EWarehouseAIState::Ready;
+ EWarehouseAIState WaitResumeAI = EWarehouseAIState::Ready;
+ UPROPERTY(Transient) TArray<TObjectPtr<AActor>> CarriedCargo;
+ FTransform ObservedPallet;
+ FVector RetractLocation = FVector::ZeroVector;
+ FTransform ChargeExitPose;
+ float AIElapsed = 0;
+ float AITotalSeconds = 0;
+ float WaitSeconds = 0;
+ bool bRouteStarted = false;
+ bool bResumeAfterCheck = false;
+ bool bPalletReleased = false;
+ int32 RouteIndex = 0;
  UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> Carriage;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> LiftStage;
  UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UStaticMeshComponent>> Wheels;

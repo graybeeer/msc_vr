@@ -53,6 +53,8 @@ def apply_assets():
                   .11+(index%3)*.01,index*41+offset*70)
     from apply_real_world_scale import apply_scale
     apply_scale()
+    from configure_warehouse_strength import configure_strength
+    configure_strength()
     assert level.save_current_level()
     unreal.EditorLoadingAndSavingUtils.save_dirty_packages(True,True)
     print('EXTERIOR_FAB_APPLIED', '1 truck, 5 beech trees, 15 shrubs')

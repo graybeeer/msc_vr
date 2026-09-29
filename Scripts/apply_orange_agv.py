@@ -1,5 +1,7 @@
 """Apply VNSL14 sizing and its charging bay without rebuilding the warehouse."""
 import unreal
+import os, sys
+sys.path.insert(0,os.path.dirname(__file__))
 
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
@@ -30,6 +32,10 @@ station.set_actor_label('WH_ChargingStation')
 station.set_editor_property('is_spatially_loaded',False)
 station.set_editor_property('assigned_vehicle',new)
 new.set_editor_property('charging_station',station)
+from configure_forklift_autonomy import configure_autonomy
+configure_autonomy()
+from configure_warehouse_strength import configure_strength
+configure_strength()
 assert level.save_current_level()
 assert unreal.EditorLoadingAndSavingUtils.save_dirty_packages(True,True)
 print('ORANGE_AGV_APPLIED',new.get_path_name())

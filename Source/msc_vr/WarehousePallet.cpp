@@ -1,4 +1,5 @@
 #include "WarehousePallet.h"
+#include "WarehouseDamageSystem.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "CollisionQueryParams.h"
@@ -57,6 +58,7 @@ float AWarehousePallet::GetSupportLiftOffset(const FTransform& Frame) const
 
 bool AWarehousePallet::CanEngage(const FTransform& Frame) const
 {
+ if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->HasFailed(const_cast<AWarehousePallet*>(this))) return false;
  if (!Frame.GetScale3D().Equals(FVector::OneVector, .001f) || !GetActorScale3D().Equals(FVector::OneVector, .001f)) return false;
  if (FVector::DotProduct(Frame.GetUnitAxis(EAxis::X), GetActorForwardVector()) < FMath::Cos(FMath::DegreesToRadians(2.f)) ||
      FVector::DotProduct(Frame.GetUnitAxis(EAxis::Z), GetActorUpVector()) < FMath::Cos(FMath::DegreesToRadians(1.f))) return false;

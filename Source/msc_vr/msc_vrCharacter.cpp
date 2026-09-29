@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "msc_vrCharacter.h"
+#include "WarehouseDamageSystem.h"
 #include "Animation/AnimInstance.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -173,6 +174,7 @@ bool Amsc_vrCharacter::InitializeCarryMesh()
 
 bool Amsc_vrCharacter::TryPickupCargo(AWarehouseCargo* Cargo)
 {
+ if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->HasFailed(Cargo)) return false;
 	if (IsValid(HeldCargo) || !IsValid(Cargo) || !Cargo->GetCargoBody()->GetStaticMesh() || !InitializeCarryMesh()) return false;
 	FVector Center, Extent;
 	Cargo->GetActorBounds(false,Center,Extent);
