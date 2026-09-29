@@ -19,11 +19,16 @@
 #include "GameFramework/PlayerController.h"
 #include "msc_vr.h"
 #include "WarehouseCargo.h"
+#include "WarehouseChargingStation.h"
 #include "WarehouseCarryAnimInstance.h"
 #include "Engine/StaticMesh.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "UObject/ConstructorHelpers.h"
 
 Amsc_vrCharacter::Amsc_vrCharacter()
 {
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> CarryMaterial(TEXT("/Game/Warehouse/Materials/M_CarryTransparent"));
+	CarryTransparentMaterial=CarryMaterial.Object;
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(55.f, 96.0f);
 	
@@ -134,6 +139,11 @@ void Amsc_vrCharacter::ToggleCarry()
 		Forklift->TogglePower();
 		return;
 	}
+	if (auto* Station=Cast<AWarehouseChargingStation>(Hit.GetActor()))
+	{
+		Station->RequestManualCharge();
+		return;
+	}
 	AWarehouseCargo* Best = Cast<AWarehouseCargo>(Hit.GetActor());
 	if (!Best)
 	{
@@ -178,6 +188,26 @@ bool Amsc_vrCharacter::TryPickupCargo(AWarehouseCargo* Cargo)
 		return false;
 	}
 	HeldCargo=Cargo;
+	HeldDisallowedNanite=Body->bDisallowNanite;
+	Body->bDisallowNanite=true; // Translucency uses the conventional mesh renderer while carried.
+	HeldOriginalMaterials.Reset();
+	for (int32 Index=0; Index<Body->GetNumMaterials(); ++Index)
+	{
+		UMaterialInterface* Original=Body->GetMaterial(Index);
+		HeldOriginalMaterials.Add(Original);
+		if (Original && CarryTransparentMaterial)
+		{
+			auto* Transparent=UMaterialInstanceDynamic::Create(CarryTransparentMaterial,this);
+			UTexture* Albedo=nullptr;
+			if (Original->GetTextureParameterValue(FMaterialParameterInfo(TEXT("Albedo")),Albedo) && Albedo)
+				Transparent->SetTextureParameterValue(TEXT("Albedo"),Albedo);
+			float SamplingScale=1.f;
+			Original->GetScalarParameterValue(FMaterialParameterInfo(TEXT("SamplingScale")),SamplingScale);
+			Transparent->SetScalarParameterValue(TEXT("SamplingScale"),SamplingScale);
+			Transparent->SetScalarParameterValue(TEXT("CarryOpacity"),FMath::Clamp(CarryOpacity,.05f,1.f));
+			Body->SetMaterial(Index,Transparent);
+		}
+	}
 	PickupTransform=Cargo->GetActorTransform();
 	PickupTime=0.f;
 	CarryPhase=0.f;
@@ -201,11 +231,15 @@ void Amsc_vrCharacter::DropCargo()
 		HeldCargo=nullptr;
 		Cargo->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 		auto* Body=Cargo->GetCargoBody();
+		Body->bDisallowNanite=HeldDisallowedNanite;
+		for (int32 Index=0; Index<HeldOriginalMaterials.Num(); ++Index)
+			Body->SetMaterial(Index,HeldOriginalMaterials[Index]);
 		Body->FirstPersonPrimitiveType=EFirstPersonPrimitiveType::None;
 		Body->MarkRenderStateDirty();
 		Body->SetCollisionProfileName(TEXT("PhysicsActor"));
 		Body->SetSimulatePhysics(true);
 	}
+	HeldOriginalMaterials.Reset();
 	if (NormalWalkSpeed>0.f)
 	{
 		GetCharacterMovement()->MaxWalkSpeed=NormalWalkSpeed;

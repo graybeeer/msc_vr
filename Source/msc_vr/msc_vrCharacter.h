@@ -13,6 +13,7 @@ class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
 class AWarehouseCargo;
+class UMaterialInterface;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -59,6 +60,14 @@ protected:
 
 	UPROPERTY(Transient)
 	TObjectPtr<AWarehouseCargo> HeldCargo;
+
+	UPROPERTY(EditDefaultsOnly, Category="Carry", meta=(ClampMin="0.05", ClampMax="1.0"))
+	float CarryOpacity = .3f;
+	UPROPERTY()
+	TObjectPtr<UMaterialInterface> CarryTransparentMaterial;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInterface>> HeldOriginalMaterials;
+	bool HeldDisallowedNanite = false;
 
 	UPROPERTY(VisibleAnywhere, Category="Carry")
 	TObjectPtr<USkeletalMeshComponent> CarryMesh;

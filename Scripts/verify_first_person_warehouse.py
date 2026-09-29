@@ -31,7 +31,7 @@ for a in actors:
             assert meshes.get_collision_complexity(mesh)==unreal.CollisionTraceFlag.CTF_USE_COMPLEX_AS_SIMPLE
 for actor in (vehicle,vehicle.get_editor_property('target_pallet')):
     assert all(c.get_collision_profile_name()=='BlockAllDynamic' for c in actor.get_components_by_class(unreal.StaticMeshComponent))
-    assert all(c.get_material(0).get_path_name().startswith('/Game/Warehouse/Materials/') for c in actor.get_components_by_class(unreal.StaticMeshComponent)), 'Training materials must survive reload'
+    assert all(c.get_material(0).get_path_name().startswith(('/Game/Warehouse/Materials/','/Game/Warehouse/AGV/Materials/','/Game/Scene_Warehouse/')) for c in actor.get_components_by_class(unreal.StaticMeshComponent)), 'Training materials must survive reload'
 floor=next(a for a in actors if a.get_actor_label()=='Floor')
 assert 'Floor_Concrete' in floor.static_mesh_component.get_material(0).get_path_name()
 print('WAREHOUSE_VERIFIED',len(actors),'actors, 140 convex cargo, no bounding proxies')

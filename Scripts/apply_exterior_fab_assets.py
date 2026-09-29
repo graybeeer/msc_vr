@@ -51,6 +51,8 @@ def apply_assets():
         for offset in (-1,0,1):
             place(f'EXT_Shrub_{index}_{offset}', meshes['shrub'], x+offset*125,y+180,-130,
                   .11+(index%3)*.01,index*41+offset*70)
+    from apply_real_world_scale import apply_scale
+    apply_scale()
     assert level.save_current_level()
     unreal.EditorLoadingAndSavingUtils.save_dirty_packages(True,True)
     print('EXTERIOR_FAB_APPLIED', '1 truck, 5 beech trees, 15 shrubs')

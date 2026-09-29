@@ -85,3 +85,6 @@ DerivedDataCache/*
 /Content/VehicleVarietyPack/
 /Content/EuropeanBeech/
 /Content/MSPresets/
+
+# Rebuild intermediate FBX imports; source FBX and final AGV rig assets are tracked.
+/Content/Warehouse/AGV/SourceMeshes/

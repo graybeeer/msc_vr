@@ -84,7 +84,7 @@ def place(label, mesh, xyz, scale=(1, 1, 1), yaw=0, material=None, visible=True,
         return actor
     actor.set_actor_label('WH_' + label)
     component = actor.static_mesh_component
-    component.set_static_mesh(mesh if mesh == cube else collision_mesh(mesh))
+    component.set_static_mesh(mesh if mesh == cube else collision_mesh(mesh, mesh == pallet))
     component.set_collision_profile_name('BlockAll')
     component.set_visibility(visible)
     actor.set_actor_scale3d(unreal.Vector(*scale))
@@ -98,7 +98,7 @@ def sit_on(actor, height):
     actor.set_actor_location(unreal.Vector(loc.x, loc.y, loc.z + height - (center.z-extent.z)), False, False)
     return height + extent.z*2
 
-# The original floor is 40 x 40 m. A high roof leaves room for five-metre racks.
+# The original floor is 40 x 40 m; the industrial shell retains its high roof.
 for label, pos, scale in (
     ('Wall_N', (0, 1980, 340), (40, 0.35, 6.8)),
     ('Wall_S_Left', (-1350, -1980, 340), (13, 0.35, 6.8)),
@@ -162,11 +162,12 @@ target = actors.spawn_actor_from_class(unreal.WarehousePallet, unreal.Vector(100
 target.set_actor_label('WH_TrainingPallet')
 target.set_editor_property('is_spatially_loaded', False)
 forklift.set_editor_property('target_pallet', target)
-for comp in target.get_components_by_class(unreal.StaticMeshComponent):
-    comp.set_editor_property('override_materials', [wood])
-for comp in forklift.get_components_by_class(unreal.StaticMeshComponent):
-    name = comp.get_name()
-    comp.set_editor_property('override_materials', [rubber if name.startswith('Wheel') else (yellow if name in ('Chassis', 'Battery') else steel)])
+station=actors.spawn_actor_from_class(unreal.WarehouseChargingStation,unreal.Vector(1000,-1530,ground),forklift.get_actor_rotation())
+station.set_actor_label('WH_ChargingStation')
+station.set_editor_property('is_spatially_loaded',False)
+station.set_editor_property('assigned_vehicle',forklift)
+forklift.set_editor_property('charging_station',station)
+# The training pallet retains the same Fab wood materials as the storage pallets.
 
 def sign(label, text, xyz, yaw=90, size=32):
     actor = actors.spawn_actor_from_class(unreal.TextRenderActor, unreal.Vector(*xyz), unreal.Rotator(pitch=0, yaw=yaw, roll=0))
@@ -213,5 +214,7 @@ sign('Dispatch','DISPATCH / STAGING',(-800,-1920,360),90,30)
 for side,x in [('A',-290),('B',290)]:
     for i,y in enumerate((-1050,-420,210,840)):
         sign(f'Rack{side}{i}',f'{side}-{i+1:02}',(x,y-100,530),-90,24)
+from apply_real_world_scale import apply_scale
+apply_scale()
 assert level.save_current_level(), 'Could not save the default first-person level'
 print('WAREHOUSE_BUILT', LEVEL, 'actors', len(actors.get_all_level_actors()), 'ground',ground)

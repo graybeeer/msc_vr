@@ -6,9 +6,11 @@
 class AWarehousePallet;
 class UPointLightComponent;
 class UTextRenderComponent;
+class UStaticMeshComponent;
+class AWarehouseChargingStation;
 
 UENUM(BlueprintType)
-enum class EWarehouseCycle : uint8 { Idle, Approach, Lift, Reverse, Lower, Withdraw, Complete };
+enum class EWarehouseCycle : uint8 { Idle, Approach, Lift, TravelLower, Reverse, Lower, Withdraw, Complete, ToCharger, Docking, Charging, Returning };
 
 UCLASS()
 class MSC_VR_API AWarehouseForklift : public AActor
@@ -17,22 +19,57 @@ class MSC_VR_API AWarehouseForklift : public AActor
 public:
  AWarehouseForklift();
  virtual void Tick(float DeltaSeconds) override;
+ virtual void EndPlay(const EEndPlayReason::Type Reason) override;
  UFUNCTION(BlueprintCallable, Category="Training") void TogglePower();
  UFUNCTION(BlueprintCallable, Category="Training") void AdvanceSimulation(float DeltaSeconds);
+ UFUNCTION(BlueprintCallable, Category="Battery") void RequestCharging(bool ToFull = false);
+ UFUNCTION(BlueprintPure, Category="Battery") float GetBatteryEnergyWh() const;
+ UFUNCTION(BlueprintPure, Category="Training") float GetLoadMassKg() const;
+ UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="Battery") TObjectPtr<AWarehouseChargingStation> ChargingStation;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery", meta=(ClampMin="0", ClampMax="100")) float BatteryPercent = 100;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery", meta=(ClampMin="1")) float BatteryVoltage = 24;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery", meta=(ClampMin="1")) float BatteryCapacityAh = 180;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery", meta=(ClampMin="0", ClampMax="70")) float ChargeBelowPercent = 30;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery", meta=(ClampMin="75", ClampMax="100")) float ResumeAtPercent = 80;
+ // Training acceleration affects battery time only, never movement or collision steps.
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery", meta=(ClampMin="1", ClampMax="3600")) float BatteryTimeScale = 1;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Battery") bool bChargePending = false;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Battery") float EnergyConsumedWh = 0;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1", ClampMax="1400")) float RatedLoadKg = 1400;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1")) float VehicleMassKg = 1000;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="10", ClampMax="160")) float MaxForkHeightCm = 160;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Training", meta=(ClampMin="12", ClampMax="160")) float TaskForkHeightCm = 20;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1", ClampMax="130")) float EmptyTravelSpeedCm = 130;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1", ClampMax="100")) float LoadedTravelSpeedCm = 100;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1", ClampMax="30")) float ForkLeadingSpeedCm = 30;
+ // Reference only: the current training route is straight, without steering.
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Specification") float MinimumTurningRadiusCm = 117.3f;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") float CurrentSpeedCm = 0;
  UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="Training") TObjectPtr<AWarehousePallet> TargetPallet;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") bool bPowered = false;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") EWarehouseCycle State = EWarehouseCycle::Idle;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") FString Status = TEXT("E : START");
 private:
  UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> Carriage;
+ UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> LiftStage;
+ UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UStaticMeshComponent>> Wheels;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UPointLightComponent> Beacon;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UTextRenderComponent> Display;
  FVector StartLocation = FVector::ZeroVector;
  FVector WithdrawStart = FVector::ZeroVector;
+ FVector ReturnLocation = FVector::ZeroVector;
+ EWarehouseCycle ResumeState = EWarehouseCycle::Idle;
+ bool bChargeToFull = false;
+ float LastDisplayedBattery = -1;
  float LiftOffset = 0;
+ float PalletContactLiftCm = 0;
  bool bSupportingPallet = false;
  bool ClearToMove(FVector Delta, bool LiftOnly);
  bool MoveVehicle(FVector Delta);
+ bool MoveToLine(FVector Destination, float Speed, float Dt);
+ bool BeginChargeTrip();
+ void ConsumeEnergy(float Wh);
+ void RefreshDisplay();
  bool MoveLift(float Height);
  void StopFor(const FString& Reason);
  void SetStatus(const FString& Message);

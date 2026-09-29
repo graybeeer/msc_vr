@@ -10,16 +10,37 @@ parts={c.get_name():c for c in character.get_components_by_class(unreal.Skeletal
 carry=parts['TwoHandCarryMesh']
 movement=character.get_component_by_class(unreal.CharacterMovementComponent)
 normal_speed=movement.get_editor_property('max_walk_speed')
-mesh=unreal.load_asset('/Game/Warehouse/Physics/SM_Ind_War_Storage_Box_Cardboard_Worn_02')
-assert mesh
+material=unreal.load_asset('/Game/Warehouse/Materials/M_CarryTransparent')
+assert material.get_editor_property('blend_mode')==unreal.BlendMode.BLEND_MASKED
+editing=unreal.MaterialEditingLibrary
+front=editing.get_material_property_input_node(material,unreal.MaterialProperty.MP_FRONT_MATERIAL)
+opacity=editing.get_material_property_input_node(material,unreal.MaterialProperty.MP_OPACITY)
+if front:
+    assert opacity in editing.get_inputs_for_material_expression(material,front), 'Substrate surface must use carry opacity'
+mask=editing.get_material_property_input_node(material,unreal.MaterialProperty.MP_OPACITY_MASK)
+assert mask and opacity in editing.get_inputs_for_material_expression(material,mask), 'Coverage fade must use carry opacity'
 def distance(a,b):
     return math.sqrt((a.x-b.x)**2+(a.y-b.y)**2+(a.z-b.z)**2)
-for size in (.32,1.0):
+for mesh_name,size in [('Box_Cardboard_Worn_02',.32),('Box_Cardboard_Worn_02',1.0),('Crate_Plastic_Blue_01',.5)]:
+    mesh=unreal.load_asset('/Game/Warehouse/Physics/SM_Ind_War_Storage_'+mesh_name)
+    assert mesh
+    mesh_editor=unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
+    assert mesh_editor.get_nanite_settings(mesh).generate_fallback==unreal.NaniteGenerateFallback.ENABLED
+    assert mesh_editor.get_number_verts(mesh,0)>0, 'Translucent cargo needs fallback geometry'
     eye=camera.get_world_location()
     cargo=actors.spawn_actor_from_class(unreal.WarehouseCargo,eye+unreal.Vector(100,0,-30))
     cargo.set_actor_scale3d(unreal.Vector(size,size,size))
     cargo.set_cargo_mesh(mesh)
+    body=cargo.get_component_by_class(unreal.StaticMeshComponent)
+    original_materials=[body.get_material(i) for i in range(body.get_num_materials())]
+    original_nanite=body.get_editor_property('disallow_nanite')
     assert character.try_pickup_cargo(cargo)
+    assert body.get_editor_property('disallow_nanite')
+    for i,original in enumerate(original_materials):
+        held=body.get_material(i)
+        assert isinstance(held,unreal.MaterialInstanceDynamic)
+        assert abs(held.get_scalar_parameter_value('CarryOpacity')-.3)<.001
+        assert held.get_texture_parameter_value('Albedo')==unreal.MaterialEditingLibrary.get_material_instance_texture_parameter_value(original,'Albedo')
     assert not character.try_pickup_cargo(cargo)
     for _ in range(60):
         character.update_carry_pose(1/60)
@@ -70,6 +91,8 @@ for size in (.32,1.0):
     body=cargo.get_component_by_class(unreal.StaticMeshComponent)
     assert body.is_simulating_physics()
     assert body.get_collision_profile_name()=='PhysicsActor'
+    assert [body.get_material(i) for i in range(body.get_num_materials())]==original_materials, 'Drop did not restore original materials'
+    assert body.get_editor_property('disallow_nanite')==original_nanite
     assert not carry.is_visible()
     assert abs(movement.get_editor_property('max_walk_speed')-normal_speed)<.01
     actors.destroy_actor(cargo)

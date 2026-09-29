@@ -1,5 +1,6 @@
 #include "WarehouseForklift.h"
 #include "WarehousePallet.h"
+#include "WarehouseChargingStation.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/TextRenderComponent.h"
@@ -12,71 +13,130 @@ AWarehouseForklift::AWarehouseForklift()
 {
  PrimaryActorTick.bCanEverTick = true;
  RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
- Carriage = CreateDefaultSubobject<USceneComponent>(TEXT("Carriage"));
+ Carriage = CreateDefaultSubobject<USceneComponent>(TEXT("CarriagePivot"));
  Carriage->SetupAttachment(RootComponent);
- static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube"));
- static ConstructorHelpers::FObjectFinder<UStaticMesh> Cylinder(TEXT("/Engine/BasicShapes/Cylinder"));
- static ConstructorHelpers::FObjectFinder<UMaterialInterface> Yellow(TEXT("/Game/Warehouse/Materials/MI_SafetyYellow"));
- static ConstructorHelpers::FObjectFinder<UMaterialInterface> Steel(TEXT("/Game/Warehouse/Materials/MI_DarkSteel"));
- static ConstructorHelpers::FObjectFinder<UMaterialInterface> Rubber(TEXT("/Game/Warehouse/Materials/MI_Rubber"));
- auto Part = [&](FName Name, FVector P, FVector Size, bool Moving=false, bool Wheel=false)
+ // Rigid mechanical rig: metal assemblies retain their shape; pivots are baked by prepare_orange_agv.py.
+ auto Part = [&](const TCHAR* Name, USceneComponent* Parent, FVector Pivot=FVector::ZeroVector)
  {
   auto* Mesh = CreateDefaultSubobject<UStaticMeshComponent>(Name);
-  Mesh->SetupAttachment(Moving ? Carriage.Get() : RootComponent.Get());
-  Mesh->SetStaticMesh(Wheel ? Cylinder.Object : Cube.Object);
-  Mesh->SetMaterial(0,Wheel ? Rubber.Object : (Name==TEXT("Chassis") || Name==TEXT("Battery") ? Yellow.Object : Steel.Object));
-  Mesh->SetRelativeLocation(P);
-  Mesh->SetRelativeScale3D(Size/100.f);
-  if (Wheel) Mesh->SetRelativeRotation(FRotator(0,0,90));
+  Mesh->SetupAttachment(Parent);
+  const FString Path=FString::Printf(TEXT("/Game/Warehouse/AGV/Meshes/SM_AGV_%s"),Name);
+  ConstructorHelpers::FObjectFinder<UStaticMesh> Asset(*Path);
+  Mesh->SetStaticMesh(Asset.Object);
+  Mesh->SetRelativeLocation(Pivot);
   Mesh->SetCollisionProfileName(TEXT("BlockAllDynamic"));
+  return Mesh;
  };
- Part(TEXT("Chassis"), FVector(-40,0,45), FVector(150,100,50));
- Part(TEXT("Battery"), FVector(-70,0,92), FVector(80,86,44));
- Part(TEXT("SensorTower"), FVector(-60,0,133), FVector(28,28,36));
- Part(TEXT("Lidar"), FVector(-60,0,157), FVector(35,35,12));
- for (int Side : {-1,1})
+ // 164.2 x 99.4 x 215 cm overall, including the 115 cm forks.
+ auto Sized=[&](const TCHAR* Name,USceneComponent* Parent,FVector Location,FVector Scale)
  {
-  Part(FName(*FString::Printf(TEXT("Mast%d"),Side)), FVector(45,Side*48,120), FVector(10,10,200));
-  Part(FName(*FString::Printf(TEXT("Fork%d"),Side)), FVector(110,Side*22,7.5), FVector(120,8,4),true);
-  for (int X : {-90,10}) Part(FName(*FString::Printf(TEXT("Wheel%d_%d"),X,Side)), FVector(X,Side*55,25.5), FVector(50,50,16),false,true);
- }
- Part(TEXT("MastTop"), FVector(45,0,218), FVector(12,106,8));
- Part(TEXT("ForkBack"), FVector(44,0,45), FVector(8,85,75),true);
- Part(TEXT("LoadGuard"), FVector(44,0,98), FVector(8,85,8),true);
+  auto* Mesh=Part(Name,Parent,Location);
+  Mesh->SetRelativeScale3D(Scale);
+  return Mesh;
+ };
+ const FVector ChassisScale(47.2/131.,99.4/144.,215./282.55);
+ const FVector ChassisOffset(-49.2+82.5*ChassisScale.X,0,0);
+ Sized(TEXT("Body"),RootComponent,ChassisOffset,ChassisScale);
+ Sized(TEXT("MastFrame"),RootComponent,ChassisOffset,ChassisScale);
+ Sized(TEXT("SensorTower"),RootComponent,ChassisOffset,ChassisScale);
+ Sized(TEXT("OutriggerL"),RootComponent,FVector(-5-28.5*115/146.,-.2,-.303571),FVector(115/146.,.4,2.5/14.));
+ Sized(TEXT("OutriggerR"),RootComponent,FVector(-5-28.5*115/146.,.2,-.303571),FVector(115/146.,.4,2.5/14.));
+ Sized(TEXT("Carriage"),Carriage,FVector(-25.111111,0,-.7),FVector(8/18.,.69,.7));
+ Sized(TEXT("ForkL"),Carriage,FVector(-50*115/120.,24.5,-4.75),FVector(115/120.,2.25,1.5));
+ Sized(TEXT("ForkR"),Carriage,FVector(-50*115/120.,-24.5,-4.75),FVector(115/120.,2.25,1.5));
+ LiftStage=Sized(TEXT("LiftStage"),RootComponent,ChassisOffset,ChassisScale);
+ Wheels.Add(Sized(TEXT("DriveWheelL"),RootComponent,FVector(-31,-43,10),FVector(10/17.,.6,10/17.)));
+ Wheels.Add(Sized(TEXT("DriveWheelR"),RootComponent,FVector(-31,43,10),FVector(10/17.,.6,10/17.)));
+ Wheels.Add(Sized(TEXT("LoadWheelL"),RootComponent,FVector(106,-24.755,2.5),FVector(2.5/9.8,.35,2.5/9.8)));
+ Wheels.Add(Sized(TEXT("LoadWheelR"),RootComponent,FVector(106,25.245,2.5),FVector(2.5/9.8,.35,2.5/9.8)));
  Beacon = CreateDefaultSubobject<UPointLightComponent>(TEXT("Beacon"));
  Beacon->SetupAttachment(RootComponent);
- Beacon->SetRelativeLocation(FVector(-70,0,175));
+ Beacon->SetRelativeLocation(FVector(-20,-7,213));
  Beacon->SetLightColor(FLinearColor(1.f,.4f,0.f));
  Beacon->SetIntensity(0);
  Beacon->SetAttenuationRadius(250);
  Display = CreateDefaultSubobject<UTextRenderComponent>(TEXT("Status"));
  Display->SetupAttachment(RootComponent);
- Display->SetRelativeLocation(FVector(-118,0,165));
+ Display->SetRelativeLocation(FVector(-45,0,140));
  Display->SetRelativeRotation(FRotator(0,180,0));
  Display->SetHorizontalAlignment(EHTA_Center);
- Display->SetWorldSize(12);
+ Display->SetWorldSize(5);
  Display->SetText(FText::FromString(Status));
 }
 
 void AWarehouseForklift::SetStatus(const FString& Message)
 {
  Status = Message;
- Display->SetText(FText::FromString(Message));
+ RefreshDisplay();
  Beacon->SetIntensity(bPowered ? 1800 : 0);
 }
 void AWarehouseForklift::StopFor(const FString& Reason)
 {
  bPowered=false;
+ CurrentSpeedCm=0;
+ if (IsValid(ChargingStation)) ChargingStation->ShowCharge(BatteryPercent,false);
  SetStatus(Reason + TEXT("\nE : RETRY / RESUME"));
 }
 void AWarehouseForklift::TogglePower()
 {
  if (bPowered) { StopFor(TEXT("PAUSED")); return; }
- if (!IsValid(TargetPallet)) { StopFor(TEXT("NO TARGET PALLET")); return; }
- if (State == EWarehouseCycle::Complete) { SetStatus(TEXT("COMPLETE - RESTART LEVEL")); return; }
+ if (BatteryPercent<=0 && !(State==EWarehouseCycle::Charging && IsValid(ChargingStation) && ChargingStation->IsDocked(this))) { StopFor(TEXT("BATTERY EMPTY - RECOVERY REQUIRED")); return; }
+ if ((State==EWarehouseCycle::Idle || State==EWarehouseCycle::Complete) && (BatteryPercent<=FMath::Clamp(ChargeBelowPercent,0.f,70.f) || bChargePending)) { BeginChargeTrip(); return; }
+ if (!IsValid(TargetPallet) && State<=EWarehouseCycle::Complete) { StopFor(TEXT("NO TARGET PALLET")); return; }
+ if (State==EWarehouseCycle::Complete) { SetStatus(TEXT("JOB COMPLETE - ASSIGN NEXT PALLET")); return; }
  if (State == EWarehouseCycle::Idle) { StartLocation=GetActorLocation(); State=EWarehouseCycle::Approach; }
  bPowered=true;
  SetStatus(TEXT("RUNNING - KEEP CLEAR\nE : PAUSE"));
+}
+void AWarehouseForklift::RefreshDisplay()
+{
+ LastDisplayedBattery=BatteryPercent;
+ Display->SetText(FText::FromString(FString::Printf(TEXT("%s\nBAT %.1f%%  |  %.0f / 1400 kg%s"),*Status,BatteryPercent,GetLoadMassKg(),bChargePending ? TEXT("\nCHARGE QUEUED") : TEXT(""))));
+}
+float AWarehouseForklift::GetBatteryEnergyWh() const
+{
+ return FMath::Max(1.f,BatteryVoltage)*FMath::Max(1.f,BatteryCapacityAh)*FMath::Clamp(BatteryPercent,0.f,100.f)/100.f;
+}
+float AWarehouseForklift::GetLoadMassKg() const
+{
+ return IsValid(TargetPallet) ? FMath::Max(0.f,TargetPallet->PayloadMassKg)+FMath::Max(0.f,TargetPallet->PalletMassKg) : 0.f;
+}
+void AWarehouseForklift::ConsumeEnergy(float Wh)
+{
+ Wh=FMath::Max(0.f,Wh)*FMath::Clamp(BatteryTimeScale,1.f,3600.f);
+ EnergyConsumedWh+=FMath::Min(Wh,GetBatteryEnergyWh());
+ BatteryPercent=FMath::Clamp(BatteryPercent-100.f*Wh/(FMath::Max(1.f,BatteryVoltage)*FMath::Max(1.f,BatteryCapacityAh)),0.f,100.f);
+ if (BatteryPercent<=FMath::Clamp(ChargeBelowPercent,0.f,70.f)) bChargePending=true;
+}
+void AWarehouseForklift::EndPlay(const EEndPlayReason::Type Reason)
+{
+ if (IsValid(ChargingStation)) ChargingStation->Release(this);
+ Super::EndPlay(Reason);
+}
+void AWarehouseForklift::RequestCharging(bool ToFull)
+{
+ bChargePending=true;
+ bChargeToFull=ToFull;
+ if (State==EWarehouseCycle::Idle || State==EWarehouseCycle::Complete) BeginChargeTrip();
+ else RefreshDisplay();
+}
+bool AWarehouseForklift::BeginChargeTrip()
+{
+ if (!IsValid(ChargingStation)) { StopFor(TEXT("NO CHARGING STATION")); return false; }
+ if (bSupportingPallet || LiftOffset>.01f) { StopFor(TEXT("UNLOAD BEFORE CHARGING")); return false; }
+ // ponytail: reserved straight charging aisle; use a route planner for other layouts.
+ const FVector Offset=ChargingStation->GetActorLocation()-GetActorLocation();
+ if (FMath::Abs(FVector::DotProduct(Offset,GetActorRightVector()))>1.f || FMath::Abs(Offset.Z)>1.f ||
+     FVector::DotProduct(GetActorForwardVector(),ChargingStation->GetActorForwardVector())<.99996f)
+ { StopFor(TEXT("CHARGER ROUTE MISALIGNED")); return false; }
+ if (!ChargingStation->TryReserve(this)) { StopFor(TEXT("CHARGER BUSY / OFFLINE")); return false; }
+ ReturnLocation=GetActorLocation();
+ ResumeState=State;
+ State=ChargingStation->IsDocked(this) ? EWarehouseCycle::Charging : EWarehouseCycle::ToCharger;
+ bPowered=true;
+ CurrentSpeedCm=0;
+ SetStatus(TEXT("TO CHARGER"));
+ return true;
 }
 void AWarehouseForklift::Tick(float DeltaSeconds)
 {
@@ -90,9 +150,10 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
  FCollisionObjectQueryParams People(ECC_Pawn);
  FCollisionQueryParams SafetyParams(SCENE_QUERY_STAT(PersonSafety),false,this);
  const FVector SafetyCenter=GetActorLocation()+GetActorForwardVector()*30+FVector(0,0,110);
- const FVector SafetyEnd=SafetyCenter+(LiftOnly ? FVector::ZeroVector : Delta+Delta.GetSafeNormal()*100);
+ const float LookAhead=FMath::Max(100.f,CurrentSpeedCm*CurrentSpeedCm/100.f+FMath::Abs(CurrentSpeedCm)*.2f+20.f);
+ const FVector SafetyEnd=SafetyCenter+(LiftOnly ? FVector::ZeroVector : Delta+Delta.GetSafeNormal()*LookAhead);
  if (GetWorld()->SweepSingleByObjectType(PersonHit,SafetyCenter,SafetyEnd,GetActorQuat(),People,
-     FCollisionShape::MakeBox(FVector(145,85,110)),SafetyParams))
+     FCollisionShape::MakeBox(FVector(110,75,110)),SafetyParams))
  {
   StopFor(TEXT("PERSON IN SAFETY ZONE"));
   return false;
@@ -109,13 +170,19 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
  if (bSupportingPallet) Params.AddIgnoredActor(TargetPallet);
  for (auto* Part : Parts)
  {
-  if (LiftOnly && Part->GetOwner()==this && Part->GetAttachParent()!=Carriage) continue;
+  FVector PartDelta=Delta;
+  if (LiftOnly && Part->GetOwner()==this)
+  {
+   if (Part==LiftStage) PartDelta*=.5f;
+   else if (!Part->IsAttachedTo(Carriage)) continue;
+  }
   TArray<FHitResult> Hits;
-  GetWorld()->ComponentSweepMulti(Hits,Part,Part->GetComponentLocation(),Part->GetComponentLocation()+Delta,Part->GetComponentQuat(),Params);
+  GetWorld()->ComponentSweepMulti(Hits,Part,Part->GetComponentLocation(),Part->GetComponentLocation()+PartDelta,Part->GetComponentQuat(),Params);
   for (const FHitResult& Hit : Hits)
   {
    if (Hit.bBlockingHit && (FVector::DotProduct(Delta,Hit.Normal)<-.001f || (Hit.bStartPenetrating && Hit.PenetrationDepth>.2f)))
    {
+    UE_LOG(LogTemp,Verbose,TEXT("Forklift contact %s -> %s, lift %.3f, support %.3f, penetration %.3f, normal %s"),*Part->GetName(),*GetNameSafe(Hit.GetActor()),LiftOffset,PalletContactLiftCm,Hit.PenetrationDepth,*Hit.Normal.ToString());
     StopFor(TEXT("OBSTACLE / CONTACT"));
     return false;
    }
@@ -127,20 +194,87 @@ bool AWarehouseForklift::MoveVehicle(FVector Delta)
 {
  if (!ClearToMove(Delta,false)) return false;
  SetActorLocation(GetActorLocation()+Delta);
+ const float Distance=FVector::DotProduct(Delta,GetActorForwardVector());
+ // Rolling resistance and drivetrain efficiency are tunable-model assumptions, not factory measurements.
+ ConsumeEnergy(.035f*(VehicleMassKg+(bSupportingPallet ? GetLoadMassKg() : 0.f))*9.81f*FMath::Abs(Distance)/100.f/(.75f*3600.f));
+ for (int32 Index=0; Index<Wheels.Num(); ++Index)
+ {
+  const float Radius=Index<2 ? 10.f : 2.5f;
+  Wheels[Index]->AddLocalRotation(FRotator(-FMath::RadiansToDegrees(Distance/Radius),0,0));
+ }
  return true;
 }
 bool AWarehouseForklift::MoveLift(float Height)
 {
+ if (Height<0 || Height>FMath::Clamp(MaxForkHeightCm,10.f,160.f)-9.5f+.001f) { StopFor(TEXT("LIFT HEIGHT LIMIT")); return false; }
  if (!ClearToMove(FVector(0,0,Height-LiftOffset),true)) return false;
+ ConsumeEnergy(((bSupportingPallet ? GetLoadMassKg() : 0.f)+80.f)*9.81f*FMath::Max(0.f,Height-LiftOffset)/100.f/(.75f*3600.f));
  LiftOffset=Height;
  Carriage->SetRelativeLocation(FVector(0,0,Height));
+ // A 2:1 lift chain gives twice the carriage travel for the ram/stage extension.
+ FVector StageLocation=LiftStage->GetRelativeLocation();
+ StageLocation.Z=Height*.5f;
+ LiftStage->SetRelativeLocation(StageLocation);
  return true;
+}
+bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt)
+{
+ const FVector Offset=Destination-GetActorLocation();
+ if (FMath::Abs(FVector::DotProduct(Offset,GetActorRightVector()))>1 || FMath::Abs(Offset.Z)>1)
+ { StopFor(TEXT("ROUTE MISALIGNED")); return false; }
+ const float Distance=FVector::DotProduct(Offset,GetActorForwardVector());
+ if (FMath::Abs(Distance)<.01f) { CurrentSpeedCm=0; return true; }
+ Speed=FMath::Min(Speed,Distance>0 ? FMath::Min(30.f,ForkLeadingSpeedCm) : (bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(130.f,EmptyTravelSpeedCm)));
+ const float TargetSpeed=FMath::Sign(Distance)*FMath::Min(Speed,FMath::Sqrt(100.f*FMath::Abs(Distance)));
+ CurrentSpeedCm=FMath::FInterpConstantTo(CurrentSpeedCm,TargetSpeed,Dt,50.f);
+ const float Step=FMath::Sign(Distance)*FMath::Min(FMath::Abs(Distance),FMath::Abs(CurrentSpeedCm)*Dt);
+ MoveVehicle(GetActorForwardVector()*Step);
+ return false;
 }
 void AWarehouseForklift::AdvanceSimulation(float DeltaSeconds)
 {
+ if (FMath::Abs(BatteryPercent-LastDisplayedBattery)>=.1f) RefreshDisplay();
  if (!bPowered) return;
- if (!IsValid(TargetPallet)) { StopFor(TEXT("TARGET LOST")); return; }
  const float Dt=FMath::Clamp(DeltaSeconds,0.f,.05f);
+ if (Dt<=0) return;
+ if (State==EWarehouseCycle::Charging)
+ {
+  if (!IsValid(ChargingStation) || !ChargingStation->bMainsPower || ChargingStation->PowerKw<=0 || ChargingStation->Efficiency<=0 || ChargingStation->Occupant!=this || !ChargingStation->IsDocked(this))
+  { StopFor(TEXT("CHARGING CONTACT / POWER LOST")); return; }
+  if (!ClearToMove(FVector::ZeroVector,true)) return;
+  const float Target=bChargeToFull ? 100.f : FMath::Clamp(ResumeAtPercent,75.f,100.f);
+  BatteryPercent=FMath::Min(Target,BatteryPercent+100.f*FMath::Max(0.f,ChargingStation->PowerKw)*1000.f*FMath::Clamp(ChargingStation->Efficiency,0.f,1.f)*Dt*FMath::Clamp(BatteryTimeScale,1.f,3600.f)/(3600.f*FMath::Max(1.f,BatteryVoltage)*FMath::Max(1.f,BatteryCapacityAh)));
+  ChargingStation->ShowCharge(BatteryPercent,true);
+  if (BatteryPercent>=Target) { bChargePending=false; bChargeToFull=false; State=EWarehouseCycle::Returning; SetStatus(TEXT("CHARGE COMPLETE - RETURNING")); ChargingStation->ShowCharge(BatteryPercent,false); }
+  return;
+ }
+ if (BatteryPercent<=0) { StopFor(TEXT("BATTERY EMPTY - RECOVERY REQUIRED")); return; }
+ ConsumeEnergy(100.f*Dt/3600.f);
+ if (BatteryPercent<=0) { StopFor(TEXT("BATTERY EMPTY - RECOVERY REQUIRED")); return; }
+ if (State==EWarehouseCycle::ToCharger || State==EWarehouseCycle::Docking || State==EWarehouseCycle::Returning)
+ {
+  if (!IsValid(ChargingStation)) { StopFor(TEXT("CHARGER LOST")); return; }
+  if (State!=EWarehouseCycle::Returning && (!ChargingStation->bMainsPower || ChargingStation->Occupant!=this)) { StopFor(TEXT("CHARGER BUSY / OFFLINE")); return; }
+  const FVector Dock=ChargingStation->GetActorLocation();
+  const FVector Approach=Dock+ChargingStation->GetActorForwardVector()*120.f;
+  if (State==EWarehouseCycle::ToCharger && MoveToLine(Approach,EmptyTravelSpeedCm,Dt)) { State=EWarehouseCycle::Docking; SetStatus(TEXT("DOCKING")); }
+  else if (State==EWarehouseCycle::Docking && MoveToLine(Dock,10.f,Dt))
+  {
+   if (!ChargingStation->IsDocked(this)) { StopFor(TEXT("DOCK ALIGNMENT FAILED")); return; }
+   State=EWarehouseCycle::Charging; SetStatus(TEXT("CHARGING"));
+  }
+  else if (State==EWarehouseCycle::Returning && MoveToLine(ReturnLocation,ForkLeadingSpeedCm,Dt))
+  {
+   ChargingStation->Release(this);
+   State=ResumeState;
+   if (State==EWarehouseCycle::Idle) { StartLocation=GetActorLocation(); State=EWarehouseCycle::Approach; SetStatus(TEXT("WORK RESUMED")); }
+   else { bPowered=false; SetStatus(TEXT("JOB COMPLETE - READY")); }
+  }
+  return;
+ }
+ if (!IsValid(TargetPallet)) { StopFor(TEXT("TARGET LOST")); return; }
+ if (GetLoadMassKg()>FMath::Min(1400.f,RatedLoadKg)) { StopFor(TEXT("OVERLOAD - REMOVE LOAD")); return; }
+ if (TaskForkHeightCm<12 || TaskForkHeightCm>FMath::Min(160.f,MaxForkHeightCm)) { StopFor(TEXT("TASK EXCEEDS LIFT LIMIT")); return; }
  const FVector Forward=GetActorForwardVector();
  switch(State)
  {
@@ -150,10 +284,13 @@ void AWarehouseForklift::AdvanceSimulation(float DeltaSeconds)
   if (FMath::Abs(FVector::DotProduct(Offset,GetActorRightVector()))>5 ||
       FVector::DotProduct(Forward,TargetPallet->GetActorForwardVector())<FMath::Cos(FMath::DegreesToRadians(2.f)))
   { StopFor(TEXT("ALIGN PALLET")); break; }
-  const float Remaining=FVector::DotProduct(Offset,Forward)-120;
+  const float Remaining=FVector::DotProduct(Offset,Forward)-60;
   if (Remaining < -1) { StopFor(TEXT("TARGET TOO CLOSE")); break; }
-  if (Remaining>.01f) { MoveVehicle(Forward*FMath::Min(Remaining,45*Dt)); break; }
+  if (Remaining>.01f) { MoveToLine(TargetPallet->GetActorLocation()-Forward*60,ForkLeadingSpeedCm,Dt); break; }
+  CurrentSpeedCm=0;
   if (!TargetPallet->CanEngage(GetActorTransform())) { StopFor(TEXT("FORK INSERTION FAILED")); break; }
+  PalletContactLiftCm=TargetPallet->GetSupportLiftOffset(GetActorTransform());
+  if (PalletContactLiftCm<0) { StopFor(TEXT("NO PALLET SUPPORT")); break; }
   State=EWarehouseCycle::Lift;
   SetStatus(TEXT("LIFTING"));
   break;
@@ -163,33 +300,37 @@ void AWarehouseForklift::AdvanceSimulation(float DeltaSeconds)
   {
    // Both tines must be fully inserted before the underside contact is accepted.
    if (!TargetPallet->CanEngage(GetActorTransform())) { StopFor(TEXT("FORK INSERTION FAILED")); break; }
-   if (LiftOffset<2.45f) { MoveLift(FMath::Min(2.45f,LiftOffset+15*Dt)); break; }
+   if (LiftOffset<PalletContactLiftCm) { MoveLift(FMath::Min(PalletContactLiftCm,LiftOffset+15*Dt)); break; }
    bSupportingPallet=TargetPallet->AttachToComponent(Carriage,FAttachmentTransformRules::KeepWorldTransform);
    if (!bSupportingPallet) { StopFor(TEXT("SUPPORT FAILED")); break; }
   }
-  if (MoveLift(FMath::Min(50.f,LiftOffset+20*Dt)) && LiftOffset>=50) { State=EWarehouseCycle::Reverse; SetStatus(TEXT("REVERSING")); }
+  if (MoveLift(FMath::Min(TaskForkHeightCm-9.5f,LiftOffset+11.5f*Dt)) && LiftOffset>=TaskForkHeightCm-9.5f) { State=EWarehouseCycle::TravelLower; SetStatus(TEXT("LOWERING TO TRAVEL HEIGHT")); }
+  break;
+ case EWarehouseCycle::TravelLower:
+  if (MoveLift(FMath::Max(FMath::Min(TaskForkHeightCm,20.f)-9.5f,LiftOffset-16.f*Dt)) && LiftOffset<=10.5f) { State=EWarehouseCycle::Reverse; SetStatus(TEXT("REVERSING")); }
   break;
  case EWarehouseCycle::Reverse:
  {
-  const FVector Delta=StartLocation-GetActorLocation();
-  if (Delta.Size()>.01f) MoveVehicle(Delta.GetClampedToMaxSize(35*Dt));
-  else { State=EWarehouseCycle::Lower; SetStatus(TEXT("LOWERING")); }
+  if (MoveToLine(StartLocation,LoadedTravelSpeedCm,Dt)) { State=EWarehouseCycle::Lower; SetStatus(TEXT("LOWERING")); }
   break;
  }
  case EWarehouseCycle::Lower:
   if (bSupportingPallet)
   {
-   if (!MoveLift(FMath::Max(2.45f,LiftOffset-20*Dt))) break;
-   if (LiftOffset<=2.45f) { TargetPallet->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform); bSupportingPallet=false; }
+   if (!MoveLift(FMath::Max(PalletContactLiftCm,LiftOffset-16*Dt))) break;
+   if (LiftOffset<=PalletContactLiftCm) { TargetPallet->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform); bSupportingPallet=false; }
   }
   else if (MoveLift(FMath::Max(0.f,LiftOffset-15*Dt)) && LiftOffset<=0)
   { State=EWarehouseCycle::Withdraw; WithdrawStart=GetActorLocation(); SetStatus(TEXT("WITHDRAWING")); }
   break;
  case EWarehouseCycle::Withdraw:
  {
-  const float Remaining=150-FVector::Dist(WithdrawStart,GetActorLocation());
-  if (Remaining>.01f) MoveVehicle(-Forward*FMath::Min(Remaining,35*Dt));
-  else { State=EWarehouseCycle::Complete; bPowered=false; SetStatus(TEXT("CYCLE COMPLETE")); }
+  if (MoveToLine(WithdrawStart-Forward*130,30.f,Dt))
+  {
+   State=EWarehouseCycle::Complete;
+   if (bChargePending) BeginChargeTrip();
+   else { bPowered=false; SetStatus(TEXT("CYCLE COMPLETE")); }
+  }
   break;
  }
  default: break;

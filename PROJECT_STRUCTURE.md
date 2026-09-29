@@ -4,20 +4,25 @@
 
 Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. 센서 인식 이상, 충돌, 포크와 팔레트/적재물 결합 실패 같은 상황을 재현하고, 창고 운영 조건별 효율을 비교하는 것이 목표다. 향후 물리 거동은 질량·관성·마찰·접촉·하중을 실제 장비에 맞춰 검증해야 한다.
 
-**현재 구현:** Fab 예제 구성을 참고한 창고, 트럭용 외부 하역장과 진입로, E키 화물 집기, E키로 시작·정지하는 지게차의 직선 팔레트 운반 과정이 있다. 포크 삽입 깊이·각도·높이 검사, 사람(Pawn) 안전 구역 감지와 부품별 충돌 스윕을 사용한다. 차량 마찰·전복·적재물 미끄러짐, 실제 LiDAR, 자유 경로 계획 및 운영 효율 평가는 아직 없다. 팔레트 지지는 기하 검사 후 부착하는 방식이며 실제 차량 물리가 완성된 것으로 해석하지 않는다.
+**현재 구현:** Fab 창고와 트럭용 외부 환경, E키 양손 화물 운반과 반투명 표시, 지게차 직선 팔레트 운반이 있다. VNSL14 공개 사양의 치수·속도·하중·승강 제한과 배터리 소비, 직선 충전 차로의 도킹·충전·복귀를 구현한다. 포크 삽입 검사, 사람(Pawn) 안전 구역과 부품별 충돌 스윕을 사용한다. 차량 마찰·전복·적재물 미끄러짐, 실제 LiDAR, 자유 경로 계획은 아직 없다. 팔레트는 검사 후 부착하며 실제 차량 물리가 완성된 것으로 해석하지 않는다. 사양과 배터리 가정은 `VNSL14_SPEC.md`를 확인한다.
 
 ## 작업별 첫 탐색 경로
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
 | 창고 배치·랙·화물·조명 | `WAREHOUSE.md`, `Scripts/build_first_person_warehouse.py`, `Content/FirstPerson/Lvl_FirstPerson.umap` | `Content/__ExternalActors__/FirstPerson/Lvl_FirstPerson/` (엔진이 생성한 액터 데이터) |
+| 지게차 기준 실측 크기·선반·통로·팔레트·트럭 | `Scripts/apply_real_world_scale.py`, `Scripts/verify_real_world_scale.py`, `WAREHOUSE.md`의 실제 크기 기준 | `VNSL14_SPEC.md`, 창고/외부 에셋 배치 스크립트 |
 | 건물 외관·트럭 진입로·하역장 | `WAREHOUSE.md`의 외부 에셋 선정/설치 상태, `Scripts/build_warehouse_exterior.py`, `Scripts/verify_warehouse_exterior.py` | 맵의 `EXT_` 액터, `Content/Warehouse/Exterior/Materials/` |
 | 밝기·자동 노출 | `Config/DefaultEngine.ini`의 AutoExposure, 맵 생성 스크립트의 작업등 | 인게임 카메라·후처리 설정 |
 | 배치·충돌 검증 | `Scripts/verify_first_person_warehouse.py`, `Scripts/verify_forklift_training.py` | 실제 에디터의 충돌 뷰/플레이 테스트 |
 | 상자·크레이트 집기 | `Source/msc_vr/msc_vrCharacter.h/.cpp`, `Source/msc_vr/WarehouseCargo.h/.cpp` | `Scripts/configure_carryable_cargo.py`, `Scripts/build_first_person_warehouse.py`의 화물 배치 |
 | 양손 운반 자세·걷기 연결 | `Source/msc_vr/WarehouseCarryAnimInstance.h/.cpp`, `msc_vrCharacter.cpp`의 `UpdateCarryPose` | `Scripts/verify_two_hand_carry.py`, `Content/FirstPerson/Anims/` |
+| 운반 물체 반투명·시야 확보 | `msc_vrCharacter.cpp`의 `TryPickupCargo`/`DropCargo`, `msc_vrCharacter.h`의 `CarryOpacity` | `Scripts/prepare_carry_material.py`, `Content/Warehouse/Materials/M_CarryTransparent.uasset`, `Scripts/verify_two_hand_carry.py` |
 | 지게차 E 시작·운반·사람 감지·충돌 | `Source/msc_vr/WarehouseForklift.h/.cpp`, `msc_vrCharacter.cpp` | `Scripts/verify_forklift_training.py`, 맵 생성 스크립트의 지게차 배치 |
+| VNSL14 사양·하중·속도·배터리·충전 | `VNSL14_SPEC.md`, `Source/msc_vr/WarehouseForklift.h/.cpp`, `WarehouseChargingStation.h/.cpp` | `WarehousePallet.h/.cpp`, `Scripts/apply_orange_agv.py`, `Scripts/verify_forklift_training.py` |
+| 주황 AGV 모델·바퀴·기계 리그·PBR 재질 | `Scripts/prepare_orange_agv.py`, `Source/msc_vr/WarehouseForklift.cpp`, `WAREHOUSE.md`의 Orange AGV 절 | `SourceAssets/OrangeAGV/orange_agv.fbx`, `Content/Warehouse/AGV/Meshes/`, `Content/Warehouse/AGV/Materials/`; 맵 적용은 `Scripts/apply_orange_agv.py` |
 | 팔레트 구멍·포크 정렬·삽입 조건 | `Source/msc_vr/WarehousePallet.h/.cpp`, `WarehouseForklift.cpp` | `Scripts/verify_forklift_training.py` |
+| 공통 목재 팔레트 모델·재질 | `WarehousePallet.cpp`, `Scripts/apply_real_world_scale.py`, `Scripts/prepare_warehouse_assets.py` | 원본 `Content/Scene_Warehouse/Assets/MS/3D/Ind_War_Storage_Pallet_Wood_Worn_01/`; 공통 충돌 복사본 `Content/Warehouse/Physics/SM_Ind_War_Storage_Pallet_Wood_Worn_01.uasset` |
 | 정적 삼각형·동적 볼록 충돌 에셋 | `Scripts/prepare_warehouse_assets.py`, `Source/msc_vr/WarehouseCargo.cpp` | `Content/Warehouse/Collision/`, `Content/Warehouse/Physics/` (로컬 재생성물) |
 | 향후 차량 물리·LiDAR·경로 계획 | `WAREHOUSE.md`의 구현 한계, `WarehouseForklift.cpp`의 현재 절차 | `Config/DefaultEngine.ini`, 관련 레벨/블루프린트 |
 | 1인칭 조작·카메라 | `Source/msc_vr/msc_vrCharacter.*`, `msc_vrPlayerController.*`, `msc_vrCameraManager.*` | `Content/FirstPerson/Blueprints/`, `Content/Input/`, `Config/DefaultInput.ini` |
@@ -39,6 +44,7 @@ msc_vr/
   msc_vr.uproject
   PROJECT_STRUCTURE.md
   README.md
+  VNSL14_SPEC.md
   WAREHOUSE.md
   Config/
     DefaultEditor.ini
@@ -48,13 +54,18 @@ msc_vr/
     DefaultInput.ini
   Scripts/
     apply_exterior_fab_assets.py
+    apply_orange_agv.py
+    apply_real_world_scale.py
     build_first_person_warehouse.py
     build_warehouse_exterior.py
     configure_carryable_cargo.py
+    prepare_carry_material.py
+    prepare_orange_agv.py
     prepare_warehouse_assets.py
     update_structure_summary.ps1
     verify_first_person_warehouse.py
     verify_forklift_training.py
+    verify_real_world_scale.py
     verify_two_hand_carry.py
     verify_warehouse_exterior.py
   Source/
@@ -76,6 +87,8 @@ msc_vr/
       WarehouseCargo.h
       WarehouseCarryAnimInstance.cpp
       WarehouseCarryAnimInstance.h
+      WarehouseChargingStation.cpp
+      WarehouseChargingStation.h
       WarehouseForklift.cpp
       WarehouseForklift.h
       WarehousePallet.cpp
@@ -140,6 +153,7 @@ msc_vr/
       Skeletons/
       Textures/
     Warehouse/
+      AGV/
       Collision/
       Exterior/
       Materials/
@@ -148,6 +162,7 @@ msc_vr/
       GrenadeLauncher/
       Pistol/
       Rifle/
+  SourceAssets/
 ```
 <!-- STRUCTURE:END -->
 

@@ -1,29 +1,58 @@
 #include "WarehousePallet.h"
 #include "Components/StaticMeshComponent.h"
-#include "Materials/MaterialInterface.h"
+#include "Engine/StaticMesh.h"
+#include "CollisionQueryParams.h"
+#include "PhysicsEngine/BodySetup.h"
 #include "UObject/ConstructorHelpers.h"
 
 AWarehousePallet::AWarehousePallet()
 {
  RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
- static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube"));
- static ConstructorHelpers::FObjectFinder<UMaterialInterface> Wood(TEXT("/Game/Warehouse/Materials/MI_PalletWood"));
- auto Board = [&](FString Name, FVector Position, FVector Size)
+ static ConstructorHelpers::FObjectFinder<UStaticMesh> Pallet(TEXT("/Game/Warehouse/Physics/SM_Ind_War_Storage_Pallet_Wood_Worn_01"));
+ Body=CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PalletMesh"));
+ Body->SetupAttachment(RootComponent);
+ Body->SetCollisionProfileName(TEXT("BlockAllDynamic"));
+ Body->SetStaticMesh(Pallet.Object);
+ if (Pallet.Succeeded())
  {
-  auto* Part = CreateDefaultSubobject<UStaticMeshComponent>(FName(*Name));
-  Part->SetupAttachment(RootComponent);
-  Part->SetStaticMesh(Cube.Object);
-  Part->SetMaterial(0,Wood.Object);
-  Part->SetRelativeLocation(Position);
-  Part->SetRelativeScale3D(Size / 100.f);
-  Part->SetCollisionProfileName(TEXT("BlockAllDynamic"));
- };
- for (int I=0; I<5; ++I) Board(FString::Printf(TEXT("Deck%d"), I), FVector(-48+24*I,0,13.5), FVector(20,100,3));
- for (int I=0; I<3; ++I)
- {
-  Board(FString::Printf(TEXT("Runner%d"), I), FVector(0,-44+44*I,7.5), FVector(120,12,9));
-  Board(FString::Printf(TEXT("Foot%d"), I), FVector(0,-44+44*I,1.5), FVector(120,12,3));
+  const FBox Bounds=Pallet.Object->GetBoundingBox();
+  const FVector Scale=FVector(110,110,15)/Bounds.GetSize();
+  Body->SetRelativeScale3D(Scale);
+  Body->SetRelativeLocation(FVector(-Bounds.GetCenter().X,-Bounds.GetCenter().Y,-Bounds.Min.Z)*Scale);
  }
+}
+
+void AWarehousePallet::FitCollisionBounds(UStaticMesh* Mesh)
+{
+#if WITH_EDITOR
+ if (!Mesh || !Mesh->GetBodySetup()) return;
+ const FBox Bounds=Mesh->GetBoundingBox();
+ auto* Setup=Mesh->GetBodySetup();
+ for (auto& Hull : Setup->AggGeom.ConvexElems)
+ {
+  // Voxel decomposition adds padding below worn feet; keep the floor contact exact.
+  for (FVector& Vertex : Hull.VertexData) Vertex=Vertex.BoundToBox(Bounds.Min,Bounds.Max);
+  Hull.UpdateElemBox();
+ }
+ Setup->InvalidatePhysicsData();
+ Setup->CreatePhysicsMeshes();
+ Mesh->MarkPackageDirty();
+#endif
+}
+
+float AWarehousePallet::GetSupportLiftOffset(const FTransform& Frame) const
+{
+ // Sweep each full tine against this mesh; point samples miss worn board edges.
+ float Contact=FLT_MAX;
+ for (float Side : {-1.f,1.f})
+ {
+  const FVector Start=Frame.TransformPosition(FVector(57.5f,Side*25.f,6.5f));
+  FHitResult Hit;
+  if (!Body->SweepComponent(Hit,Start,Start+Frame.GetUnitAxis(EAxis::Z)*6.f,Frame.GetRotation(),FCollisionShape::MakeBox(FVector(57.5f,9.f,3.f)),false) || Hit.bStartPenetrating)
+   return -1.f;
+  Contact=FMath::Min(Contact,Hit.Time*6.f);
+ }
+ return Contact==FLT_MAX ? -1.f : FMath::Max(0.f,Contact-.05f);
 }
 
 bool AWarehousePallet::CanEngage(const FTransform& Frame) const
@@ -34,12 +63,12 @@ bool AWarehousePallet::CanEngage(const FTransform& Frame) const
  auto Local = [&](FVector P) { return GetActorTransform().InverseTransformPosition(Frame.TransformPosition(P)); };
  for (float Side : {-1.f, 1.f})
  {
-  if (Local(FVector(50,Side*22,7.5)).X > -50 || Local(FVector(170,Side*22,7.5)).X < 40 || Local(FVector(170,Side*22,7.5)).X > 60) return false;
-  for (float X : {50.f,170.f}) for (float Y : {-4.f,4.f}) for (float Z : {-2.f,2.f})
+  if (Local(FVector(0,Side*25,6.5)).X > -55 || Local(FVector(115,Side*25,6.5)).X < 40 || Local(FVector(115,Side*25,6.5)).X > 55.25) return false;
+  for (float X : {0.f,115.f}) for (float Y : {-9.f,9.f}) for (float Z : {-3.f,3.f})
   {
-   const FVector P = Local(FVector(X,Side*22+Y,7.5+Z));
-   if (Side*P.Y < 6.25f || Side*P.Y > 37.75f || P.Z < 3.25f || P.Z > 11.75f) return false;
+   const FVector P = Local(FVector(X,Side*25+Y,6.5+Z));
+   if (Side*P.Y < 6.25f || Side*P.Y > 42.75f || P.Z < 3.25f || P.Z > 10.25f) return false;
   }
  }
- return true;
+ return GetSupportLiftOffset(Frame)>=0;
 }
