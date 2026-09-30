@@ -1,4 +1,5 @@
 #include "WarehouseDamageSystem.h"
+#include "WarehouseCargo.h"
 #include "WarehouseForklift.h"
 #include "WarehousePallet.h"
 #include "WarehouseChargingStation.h"
@@ -65,6 +66,7 @@ void AWarehouseDamageSystem::InitializeStrength()
    AllParts.Append(Parts);
    if (auto* Vehicle=Cast<AWarehouseForklift>(Actor)) { Spec.MassKg=Vehicle->VehicleMassKg; Spec.RatedLoadKg=Vehicle->RatedLoadKg; }
    if (auto* Pallet=Cast<AWarehousePallet>(Actor)) Spec.MassKg=Pallet->PalletMassKg;
+   if (auto* Cargo=Cast<AWarehouseCargo>(Actor)) Spec.MassKg=Cargo->GrossMassKg;
   }
   for (auto* Part : AllParts)
   {
@@ -98,6 +100,7 @@ void AWarehouseDamageSystem::UpdateLoads()
   Supports[I].Reset();
   for (AActor* Actor : Spec.Members) if (IsValid(Actor))
   {
+   if (auto* Cargo=Cast<AWarehouseCargo>(Actor)) Spec.MassKg=Cargo->GrossMassKg;
    TArray<UStaticMeshComponent*> Parts;
    Actor->GetComponents(Parts);
    for (auto* Part : Parts) if (Part->IsVisible() && Part->IsCollisionEnabled()) Bounds[I]+=Part->Bounds.GetBox();

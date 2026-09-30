@@ -10,8 +10,8 @@ orders[0].set_editor_property('destination',unreal.Transform(location=unreal.Vec
 v.set_editor_property('pending_jobs',orders)
 actors=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 mesh=next(a for a in actors.get_all_level_actors() if a.get_actor_label()=='WH_Cargo_Left_02_1_Top').get_component_by_class(unreal.StaticMeshComponent).static_mesh
-assert unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem).get_convex_collision_count(mesh)==1,'Rebuild the sealed-carton collision asset'
-assert unreal.EditorAssetLibrary.get_metadata_tag(mesh,'WarehouseCollisionVersion')=='sealed-carton-v1','Rebuild imported carton collision'
+assert unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem).get_simple_collision_count(mesh)==1,'Rebuild the sealed-carton collision asset'
+assert '/BoxesPalletsPack/' in mesh.get_path_name(),'Install the documented Fab carton pack'
 start=time.monotonic();phase=0;vehicle=None;box=None;system=None;released_at=0;carried=False;game=None
 
 def finish():

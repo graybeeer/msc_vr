@@ -1,0 +1,27 @@
+{
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/cardboard_box_01",
+  "files": {
+    "albedo": {
+      "md5": "40a2ca17b3a7fb225798fe4d88868417",
+      "filename": "cardboard_box_01_diff_2k.jpg",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/cardboard_box_01/cardboard_box_01_diff_2k.jpg"
+    },
+    "mesh": {
+      "md5": "1e6c381317f3f4f27c91de02a377dd1e",
+      "filename": "cardboard_box_01_2k.fbx",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/fbx/2k/cardboard_box_01/cardboard_box_01_2k.fbx"
+    },
+    "normal": {
+      "md5": "b2cc3233fbcc3090a4578717d39a3161",
+      "filename": "cardboard_box_01_nor_dx_2k.png",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/png/2k/cardboard_box_01/cardboard_box_01_nor_dx_2k.png"
+    },
+    "roughness": {
+      "md5": "46479c0be1466ee7c9d58a2fd2602953",
+      "filename": "cardboard_box_01_rough_2k.jpg",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/cardboard_box_01/cardboard_box_01_rough_2k.jpg"
+    }
+  },
+  "asset": "cardboard_box_01"
+}

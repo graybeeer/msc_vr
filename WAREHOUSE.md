@@ -184,3 +184,78 @@ E 입력과 1인칭 화면의 최종 사용성은 플레이 모드에서도 확�
 실제 Chaos 낙하·충돌 회귀 검사는 `Scripts/verify_warehouse_strength_pie.py`다. 별도 에디터에서 `-RenderOffscreen -unattended -ExecCmds="py C:/msc_UnrealProject/msc_vr/Scripts/verify_warehouse_strength_pie.py"`로 실행한다. 저장된 맵을 열고 시뮬레이션을 시작하며, `Saved/strength_before.png`·`strength_after.png`를 만든 뒤 에디터를 자동 종료한다. 수동 작업 중인 에디터에서는 실행하지 않는다. 테스트는 원본 맵에 파손을 저장하지 않는다.
 
 검증 기록: 정상 적재, 상자 이동에 따른 하중 해제, 단별 과적, 충격 누적, 고장 후 운반/충전 재시동 차단, 기존 삽입·사람 감지·운반·자동 충전을 검사했다. 실제 PIE에서 랙 붕괴 후 상단 팔레트가 약 96cm 낙하했고, 독립적인 20kg 상자의 중력 낙하가 충돌 손상으로 파손되는 것을 확인했다. 이는 위 시나리오에 대한 기능 검사이며 공학적 정확도 인증이 아니다.
+
+
+## 플레이어 조작 · 적재 · 설정 메뉴
+
+- Shift를 누르는 동안 달린다. 기본 걷기 속도의 1.65배이며, 화물을 들 때는 260 cm/s로 제한한다.
+- Ctrl을 누르는 동안 앉는다. 캡슐과 1인칭 카메라가 낮아지며, 머리 위 공간이 부족하면 일어서지 않는다.
+- 화물을 든 채 팔레트 또는 그 위 상자를 바라보고 E를 누르면 빈 받침면으로 약 0.45초 동안 내려놓는다. 팔레트 밖으로 넘치거나, 표면 높이가 고르지 않거나, 손이 닿지 않거나, 이동 경로가 막혔으면 들고 있는 상태를 유지한다. 팔레트를 겨냥하지 않은 E는 기존처럼 놓기다.
+- 화물은 플레이 시작부터 중력과 Chaos 물리를 사용한다. 아래 상자를 집으면 위쪽 상자도 물리 수면 상태에서 깨어난다. 내려놓은 화물은 고정하지 않는다.
+- F1 또는 Esc로 설정 메뉴를 연다. PIE에서 Esc는 에디터의 플레이 종료 단축키이므로 F1을 사용한다.
+- 메뉴에서 마우스 감도, 시야각, 그래픽 품질, 수직 동기화를 변경하고 저장할 수 있다.
+- 전지적 관찰 카메라는 캐릭터를 원래 위치에 두고 창고를 위에서 70도 각도로 내려다본다. WASD 평면 이동, 휠 확대/축소, 우클릭 드래그 회전(내려다보는 각도 45~85도), Space/Ctrl 축소/확대, Shift 가속을 사용한다. 창고 전체 보기는 ObserverArea 태그가 있는 바닥의 범위와 화면 비율에 맞춰 시점을 잡는다. ObserverRoof 태그가 있는 지붕·상부 보·캐노피·옥상 시설은 관찰 화면에서만 숨긴다. 충돌과 재질은 유지하며 1인칭 복귀 시 이전 표시 상태를 복구한다. Scripts/configure_observer_view.py가 해당 태그를 저장하고 창고·외부 재생성 시에도 적용한다.
+- 관찰과 메뉴 사용 중에도 물리·지게차 시뮬레이션은 계속된다. F1 메뉴에서 1인칭으로 복귀한다.
+- 전지적 관찰 검증: `Scripts/verify_observer_view_pie.py`로 저장된 지붕 태그 15개, 상공 구도, 충돌·재질 유지, 역할 이름표 7개 표시와 반복적인 시점 복귀를 확인했다. 관찰 중 지붕 숨김과 복귀 후 지붕 표시는 캡처로 확인했다. Development Editor 빌드 성공. 로그: `Saved/Logs/ObserverPIE4.log`.
+
+검증 진입점: `Scripts/verify_warehouse_interaction_pie.py`. 별도 에디터에서 `-RenderOffscreen -unattended -ExecCmds="py C:/msc_UnrealProject/msc_vr/Scripts/verify_warehouse_interaction_pie.py"`로 실행한다. 테스트용 액터와 맵은 저장하지 않는다.
+
+2026-09-30 검증: Development Editor 빌드, 기존 화물 262개와 테스트 화물 2개의 시작 물리 활성화, 달리기/걷기 속도 복귀, 앉기 캡슐·카메라 높이, 받침 상자 제거 후 낙하, 상자 위와 빈 팔레트 적재, 거리 초과 거부, 메뉴·관찰 시점 전환/복귀를 확인했다. 목재 판자 틈은 허용하고 무게중심 주변 네 방향의 지지를 검사한다. 로그는 `Saved/Logs/InteractionFinal4.log`이며, 기존 자율 운반·회전·하역 회귀 로그는 `Saved/Logs/InteractionAutonomyRegression.log`다.
+
+
+## 역할별 작업자 (AI 미구현)
+
+기본 플레이어의 전신 메시·재질·애니메이션을 복사한 `WarehouseWorker` 7명을 배치했다. AI 컨트롤러, 자동 이동, 작업 실행은 없다. 제자리 애니메이션과 사람 충돌만 사용하며, `Pawn` 충돌로 기존 지게차 안전 스캐너에 감지된다.
+
+| 머리 위 이름표 | 배치 위치 |
+| --- | --- |
+| 입고·검수 | 창고 북쪽 입고 인계 팔레트 옆 |
+| 피킹 | 서쪽 중량 랙의 수동 피킹 자리 |
+| 포장·출고 준비 | 남서쪽 출고 대기 팔레트 구역 |
+| 상하차 담당 | 건물 남쪽 하역 플랫폼 |
+| 운영·관제 | 북서쪽 전기함·설비 구역 옆 |
+| 재고 관리 | 서쪽 경량 랙·재고 적치 구역 |
+| 유지보수 | 충전소 옆의 주행로 밖 점검 자리 |
+
+이름표는 한글을 지원하는 화면 공간 Widget으로 표시한다. 관찰 카메라에서도 읽을 수 있고, 벽·선반에 가려지거나 1인칭에서는 25m, 전지적 관찰에서는 200m보다 멀면 숨긴다. 관찰에서 숨긴 지붕은 이름표 가림 검사에서도 제외한다. 작업자 액터의 `RoleName`과 Transform을 편집하여 역할과 위치를 바꿀 수 있다. 별도 작업 책상이나 관제 장비를 새로 만든 것은 아니다.
+
+`Scripts/configure_warehouse_workers.py`는 역할별 작업자를 생성하고 기존 작업자의 위치는 유지한다. 기본 창고 재생성 스크립트에서도 호출한다. 플레이어 외형을 변경한 경우 이 스크립트를 다시 실행하면 작업자에게 반영된다. 기존 맵을 다시 만들 필요는 없다.
+
+검증: `Scripts/verify_warehouse_workers.py`는 저장된 7개 역할, 플레이어 외형 일치, AI 비활성, 배치 여유와 작업자에 대한 지게차 정지·재개를 검사한다. 테스트 중 옮긴 작업자나 지게차 상태는 맵에 저장하지 않는다.
+
+2026-09-30 검증: Development Editor 빌드, 저장된 작업자 7명과 충돌 여유, 지게차 사람 감지 시 정지 및 통로 확보 후 작업 완료, PIE에서 AI 컨트롤러 없음·위치 유지·기본 애니메이션·한글 이름표를 확인했다. 로그: `Saved/Logs/WorkersVerify2.log`, `Saved/Logs/WorkersPreview.log`.
+
+## 화물 품목·무게·포장 다양화 (2026-09-30)
+
+모든 화물 262개에 `CargoId`, `CargoKind`, 포장 포함 무게 `GrossMassKg`를 저장한다. 16종의 품목(의류, 서적, 건면, 생수, 세제, 식기, 공유기, 베어링, 케이블, 화장품, 복사용지, 운동화, 농산물, 수건, 센서, 통조림)을 사용하며 무게는 각 짐마다 다르게 배정한다. 현재 범위는 0.98~23.44kg이다. 내용물은 품목 데이터로 표현하며 상자를 열어 낱개 상품을 꺼내는 기능은 포함하지 않는다. 무게 범위는 교육용 가정이고 실제 상품의 인증 사양이 아니다.
+
+상자를 바라보거나 들면 화면 아래에 품목·화물 번호·kg가 표시된다. 총중량은 Chaos 물리 질량과 지지 하중·충격 계산에 같은 값으로 들어간다. Details의 Cargo 항목에서 수정할 수 있고 실행 중 변경은 `SetGrossMassKg()`를 사용한다. DamageSystem의 화물 질량은 이 값을 따르므로 서로 다른 수치를 따로 입력하지 않는다.
+
+사용자 요청에 따라 실제 맵의 모든 화물은 기존 Fab 창고의 평평한 닫힌 골판지 상자 `Ind_War_Storage_Box_Cardboard_Worn_02` 하나로 통일했다. 품목·무게·크기는 개별 값으로 유지한다. 아래 무료 CC0 모델 2종은 2K PBR 재질과 함께 임포트해 보관하지만 맵에는 배치하지 않는다. 다른 외형은 차후 추가한다. 팔레트는 기존 공통 목재 모델 하나를 유지한다.
+
+| 모델 | 제작자 / 출처 | 사용 |
+| --- | --- | --- |
+| Cardboard Box 01 | Rahul Chaudhary, https://polyhaven.com/a/cardboard_box_01 | 보관만 함 / 미배치 |
+| Plastic Crate 01 | PierreB3D, https://polyhaven.com/a/plastic_crate_01 | 보관만 함 / 미배치 |
+
+Fab의 무료 realistic `Boxes & Pallets Pack`은 이후 사용자가 제공한 ZIP으로 설치했다. 아래 설치 절이 현재 적용 기준이다.
+
+원본·URL·체크섬은 `SourceAssets/Cargo/PolyHaven/<asset>/source.json`, 임포트 결과는 `Content/Warehouse/Cargo/PolyHaven/`에 있다. 선택 에셋 재설치 순서는 `Scripts/download_cargo_assets.ps1` 실행 → Unreal Python에서 `Scripts/import_cargo_assets.py` 실행 → `Scripts/configure_cargo_variety.py` 실행이다. 현재 닫힌 상자 배정은 Poly Haven 다운로드 없이 `configure_cargo_variety.py`만 실행할 수 있다. 화물의 전체 목록은 적용 시 `Saved/CargoManifest.json`으로 출력한다. 기존 Fab 화물의 볼록 충돌 복사본은 종전처럼 `Content/Warehouse/Physics/`에 재생성한다.
+
+`configure_cargo_variety.py`는 현재 화물 액터를 유지하면서 외형과 크기, 메타데이터를 바꾼다. 화물 번호를 기준으로 선택하므로 실행마다 내용이 무작위로 바뀌지 않는다. 상자 크기는 랙·팔레트 공간 안에서 다양하게 배정하며 위쪽 상자가 아래쪽을 넘어가지 않도록 하고 높이는 아래 상자에 맞춰 다시 쌓는다. `apply_real_world_scale.py`와 기본 창고 재생성에도 연결했다. 이 스크립트를 명시적으로 다시 실행하면 수동 변경한 화물 데이터도 기본 배정값으로 재설정된다.
+
+검증 진입점: `Scripts/verify_cargo_variety_pie.py` (저장된 개별 데이터, 물리 질량, 하중 전달, 초기 적재 안정성, 실제 화면). 실제 물리 충돌은 동적 볼록 근사다. 현재 배치된 닫힌 골판지 상자는 외곽 치수에 맞는 직육면체 충돌로 평평한 지지면을 사용한다. 스캔된 종이 주름까지 물리 형상으로 재현하지는 않는다. 미배치 플라스틱 크레이트 에셋은 복수의 볼록 형상을 보관한다.
+
+2026-09-30 최종 검증: Editor C++ 빌드 성공. `CargoClosedFinalPIE.log`에서 262개 화물의 개별 물리 질량, 16종 품목, 닫힌 상자 단일 모델, 초기 적재 안정성(이탈 0개), 실행 중 무게 변경의 팔레트 하중 전달 및 화면 표시를 확인했다. `CargoRegressions3.log`에서 실측 규격·반복 적용 일관성과 랙 하중·이동 하중·과적 붕괴·충격 파손 검사를 통과했다. 무게는 교육용 가정이며 외곽 박스 충돌로 적재를 근사한다.
+
+## Fab Boxes & Pallets Pack 로컬 설치 (2026-09-30)
+
+출처: IINickE, https://www.fab.com/listings/a7c9776e-0a8e-424b-8f7c-f4d746097f0f . Fab Standard License 에셋이며 CC0가 아니다.
+
+사용자가 제공한 `box_cargo_collection_fbx.zip`을 `SourceAssets/Cargo/BoxesPalletsPack/`에 압축 해제한다. `Box Cargo Collection FBX/Cargo.fbx`가 그 아래에 있어야 한다. 에디터 Python에서 `Scripts/import_boxes_pallets_pack.py`를 실행하면 `Content/Warehouse/Cargo/BoxesPalletsPack/`에 모델과 PBR 재질을 만든다. 이어 `Scripts/configure_cargo_variety.py`를 실행하면 맵의 기존 화물에 닫힌 단일 상자 `Cargo_Box_V1_001`~`Cargo_Box_V4_001`을 배정하고 저장한다. 열린 상자와 일체형 상자 더미는 현재 화물에 사용하지 않는다. 기존 팔레트 모델도 유지한다.
+
+색상·거칠기·노멀 텍스처를 연결하고 Blender 노멀의 녹색 채널을 Unreal 기준으로 전환한다. 닫힌 상자의 물리는 외곽 박스 충돌로 적재를 근사한다. 화물 번호·품목·개별 무게 및 랙 공간 안의 크기 배정은 기존 설정을 유지한다. 운반용 반투명 재질은 Albedo 파라미터를 공유한다.
+
+**Git 제외:** 위 원본 폴더와 임포트 결과 폴더 전체를 `.gitignore`로 제외한다. 스크립트·설치 문서·맵의 에셋 참조는 프로젝트 변경사항이다. 팀원은 본인 Fab 라이브러리에서 같은 팩을 내려받고 같은 경로에 설치해야 한다. 에셋을 설치하지 않으면 맵에서 모델 참조가 누락되므로 맵을 열기 전에 임포트부터 수행한다. Git 커밋·푸시는 자동으로 수행하지 않는다.
+
+검증: `FabBoxesApply.log`에서 모델 36개·텍스처 38개 임포트와 262개 화물 적용, 실측 규격·반복 배치·하중/파손 검사를 통과했다. `FabBoxesPIE.log`에서 새 단일 상자 4종, 개별 질량, 화면 표시, 초기 적재 이탈 0개를 확인했다. `FabBoxesInteraction.log`에서 새 상자의 집기·지지 상자 제거 시 낙하·애니메이션 적재·빈 팔레트 내려놓기를 통과했다. 원본 및 임포트 결과 152개 파일은 모두 Git 제외이며 추적 파일은 0개다.

@@ -70,9 +70,9 @@ def configure_strength():
         elif isinstance(actor, unreal.WarehousePallet) or 'Pallet' in label:
             add(label, [actor], failure.CRUSH, 25, 1500, 120, 900)
         elif isinstance(actor, unreal.WarehouseCargo):
-            _, extent = actor.get_actor_bounds(False)
-            mass = 20 if extent.x*extent.y*extent.z*8 > 70000 else 12
+            mass = actor.get_editor_property('gross_mass_kg')
             add(label, [actor], failure.CRUSH, mass, 120, 35, 250)
+            specs[-1].set_editor_property('mass_kg', mass)
         elif label.startswith('WH_Utility_'):
             index = int(label.rsplit('_', 1)[1])
             add(label, [actor], failure.RIGID, (55,80,90,15)[index], (150,200,150,120)[index], 100, 900)

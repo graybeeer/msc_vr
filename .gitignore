@@ -88,3 +88,7 @@ DerivedDataCache/*
 
 # Rebuild intermediate FBX imports; source FBX and final AGV rig assets are tracked.
 /Content/Warehouse/AGV/SourceMeshes/
+
+# Licensed Fab Boxes & Pallets Pack: install locally per WAREHOUSE.md.
+/SourceAssets/Cargo/BoxesPalletsPack/
+/Content/Warehouse/Cargo/BoxesPalletsPack/

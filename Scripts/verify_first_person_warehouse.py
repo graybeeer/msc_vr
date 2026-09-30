@@ -14,9 +14,9 @@ for a in cargo:
     c=a.get_component_by_class(unreal.StaticMeshComponent)
     mesh=c.get_editor_property('static_mesh')
     assert c.get_collision_profile_name()=='PhysicsActor'
-    assert meshes.get_convex_collision_count(mesh)>0,mesh.get_path_name()
+    assert meshes.get_simple_collision_count(mesh)+meshes.get_convex_collision_count(mesh)>0,mesh.get_path_name()
     if mesh.get_name()=='SM_Ind_War_Storage_Box_Cardboard_Worn_02':
-        assert meshes.get_convex_collision_count(mesh)==1,'Sealed cartons need a stable outer hull'
+        assert meshes.get_simple_collision_count(mesh)==1,'Sealed cartons need flat box collision'
     assert meshes.get_collision_complexity(mesh)==unreal.CollisionTraceFlag.CTF_USE_SIMPLE_AND_COMPLEX
 vehicle=next(a for a in actors if isinstance(a,unreal.WarehouseForklift))
 assert not vehicle.get_editor_property('powered')

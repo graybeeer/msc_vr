@@ -8,6 +8,8 @@
 
 class UInputMappingContext;
 class UUserWidget;
+class SWidget;
+class ACameraActor;
 
 /**
  *  Simple first person Player Controller
@@ -23,6 +25,15 @@ public:
 
 	/** Constructor */
 	Amsc_vrPlayerController();
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") float MouseSensitivity = 1.f;
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") float ViewFOV = 90.f;
+	UFUNCTION(BlueprintCallable, Category="Settings") void ToggleWarehouseMenu();
+	UFUNCTION(BlueprintCallable, Category="Settings") void ToggleObserverView();
+	UFUNCTION(BlueprintCallable, Category="Settings") void FrameWarehouse();
+	UFUNCTION(BlueprintPure, Category="Settings") bool IsObserverView() const { return bObserverView; }
+	UFUNCTION(BlueprintPure, Category="Settings") bool IsWarehouseMenuOpen() const { return MenuWidget.IsValid(); }
+	virtual void PlayerTick(float DeltaTime) override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 protected:
 
@@ -54,4 +65,18 @@ protected:
 
 	/** Returns true if the player should use UMG touch controls */
 	bool ShouldUseTouchControls() const;
+	void UpdateInputMode();
+	void CloseWarehouseMenu();
+	void UpdateObserverCamera();
+	FText GetCargoReadout() const;
+	TSharedPtr<SWidget> CargoReadoutWidget;
+	void SetObserverRoofVisibility(bool Hide);
+	TArray<TWeakObjectPtr<AActor>> ObserverHiddenRoofs;
+	FVector ObserverFocus = FVector::ZeroVector;
+	FRotator ObserverRotation = FRotator(-70,90,0);
+	float ObserverDistance = 6000.f;
+	TSharedPtr<SWidget> MenuWidget;
+	UPROPERTY(Transient) TObjectPtr<ACameraActor> ObserverCamera;
+	bool bObserverView = false;
+	bool bWarehouseInputLocked = false;
 };

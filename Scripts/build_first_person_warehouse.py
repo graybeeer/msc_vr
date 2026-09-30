@@ -222,5 +222,9 @@ from configure_forklift_autonomy import configure_autonomy
 configure_autonomy()
 from configure_warehouse_strength import configure_strength
 configure_strength()
+from configure_warehouse_workers import configure_workers
+configure_workers()
+from configure_observer_view import configure_observer_view
+configure_observer_view()
 assert level.save_current_level(), 'Could not save the default first-person level'
 print('WAREHOUSE_BUILT', LEVEL, 'actors', len(actors.get_all_level_actors()), 'ground',ground)

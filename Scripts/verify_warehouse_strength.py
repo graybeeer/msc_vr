@@ -26,10 +26,14 @@ assert len(initial) > 400, len(initial)
 assert all(s.mass_kg > 0 and s.rated_load_kg > 0 for s in initial.values())
 assert all(not s.failed and s.damage == 0 for s in initial.values())
 rack = initial['PalletRack_Left_00']
-assert abs(rack.supported_kg-260) < .5, ('Four pallets plus eight boxes must reach the rack', rack.supported_kg)
-assert abs(rack.peak_level_kg-130) < .5, rack.peak_level_kg
-assert abs(initial['WH_Pallet_Left_00_0'].supported_kg-40) < .5
-assert abs(named['WH_Cargo_Left_00_0'].get_component_by_class(unreal.StaticMeshComponent).get_mass()-20) < .1
+def mass(label):
+    return named[label].get_editor_property('gross_mass_kg')
+level_loads=[50+sum(mass(f'WH_Cargo_Left_00_{tier}{slot}{top}') for slot in ('','_B') for top in ('','_Top')) for tier in range(2)]
+rack_load=sum(level_loads)
+assert abs(rack.supported_kg-rack_load)<.5, (rack.supported_kg,rack_load)
+assert abs(rack.peak_level_kg-max(level_loads))<.5
+assert abs(initial['WH_Pallet_Left_00_0'].supported_kg-mass('WH_Cargo_Left_00_0')-mass('WH_Cargo_Left_00_0_Top'))<.5
+assert abs(named['WH_Cargo_Left_00_0'].get_component_by_class(unreal.StaticMeshComponent).get_mass()-named['WH_Cargo_Left_00_0'].get_editor_property('gross_mass_kg')) < .1
 for _ in range(100):
     system.advance_strength(.1)
 assert all(s.damage == 0 for s in specs(system).values()), [(s.name,s.damage,s.supported_kg,s.rated_load_kg) for s in specs(system).values() if s.damage>0]
@@ -38,13 +42,13 @@ assert all(s.damage == 0 for s in specs(system).values()), [(s.name,s.damage,s.s
 box = named['WH_Cargo_Left_00_0_Top']
 box.set_actor_location(box.get_actor_location()+unreal.Vector(600,0,100),False,False)
 system.advance_strength(.1)
-assert abs(specs(system)['PalletRack_Left_00'].supported_kg-240) < .5
+assert abs(specs(system)['PalletRack_Left_00'].supported_kg-(rack_load-mass('WH_Cargo_Left_00_0_Top'))) < .5
 
 # A per-level overload can fail a bay even when its total rated load has not been exceeded.
 profiles = list(system.get_editor_property('objects'))
 for profile in profiles:
     if profile.name == 'PalletRack_Left_00':
-        profile.set_editor_property('level_capacity_kg', 50)
+        profile.set_editor_property('level_capacity_kg', min(level_loads)*.4)
 system.set_editor_property('objects', profiles)
 for _ in range(300):
     system.advance_strength(.1)

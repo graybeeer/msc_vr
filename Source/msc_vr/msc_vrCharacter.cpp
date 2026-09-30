@@ -20,6 +20,9 @@
 #include "GameFramework/PlayerController.h"
 #include "msc_vr.h"
 #include "WarehouseCargo.h"
+#include "WarehousePallet.h"
+#include "msc_vrPlayerController.h"
+#include "Engine/Engine.h"
 #include "WarehouseChargingStation.h"
 #include "WarehouseCarryAnimInstance.h"
 #include "Engine/StaticMesh.h"
@@ -67,6 +70,9 @@ Amsc_vrCharacter::Amsc_vrCharacter()
 	// Configure character movement
 	GetCharacterMovement()->BrakingDecelerationFalling = 1500.0f;
 	GetCharacterMovement()->AirControl = 0.5f;
+	GetCharacterMovement()->GetNavAgentPropertiesRef().bCanCrouch = true;
+	GetCharacterMovement()->SetCrouchedHalfHeight(58.f);
+	GetCharacterMovement()->MaxWalkSpeedCrouched = 150.f;
 }
 
 void Amsc_vrCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -124,8 +130,31 @@ void Amsc_vrCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void Amsc_vrCharacter::ToggleCarry()
 {
+	if (Controller && Controller->IsMoveInputIgnored()) return;
+	if (PlacementTime >= 0.f) return;
 	if (IsValid(HeldCargo))
 	{
+		const FVector Eye=FirstPersonCameraComponent->GetComponentLocation();
+		FHitResult Hit;
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(PlaceAim),true,this);
+		Params.AddIgnoredActor(HeldCargo);
+		if (GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+FirstPersonCameraComponent->GetForwardVector()*250.f,ECC_Visibility,Params))
+		{
+			AWarehousePallet* TargetPallet=Cast<AWarehousePallet>(Hit.GetActor());
+			for (TActorIterator<AWarehousePallet> It(GetWorld()); It; ++It)
+			{
+				if (Cast<AWarehousePallet>(Hit.GetActor())) break;
+				const FVector Local=It->GetActorTransform().InverseTransformPosition(Hit.ImpactPoint);
+				if (FMath::Abs(Local.X)>56 || FMath::Abs(Local.Y)>56 || Local.Z<0 || Local.Z>180) continue;
+				if (!TargetPallet || It->GetActorLocation().Z>TargetPallet->GetActorLocation().Z) TargetPallet=*It;
+			}
+			if (TargetPallet)
+			{
+				if (!TryPlaceOnPallet(TargetPallet,Hit.ImpactPoint) && GEngine)
+					GEngine->AddOnScreenDebugMessage(41,2.f,FColor::Yellow,TEXT("No stable space on this pallet. Aim at a clear, level surface."));
+				return;
+			}
+		}
 		DropCargo();
 		return;
 	}
@@ -175,7 +204,7 @@ bool Amsc_vrCharacter::InitializeCarryMesh()
 bool Amsc_vrCharacter::TryPickupCargo(AWarehouseCargo* Cargo)
 {
  if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->HasFailed(Cargo)) return false;
-	if (IsValid(HeldCargo) || !IsValid(Cargo) || !Cargo->GetCargoBody()->GetStaticMesh() || !InitializeCarryMesh()) return false;
+	if (IsValid(HeldCargo) || !IsValid(Cargo) || Cargo->GetAttachParentActor() || !Cargo->GetCargoBody()->GetStaticMesh() || !InitializeCarryMesh()) return false;
 	FVector Center, Extent;
 	Cargo->GetActorBounds(false,Center,Extent);
 	if (FVector::Dist(Center,FirstPersonCameraComponent->GetComponentLocation())>300.f) return false;
@@ -183,6 +212,7 @@ bool Amsc_vrCharacter::TryPickupCargo(AWarehouseCargo* Cargo)
 	const bool WasSimulating=Body->IsSimulatingPhysics();
 	Body->SetSimulatePhysics(false);
 	Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Cargo->WakeStackAbove();
 	if (!Cargo->AttachToComponent(GetRootComponent(),FAttachmentTransformRules::KeepWorldTransform))
 	{
 		Body->SetCollisionProfileName(TEXT("PhysicsActor"));
@@ -227,6 +257,8 @@ bool Amsc_vrCharacter::TryPickupCargo(AWarehouseCargo* Cargo)
 
 void Amsc_vrCharacter::DropCargo()
 {
+	PlacementTime=-1.f;
+	PlacementPallet=nullptr;
 	if (IsValid(HeldCargo))
 	{
 		AWarehouseCargo* Cargo=HeldCargo;
@@ -240,6 +272,9 @@ void Amsc_vrCharacter::DropCargo()
 		Body->MarkRenderStateDirty();
 		Body->SetCollisionProfileName(TEXT("PhysicsActor"));
 		Body->SetSimulatePhysics(true);
+		Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		Body->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+		Body->WakeAllRigidBodies();
 	}
 	HeldOriginalMaterials.Reset();
 	if (NormalWalkSpeed>0.f)
@@ -252,7 +287,109 @@ void Amsc_vrCharacter::DropCargo()
 void Amsc_vrCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	UpdateLocomotion();
 	UpdateCarryPose(DeltaSeconds);
+}
+
+void Amsc_vrCharacter::UpdateLocomotion()
+{
+	auto* PC=Cast<APlayerController>(Controller);
+	if (!PC) return;
+	const bool Active=!PC->IsMoveInputIgnored() && PlacementTime<0;
+	SetLocomotionInput(Active && (PC->IsInputKeyDown(EKeys::LeftShift) || PC->IsInputKeyDown(EKeys::RightShift)),
+		Active ? (PC->IsInputKeyDown(EKeys::LeftControl) || PC->IsInputKeyDown(EKeys::RightControl)) : bIsCrouched);
+}
+
+void Amsc_vrCharacter::SetObserverPresentation(bool Observing)
+{
+	FirstPersonMesh->SetHiddenInGame(Observing,true);
+	GetMesh()->SetOwnerNoSee(!Observing);
+	if (IsValid(HeldCargo))
+	{
+		auto* Body=HeldCargo->GetCargoBody();
+		Body->FirstPersonPrimitiveType=Observing ? EFirstPersonPrimitiveType::None : EFirstPersonPrimitiveType::FirstPerson;
+		Body->MarkRenderStateDirty();
+	}
+}
+
+void Amsc_vrCharacter::SetLocomotionInput(bool Sprint, bool Crouching)
+{
+	auto* Movement=GetCharacterMovement();
+	if (BaseWalkSpeed<=0) BaseWalkSpeed=NormalWalkSpeed>0 ? NormalWalkSpeed : Movement->MaxWalkSpeed;
+	if (Crouching) Crouch();
+	else UnCrouch();
+	Movement->MaxWalkSpeed=IsValid(HeldCargo) ? 260.f : (Sprint && !Crouching && !bIsCrouched ? BaseWalkSpeed*1.65f : BaseWalkSpeed);
+}
+
+void Amsc_vrCharacter::OnStartCrouch(float HeightAdjust, float ScaledHeightAdjust)
+{
+	Super::OnStartCrouch(HeightAdjust,ScaledHeightAdjust);
+	// The camera is on the head mesh, so undo Character's mesh-height compensation.
+	FirstPersonMesh->AddLocalOffset(FVector(0,0,-HeightAdjust));
+}
+
+void Amsc_vrCharacter::OnEndCrouch(float HeightAdjust, float ScaledHeightAdjust)
+{
+	Super::OnEndCrouch(HeightAdjust,ScaledHeightAdjust);
+	FirstPersonMesh->AddLocalOffset(FVector(0,0,HeightAdjust));
+}
+
+bool Amsc_vrCharacter::FindPlacement(AWarehousePallet* Pallet, const FVector& Aim, FTransform& Target) const
+{
+	if (!IsValid(Pallet) || !IsValid(HeldCargo) || Pallet->GetAttachParentActor() ||
+		FVector::Dist(Aim,FirstPersonCameraComponent->GetComponentLocation())>260.f) return false;
+	if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->HasFailed(Pallet)) return false;
+	if (FMath::Abs(Pallet->GetActorRotation().Pitch)>2 || FMath::Abs(Pallet->GetActorRotation().Roll)>2) return false;
+	const auto Bounds=HeldCargo->GetCargoBody()->GetStaticMesh()->GetBounds();
+	const FVector Scale=HeldCargo->GetActorScale3D();
+	const FVector Extent=Bounds.BoxExtent*Scale.GetAbs();
+	const FVector PalletScale=Pallet->GetActorScale3D().GetAbs();
+	const FVector Half=FVector(55,55,0)*PalletScale;
+	if (Extent.X>Half.X-2 || Extent.Y>Half.Y-2) return false;
+	const FQuat Rotation=FRotator(0,Pallet->GetActorRotation().Yaw,0).Quaternion();
+	FVector Local=Rotation.UnrotateVector(Aim-Pallet->GetActorLocation());
+	Local.X=FMath::Clamp(Local.X,-Half.X+Extent.X+2,Half.X-Extent.X-2);
+	Local.Y=FMath::Clamp(Local.Y,-Half.Y+Extent.Y+2,Half.Y-Extent.Y-2);
+	FVector Center=Pallet->GetActorLocation()+Rotation.RotateVector(FVector(Local.X,Local.Y,0));
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(PalletPlacement),true,this);
+	Params.AddIgnoredActor(HeldCargo);
+	float High=-FLT_MAX;
+	TArray<FVector> Supports;
+	// A carton bridges the gaps between pallet deck boards. Require support in
+	// all four footprint quadrants at the highest contact plane, not solid wood at every ray.
+	for (float X : {-.9f,-.5f,-.15f,0.f,.15f,.5f,.9f}) for (float Y : {-.9f,-.5f,-.15f,0.f,.15f,.5f,.9f})
+	{
+		FVector Start=Center+Rotation.RotateVector(FVector(X*Extent.X,Y*Extent.Y,0));
+		Start.Z=FMath::Min(Aim.Z+Extent.Z*2+20,FirstPersonCameraComponent->GetComponentLocation().Z+40);
+		FHitResult Hit;
+		if (!GetWorld()->LineTraceSingleByChannel(Hit,Start,FVector(Start.X,Start.Y,Pallet->GetActorLocation().Z),ECC_Visibility,Params) ||
+			Hit.ImpactNormal.Z<.95f || (Hit.GetActor()!=Pallet && !Cast<AWarehouseCargo>(Hit.GetActor()))) continue;
+		if (auto* Cargo=Cast<AWarehouseCargo>(Hit.GetActor()); Cargo && (Cargo->GetAttachParentActor() || Cargo->GetVelocity().Size()>5)) return false;
+		High=FMath::Max(High,static_cast<float>(Hit.ImpactPoint.Z));
+		Supports.Add(FVector(X,Y,Hit.ImpactPoint.Z));
+	}
+	bool Quadrants[4]={false,false,false,false};
+	for (const FVector& Point : Supports)
+		if (High-Point.Z<=2.5f && FMath::Abs(Point.X)>=.1f && FMath::Abs(Point.Y)>=.1f)
+			Quadrants[(Point.X>0 ? 1 : 0)+(Point.Y>0 ? 2 : 0)]=true;
+	for (bool Supported : Quadrants) if (!Supported) { UE_LOG(Logmsc_vr,Verbose,TEXT("Placement: insufficient support, samples=%d top=%.2f"),Supports.Num(),High); return false; }
+	Center.Z=High+Extent.Z+1.f;
+	if (Center.Z+Extent.Z>FirstPersonCameraComponent->GetComponentLocation().Z+35.f ||
+		FVector::Dist(Center,GetActorLocation())>230.f) return false;
+	if (GetWorld()->OverlapBlockingTestByChannel(Center,Rotation,ECC_Visibility,FCollisionShape::MakeBox(Extent-FVector(.3f)),Params)) { UE_LOG(Logmsc_vr,Verbose,TEXT("Placement: occupied destination %s extent %s"),*Center.ToString(),*Extent.ToString()); return false; }
+	Target=FTransform(Rotation,Center-Rotation.RotateVector(Bounds.Origin*Scale),Scale);
+	return true;
+}
+
+bool Amsc_vrCharacter::TryPlaceOnPallet(AWarehousePallet* Pallet, FVector Aim)
+{
+	if (PlacementTime>=0 || !FindPlacement(Pallet,Aim,PlacementTarget)) return false;
+	PlacementPallet=Pallet;
+	PlacementPalletPose=Pallet->GetActorTransform();
+	PlacementStart=HeldCargo->GetActorTransform();
+	PlacementTime=0.f;
+	GetCharacterMovement()->StopMovementImmediately();
+	return true;
 }
 
 void Amsc_vrCharacter::UpdateCarryPose(float DeltaSeconds)
@@ -283,7 +420,33 @@ void Amsc_vrCharacter::UpdateCarryPose(float DeltaSeconds)
 	const FVector Pivot=Center-Facing.RotateVector(Bounds.Origin*Scale);
 	PickupTime=FMath::Min(PickupTime+DeltaSeconds,.35f);
 	const float T=FMath::SmoothStep(0.f,1.f,PickupTime/.35f);
-	HeldCargo->SetActorLocationAndRotation(FMath::Lerp(PickupTransform.GetLocation(),Pivot,T),FQuat::Slerp(PickupTransform.GetRotation(),Facing,T));
+	if (PlacementTime>=0.f)
+	{
+		if (!IsValid(PlacementPallet) || PlacementPallet->GetAttachParentActor() || !PlacementPallet->GetActorTransform().Equals(PlacementPalletPose,.1f))
+		{
+			PlacementTime=-1.f;
+			PickupTransform=HeldCargo->GetActorTransform(); PickupTime=0.f;
+			return;
+		}
+		PlacementTime+=DeltaSeconds;
+		const float Alpha=FMath::SmoothStep(0.f,1.f,PlacementTime/.45f);
+		FTransform Pose;
+		Pose.Blend(PlacementStart,PlacementTarget,Alpha);
+		Pose.AddToTranslation(FVector(0,0,FMath::Sin(Alpha*PI)*12.f));
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(PlaceMotion),false,this); Params.AddIgnoredActor(HeldCargo);
+		const FVector NextCenter=Pose.TransformPosition(Bounds.Origin);
+		FHitResult Obstacle;
+		const bool Blocked=GetWorld()->SweepSingleByChannel(Obstacle,HeldCargo->GetActorTransform().TransformPosition(Bounds.Origin),NextCenter,Pose.GetRotation(),ECC_Visibility,FCollisionShape::MakeBox(Extent-FVector(.5f)),Params);
+		if (Blocked)
+		{
+			PlacementTime=-1.f; PickupTransform=HeldCargo->GetActorTransform(); PickupTime=0.f;
+			if (GEngine) GEngine->AddOnScreenDebugMessage(41,2.f,FColor::Yellow,TEXT("Placement blocked. Move closer to a clear space."));
+			return;
+		}
+		HeldCargo->SetActorTransform(Pose);
+		if (PlacementTime>=.45f) { DropCargo(); return; }
+	}
+	else HeldCargo->SetActorLocationAndRotation(FMath::Lerp(PickupTransform.GetLocation(),Pivot,T),FQuat::Slerp(PickupTransform.GetRotation(),Facing,T));
 	CarryFacing=HeldCargo->GetActorQuat();
 	const FVector ActualCenter=HeldCargo->GetActorTransform().TransformPosition(Bounds.Origin);
 	for (int I=0; I<2; ++I)
@@ -328,6 +491,7 @@ void Amsc_vrCharacter::LookInput(const FInputActionValue& Value)
 
 void Amsc_vrCharacter::DoAim(float Yaw, float Pitch)
 {
+	if (auto* PC=Cast<Amsc_vrPlayerController>(Controller)) { Yaw*=PC->MouseSensitivity; Pitch*=PC->MouseSensitivity; }
 	if (GetController())
 	{
 		// pass the rotation inputs
@@ -338,6 +502,7 @@ void Amsc_vrCharacter::DoAim(float Yaw, float Pitch)
 
 void Amsc_vrCharacter::DoMove(float Right, float Forward)
 {
+	if (PlacementTime>=0.f) return;
 	if (GetController())
 	{
 		// pass the move inputs
@@ -348,6 +513,7 @@ void Amsc_vrCharacter::DoMove(float Right, float Forward)
 
 void Amsc_vrCharacter::DoJumpStart()
 {
+	if (PlacementTime>=0.f || (Controller && Controller->IsMoveInputIgnored())) return;
 	// pass Jump to the character
 	Jump();
 }

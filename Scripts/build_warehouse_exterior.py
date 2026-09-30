@@ -237,6 +237,8 @@ for actor in actors.get_all_level_actors():
         sky.set_mobility(unreal.ComponentMobility.MOVABLE)
         sky.set_intensity(2.0)
         sky.recapture_sky()
+from configure_observer_view import configure_observer_view
+configure_observer_view()
 assert level.save_current_level()
 unreal.EditorLoadingAndSavingUtils.save_dirty_packages(True,True)
 print('WAREHOUSE_EXTERIOR_BUILT',len([a for a in actors.get_all_level_actors() if a.get_actor_label().startswith(PREFIX)]),'actors')

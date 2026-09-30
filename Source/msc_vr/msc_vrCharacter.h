@@ -13,6 +13,7 @@ class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
 class AWarehouseCargo;
+class AWarehousePallet;
 class UMaterialInterface;
 struct FInputActionValue;
 
@@ -81,14 +82,26 @@ protected:
 	FTransform PickupTransform;
 	float PickupTime = 0.f;
 	bool InitializeCarryMesh();
+	UPROPERTY(Transient) TObjectPtr<AWarehousePallet> PlacementPallet;
+	FTransform PlacementStart, PlacementTarget, PlacementPalletPose;
+	float PlacementTime = -1.f;
+	float BaseWalkSpeed = 0.f;
+	void UpdateLocomotion();
+	bool FindPlacement(AWarehousePallet* Pallet, const FVector& Aim, FTransform& Target) const;
 	
 public:
 	Amsc_vrCharacter();
 	virtual void Tick(float DeltaSeconds) override;
+	virtual void OnStartCrouch(float HeightAdjust, float ScaledHeightAdjust) override;
+	virtual void OnEndCrouch(float HeightAdjust, float ScaledHeightAdjust) override;
+	UFUNCTION(BlueprintCallable, Category="Input") void SetLocomotionInput(bool Sprint, bool Crouching);
+	void SetObserverPresentation(bool Observing);
 	UFUNCTION(BlueprintCallable, Category="Carry")
 	bool TryPickupCargo(AWarehouseCargo* Cargo);
 	UFUNCTION(BlueprintCallable, Category="Carry")
 	void DropCargo();
+	UFUNCTION(BlueprintCallable, Category="Carry")
+	bool TryPlaceOnPallet(AWarehousePallet* Pallet, FVector Aim);
 	UFUNCTION(BlueprintCallable, Category="Carry")
 	void UpdateCarryPose(float DeltaSeconds);
 	UFUNCTION(BlueprintPure, Category="Carry")

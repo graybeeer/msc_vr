@@ -23,6 +23,11 @@ def dimensions(actor, expected):
     assert all(abs(size[i]-expected[i]) < .15 for i in range(3)), (actor.get_actor_label(), size, expected)
 
 
+def cargo_fits(actor, maximum):
+    low, high=bounds(actor)
+    assert all(5 < high[i]-low[i] <= maximum[i]+.15 for i in range(3)), actor.get_actor_label()
+
+
 ground = bounds(named['Floor'])[1][2]
 dimensions(named['WH_AutonomousForklift'], (99.4, 164.2, 215))  # yaw 90
 dimensions(named['WH_TrainingPallet'], (110, 110, 15))
@@ -47,7 +52,7 @@ for side in ('Left', 'Right'):
             pallet = named[f'WH_Pallet_{side}_{row:02}_{tier}']
             cargo = named[f'WH_Cargo_{side}_{row:02}_{tier}']
             dimensions(pallet, (110, 110, 15))
-            dimensions(cargo, (60, 40, 40))
+            cargo_fits(cargo, (60, 40, 38))
             assert abs(bounds(pallet)[0][2]-ground-top) < .1
             assert abs(bounds(cargo)[0][2]-bounds(pallet)[1][2]) < .1, 'Floating cargo'
             assert top + 12 + 5 <= 160, 'Fork top must reach pallet deck with lifting clearance'
@@ -69,8 +74,9 @@ for side in ('Left', 'Right'):
                 dimensions(pallet,(110,110,15))
                 for stacked in ('', '_Top'):
                     cargo=named['WH_Cargo_'+base+slot+stacked]
-                    dimensions(cargo,(60,40,40))
-                    assert abs(bounds(cargo)[0][2]-ground-top-15-(40 if stacked else 0)) < .1
+                    cargo_fits(cargo,(60,40,38))
+                    support=named['WH_Cargo_'+base+slot] if stacked else pallet
+                    assert abs(bounds(cargo)[0][2]-bounds(support)[1][2]-(.1 if stacked else 0)) < .15
             first=bounds(named['WH_Pallet_'+base])
             second=bounds(named['WH_Pallet_'+base+'_B'])
             assert abs(second[0][1]-first[1][1]-15) < .1
@@ -93,10 +99,11 @@ for label, actor in named.items():
         assert abs(bounds(actor)[0][2]-ground) < .1
     stock = re.fullmatch(r'WH_Stock_(\d+)_(\d)_(\d)_(\d)', label)
     if stock or label in ('WH_Pickup_Box', 'WH_Drop_Box'):
-        dimensions(actor, (40, 30, 25))
+        cargo_fits(actor, (40, 30, 28))
     if stock:
         tier = int(stock[4])
-        assert abs(bounds(actor)[0][2]-ground-15-tier*25) < .1
+        support=named[label.rsplit('_',1)[0]+'_'+str(tier-1)] if tier else named['WH_DispatchPallet_'+stock[1]]
+        assert abs(bounds(actor)[0][2]-bounds(support)[1][2]-(.1 if tier else 0)) < .15
 
 truck = named['EXT_ParkedTruck_02']
 dimensions(truck, (306.289, 732.138, 318.925))
@@ -116,6 +123,6 @@ before = {label: bounds(a) for label, a in named.items()}
 apply_scale()
 for label, actor in named.items():
     after = bounds(actor)
-    assert all(abs(before[label][j][i]-after[j][i]) < .15 for j in range(2) for i in range(3)), ('Repeated application drifts', label)
+    assert all(abs(before[label][j][i]-after[j][i]) < .15 for j in range(2) for i in range(3)), ('Repeated application drifts', label, before[label], after)
 # Never save test mutations.
 print('REAL_WORLD_SCALE_VERIFIED', '88 pallet slots, 320cm clear loaded aisle, supplier rack dimensions, 262 cargo, repeatable application')

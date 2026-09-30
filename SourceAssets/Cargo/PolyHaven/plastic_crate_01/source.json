@@ -1,0 +1,27 @@
+{
+  "license": "CC0",
+  "source": "https://polyhaven.com/a/plastic_crate_01",
+  "files": {
+    "albedo": {
+      "md5": "fd945e63df11fe2bd7b6dedd0bfd4779",
+      "filename": "plastic_crate_01_diff_2k.jpg",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/plastic_crate_01/plastic_crate_01_diff_2k.jpg"
+    },
+    "mesh": {
+      "md5": "90bdc3b82e0d0c255372cb6ba8a3cdad",
+      "filename": "plastic_crate_01_2k.fbx",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/fbx/2k/plastic_crate_01/plastic_crate_01_2k.fbx"
+    },
+    "normal": {
+      "md5": "b3d720c4e8147a7f0eb1d4e2a3bff07b",
+      "filename": "plastic_crate_01_nor_dx_2k.png",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/png/2k/plastic_crate_01/plastic_crate_01_nor_dx_2k.png"
+    },
+    "roughness": {
+      "md5": "2380859022cd2438c96e45f323ba2e20",
+      "filename": "plastic_crate_01_rough_2k.jpg",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/plastic_crate_01/plastic_crate_01_rough_2k.jpg"
+    }
+  },
+  "asset": "plastic_crate_01"
+}
