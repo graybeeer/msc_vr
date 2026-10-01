@@ -226,5 +226,7 @@ from configure_warehouse_workers import configure_workers
 configure_workers()
 from configure_observer_view import configure_observer_view
 configure_observer_view()
+from configure_mezzanine import configure_mezzanine
+configure_mezzanine()
 assert level.save_current_level(), 'Could not save the default first-person level'
 print('WAREHOUSE_BUILT', LEVEL, 'actors', len(actors.get_all_level_actors()), 'ground',ground)

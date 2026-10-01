@@ -11,7 +11,8 @@ enum class EWarehouseAIState : uint8
  LiftLoad, VerifyLoad, DepartPickup, TravelHeight, PlanDelivery, NavigateDelivery,
  AlignUnload, LowerLoad, WithdrawFork, VerifyUnload, ReportComplete,
  PlanCharge, NavigateCharge, DockCharge, Charging, LeaveCharger,
- WaitingObstacle, Paused, Fault
+ WaitingObstacle, Paused, Fault,
+ ElevatorApproach, ElevatorCall, ElevatorWait, ElevatorBoard, ElevatorRide, ElevatorExit
 };
 
 USTRUCT(BlueprintType)

@@ -27,7 +27,7 @@ for part in parts.values():
     for i,axis in enumerate(('x','y','z')):
         minimum[i]=min(minimum[i],getattr(offset,axis)+(getattr(bounds.origin,axis)-getattr(bounds.box_extent,axis))*getattr(scale,axis))
         maximum[i]=max(maximum[i],getattr(offset,axis)+(getattr(bounds.origin,axis)+getattr(bounds.box_extent,axis))*getattr(scale,axis))
-assert all(abs(maximum[i]-minimum[i]-dimension)<.05 for i,dimension in enumerate((164.2,99.4,215))), (minimum,maximum)
+assert all(abs(maximum[i]-minimum[i]-dimension)<.05 for i,dimension in enumerate((117+131*94/102,99.4,215))), (minimum,maximum)
 for wheel in wheels:
     bounds = wheel.static_mesh.get_bounds()
     assert abs(wheel.get_editor_property('relative_location').z+(bounds.origin.z-bounds.box_extent.z)*wheel.get_editor_property('relative_scale3d').z)<.05, ('Wheel not on ground',wheel.get_name())

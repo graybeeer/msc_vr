@@ -3,6 +3,23 @@ import unreal, time, traceback
 
 level=unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 assert level.load_level('/Game/FirstPerson/Lvl_FirstPerson')
+assert unreal.SystemLibrary.get_console_variable_int_value('r.AntiAliasingMethod')==4,'TSR must be enabled'
+actors=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+vehicle=next(a for a in actors.get_all_level_actors() if a.get_actor_label()=='WH_AutonomousForklift')
+body=next(c for c in vehicle.get_components_by_class(unreal.StaticMeshComponent) if c.get_name()=='Body')
+assert any('Safety_orange' in m.get_name() for m in body.get_materials() if m),'Orange body material missing'
+scale=body.get_editor_property('relative_scale3d')
+assert abs(scale.x-scale.y)<.0001 and abs(scale.y-scale.z)<.0001
+world=unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
+origin=vehicle.get_actor_transform().transform_location(unreal.Vector(-300,-360,230))
+aim=vehicle.get_actor_transform().transform_location(unreal.Vector(-15,0,100))
+preview=actors.spawn_actor_from_class(unreal.SceneCapture2D,origin,unreal.MathLibrary.find_look_at_rotation(origin,aim))
+preview.set_actor_label('BodyRestorePreview')
+cap=preview.get_component_by_class(unreal.SceneCaptureComponent2D)
+cap.texture_target=unreal.RenderingLibrary.create_render_target2d(world,1280,960,unreal.TextureRenderTargetFormat.RTF_RGBA8)
+cap.capture_source=unreal.SceneCaptureSource.SCS_FINAL_COLOR_LDR
+cap.fov_angle=55
+
 started=time.monotonic();phase=0;phase_time=0;pc=None;roofs=[];states=[];pawn=None
 
 def finish():
@@ -30,7 +47,7 @@ def tick(dt):
             pawn=pc.get_controlled_pawn()
             roofs=unreal.GameplayStatics.get_all_actors_with_tag(game,'ObserverRoof')
             assert len(roofs)>=2,'Roof tags not saved'
-            assert len(unreal.GameplayStatics.get_all_actors_with_tag(game,'ObserverArea'))==1
+            assert len(unreal.GameplayStatics.get_all_actors_with_tag(game,'ObserverArea'))>=1
             states=[roof_state(a) for a in roofs]
             pc.toggle_observer_view()
             assert pc.is_observer_view() and pc.is_move_input_ignored()
@@ -47,6 +64,8 @@ def tick(dt):
             visible=[a for a in workers if a.get_component_by_class(unreal.WidgetComponent).is_visible()]
             assert visible,'All worker labels obscured by hidden roof'
             print('OBSERVER_LABELS_VISIBLE',len(visible))
+            shot=next(a for a in unreal.GameplayStatics.get_all_actors_of_class(game,unreal.SceneCapture2D) if a.get_actor_label()=='BodyRestorePreview').get_component_by_class(unreal.SceneCaptureComponent2D)
+            unreal.RenderingLibrary.export_render_target(game,shot.texture_target,'C:/msc_UnrealProject/msc_vr/Saved','BodyRestored.png')
             unreal.SystemLibrary.execute_console_command(game,'Shot showui filename=C:/msc_UnrealProject/msc_vr/Saved/ObserverOverview.png',pc)
             phase_time=now;phase=3;return
         if phase==3:

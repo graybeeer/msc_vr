@@ -46,6 +46,24 @@ def configure_strength():
         spec.set_editor_property('physics_meshes', physics)
         specs.append(spec)
 
+    if 'MZ_AGVElevator' in named:
+        # The connected building is one fixed structure. Assigning concrete slab dead
+        # load to each thin decorative flange/mullion produced false startup failures.
+        building_prefixes=('WH_Wall_','WH_Column_','WH_Roof','WH_LoadingDoor_Header',
+            'EXT_Foundation','EXT_FrontCladding','EXT_SideCladding','EXT_HeaderCladding',
+            'EXT_FrontBlueBand','EXT_SideBlueBand','EXT_FrontWindow','EXT_SideWindow',
+            'EXT_FrontJoint','EXT_FrontMullion','EXT_SideMullion','EXT_SideParapet',
+            'EXT_FrontParapet','EXT_RoofVent','EXT_Canopy')
+        building=[]
+        for label,actor in named.items():
+            mezz=label.startswith(('MZ_L','MZ_Ground')) and '_Rack_' not in label
+            if label=='Floor' or mezz or label.startswith(building_prefixes):
+                if any(c.static_mesh and c.get_collision_enabled()!=unreal.CollisionEnabled.NO_COLLISION
+                       for c in actor.get_components_by_class(unreal.StaticMeshComponent)):
+                    building.append(actor)
+        # Educational lumped structure: about 2051 m2 of upper decks at 500 kg/m2.
+        # It does not calculate individual beam stresses or certify a building design.
+        add('WarehouseBuilding',building,failure.STRUCTURE,1100000,1025500,20000,200000)
     for side in ('Left', 'Right'):
         for row in range(11):
             members = [named[f'WH_Rack_{side}_{row:02}_{p}'] for p in 'ABCDEFGH']
@@ -57,6 +75,13 @@ def configure_strength():
             members = [named[f'WH_{kind}Rack_{index}_{p}'] for p in 'ABCDEFGH']
             members += [named[f'WH_{kind}Shelf_{index}_{tier}'] for tier in range(3)]
             add(f'{kind}Rack_{index}', members, failure.RACK, mass, capacity, 80, 600, level, heights)
+    # Upper-floor copies retain the same per-bay limits; support heights are world Z.
+    for floor in (1,2):
+        for side in ('Left','Right'):
+            for row in range(3):
+                prefix=f'MZ_L{floor+1}_Rack_{side}_{row}'
+                members=[named.get(prefix+'_'+p) for p in 'ABCDEFGH']
+                if all(members):add(prefix,members,failure.RACK,180,4000,250,1600,2000,(floor*400+20,floor*400+140))
     for label, actor in named.items():
         if actor.get_path_name() in grouped or not actor.get_actor_enable_collision():
             continue

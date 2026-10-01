@@ -28,16 +28,17 @@ AWarehouseForklift::AWarehouseForklift()
   Mesh->SetCollisionProfileName(TEXT("BlockAllDynamic"));
   return Mesh;
  };
- // 164.2 x 99.4 x 215 cm overall, including the 115 cm forks.
+ // Restore only chassis proportions. Fork, mast, sensor and wheel geometry stay calibrated.
  auto Sized=[&](const TCHAR* Name,USceneComponent* Parent,FVector Location,FVector Scale)
  {
   auto* Mesh=Part(Name,Parent,Location);
   Mesh->SetRelativeScale3D(Scale);
   return Mesh;
  };
- const FVector ChassisScale(47.2/131.,94./102.,.82);
- const FVector ChassisOffset(-49.2+82.5*ChassisScale.X,0,0);
- Sized(TEXT("Body"),RootComponent,ChassisOffset,ChassisScale);
+ const double BodyScale=94./102.;
+ auto* Body=Sized(TEXT("Body"),RootComponent,FVector(-2.-48.5*BodyScale,0,0),FVector(BodyScale));
+ ConstructorHelpers::FObjectFinder<UStaticMesh> OriginalBody(TEXT("/Game/Warehouse/AGV/Meshes/SM_Original_AGV_Body"));
+ Body->SetStaticMesh(OriginalBody.Object);
  Sized(TEXT("MastFrame"),RootComponent,FVector(-25,0,0),FVector(.5,.6,200./244.5));
  Sized(TEXT("SensorTower"),RootComponent,FVector::ZeroVector,FVector::OneVector);
  Sized(TEXT("OutriggerL"),RootComponent,FVector(-5-28.5*115/146.,-.2,-.303571),FVector(115/146.,.4,2.5/14.));

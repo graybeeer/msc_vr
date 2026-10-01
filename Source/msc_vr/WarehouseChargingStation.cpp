@@ -7,6 +7,8 @@
 
 AWarehouseChargingStation::AWarehouseChargingStation()
 {
+ // Keep the contact gap when restoring the original-length chassis.
+ const double RearExtension=131.*94./102.-47.2;
  RootComponent=CreateDefaultSubobject<USceneComponent>(TEXT("DockPose"));
  static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube"));
  static ConstructorHelpers::FObjectFinder<UMaterialInterface> Steel(TEXT("/Game/Warehouse/AGV/Materials/M_Graphite_powder-coated_steel"));
@@ -17,7 +19,7 @@ AWarehouseChargingStation::AWarehouseChargingStation()
   auto* Mesh=CreateDefaultSubobject<UStaticMeshComponent>(Name);
   Mesh->SetupAttachment(RootComponent);
   Mesh->SetStaticMesh(Cube.Object);
-  Mesh->SetRelativeLocation(Position);
+  Mesh->SetRelativeLocation(Position-FVector(RearExtension,0,0));
   Mesh->SetRelativeScale3D(Size/100.f);
   Mesh->SetMaterial(0,Material);
   Mesh->SetCollisionProfileName(TEXT("BlockAllDynamic"));
@@ -27,7 +29,7 @@ AWarehouseChargingStation::AWarehouseChargingStation()
  Part(TEXT("StatusLight"),FVector(-57,0,106),FVector(3,36,6),Green.Object);
  Display=CreateDefaultSubobject<UTextRenderComponent>(TEXT("ChargeDisplay"));
  Display->SetupAttachment(RootComponent);
- Display->SetRelativeLocation(FVector(-57,0,88));
+ Display->SetRelativeLocation(FVector(-57-RearExtension,0,88));
  Display->SetHorizontalAlignment(EHTA_Center);
  Display->SetWorldSize(7);
  Display->SetText(FText::FromString(TEXT("24V LiFePO4\nE: REQUEST FULL CHARGE")));

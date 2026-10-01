@@ -3,6 +3,7 @@
 #include "WarehouseCargo.h"
 #include "WarehouseDamageSystem.h"
 #include "WarehouseChargingStation.h"
+#include "WarehouseElevator.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
@@ -80,7 +81,7 @@ FTransform AWarehouseForklift::PalletApproach(const FTransform& Pose,float Dista
 {
  const FRotator Rotation(0,Pose.Rotator().Yaw,0);
  FVector Point=Pose.GetLocation()-Rotation.Vector()*Distance;
- Point.Z=GetActorLocation().Z;
+ Point.Z=FloorBase(Pose.GetLocation().Z);
  return FTransform(Rotation,Point);
 }
 bool AWarehouseForklift::NavigationClear(const FTransform& Pose) const
@@ -88,7 +89,7 @@ bool AWarehouseForklift::NavigationClear(const FTransform& Pose) const
  FCollisionQueryParams Params(SCENE_QUERY_STAT(AGVNavigation),false,this);
  if (bSupportingPallet && IsValid(TargetPallet)) Params.AddIgnoredActor(TargetPallet);
  for (AActor* Load : CarriedCargo) if (IsValid(Load)) Params.AddIgnoredActor(Load);
- FBox Envelope(FVector(-53,-53,3),FVector(119,53,303));
+ FBox Envelope(FVector(-126,-53,3),FVector(119,53,240));
  // Include the actual load overhang in turning clearance, not just the truck footprint.
  if (bSupportingPallet)
  {
@@ -168,7 +169,7 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  // ponytail: at most 24 lane poses; use incremental hybrid A* for a large unstructured warehouse.
  TArray<FTransform> Nodes{GetActorTransform(),Goal};
  for (int32 I=0; I<FMath::Min(24,NavigationAnchors.Num()); ++I)
-  if (NavigationClear(NavigationAnchors[I])) Nodes.Add(NavigationAnchors[I]);
+  if (FMath::Abs(NavigationAnchors[I].GetLocation().Z-GetActorLocation().Z)<1.f && NavigationClear(NavigationAnchors[I])) Nodes.Add(NavigationAnchors[I]);
  TArray<float> Costs; Costs.Init(FLT_MAX,Nodes.Num()); Costs[0]=0;
  TArray<bool> Closed; Closed.Init(false,Nodes.Num());
  TArray<TArray<FWarehouseRoutePoint>> Paths; Paths.SetNum(Nodes.Num());
@@ -280,6 +281,34 @@ void AWarehouseForklift::HoldCargo(bool Attach)
   }
  }
 }
+float AWarehouseForklift::FloorBase(float WorldZ) const
+{
+ if (IsValid(Elevator))
+ {
+  const int32 Floor=Elevator->FloorAtHeight(WorldZ);
+  if (Floor!=INDEX_NONE) return Elevator->FloorHeight(Floor);
+ }
+ return GetActorLocation().Z;
+}
+bool AWarehouseForklift::BeginFloorTransfer(float TargetZ,EWarehouseAIState Resume)
+{
+ const float Base=FloorBase(TargetZ);
+ if (FMath::Abs(Base-GetActorLocation().Z)<1.f) return false;
+ if (!IsValid(Elevator)) { FaultAI(TEXT("NO ELEVATOR FOR TARGET FLOOR")); return true; }
+ TransferFromFloor=Elevator->FloorAtHeight(GetActorLocation().Z);
+ TransferToFloor=Elevator->FloorAtHeight(TargetZ);
+ if (TransferFromFloor==INDEX_NONE || TransferToFloor==INDEX_NONE || !IsLiftAtTravelHeight())
+ { FaultAI(TEXT("INVALID FLOOR / LOWER FORKS BEFORE TRANSFER")); return true; }
+ if (GetTransferMassKg()>FMath::Min(2000.f,Elevator->RatedMassKg))
+ { FaultAI(TEXT("ELEVATOR OVERLOAD (VEHICLE + LOAD)")); return true; }
+ const FString Fault=Elevator->CheckInterlocks();
+ if (!Fault.IsEmpty()) { FaultAI(Fault); return true; }
+ if (!PlanAutonomousRoute(Elevator->WaitingPose(TransferFromFloor)))
+ { StopFor(TEXT("NO CLEAR ROUTE TO ELEVATOR")); return true; }
+ AfterElevator=Resume; bFloorTransfer=true;
+ TransitionAI(EWarehouseAIState::ElevatorApproach,TEXT("NAVIGATE TO ELEVATOR WAITING POINT"));
+ bRouteStarted=true; return true;
+}
 void AWarehouseForklift::AdvanceAutonomy(float Dt)
 {
  AITotalSeconds+=Dt;
@@ -287,6 +316,12 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
  AIElapsed+=Dt;
  const FString Fault=CheckSystems();
  if (!Fault.IsEmpty()) { FaultAI(Fault); return; }
+ if (bFloorTransfer)
+ {
+  if (!IsValid(Elevator)) { FaultAI(TEXT("ELEVATOR LOST")); return; }
+  const FString LiftFault=Elevator->CheckInterlocks();
+  if (!LiftFault.IsEmpty()) { FaultAI(LiftFault); return; }
+ }
  if (AIState!=EWarehouseAIState::Charging) ConsumeEnergy(100.f*Dt/3600.f);
  if (BatteryPercent<=0 && AIState!=EWarehouseAIState::Charging) { FaultAI(TEXT("BATTERY EMPTY")); return; }
  if (!ActiveJob.JobId.IsEmpty())
@@ -333,14 +368,18 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   break;
  case EWarehouseAIState::ValidateJob:
   if (ActiveJob.JobId.IsEmpty() || CompletedJobIds.Contains(ActiveJob.JobId) || ActiveJob.Destination.ContainsNaN() ||
-      !ActiveJob.Destination.GetScale3D().Equals(FVector::OneVector,.001f) || DropHeight<-.1f ||
-      DropHeight+20.f>FMath::Min(MaxForkHeightCm,160.f) || TargetPallet->GetActorLocation().Z-Ground+20.f>FMath::Min(MaxForkHeightCm,160.f) ||
+      !ActiveJob.Destination.GetScale3D().Equals(FVector::OneVector,.001f) ||
+      ActiveJob.Destination.GetLocation().Z-FloorBase(ActiveJob.Destination.GetLocation().Z)<-.1f ||
+      ActiveJob.Destination.GetLocation().Z-FloorBase(ActiveJob.Destination.GetLocation().Z)+20.f>FMath::Min(MaxForkHeightCm,160.f) ||
+      TargetPallet->GetActorLocation().Z-FloorBase(TargetPallet->GetActorLocation().Z)<-.1f ||
+      TargetPallet->GetActorLocation().Z-FloorBase(TargetPallet->GetActorLocation().Z)+20.f>FMath::Min(MaxForkHeightCm,160.f) ||
       FMath::Abs(ActiveJob.Destination.Rotator().Pitch)>.1f || FMath::Abs(ActiveJob.Destination.Rotator().Roll)>.1f)
   { FaultAI(TEXT("INVALID JOB / LIFT RANGE")); break; }
   if (!DestinationClear()) { FaultAI(TEXT("DESTINATION OCCUPIED / UNSUPPORTED")); break; }
   Next(EWarehouseAIState::PlanPickup,TEXT("PLAN PICKUP ROUTE"));
   break;
  case EWarehouseAIState::PlanPickup:
+  if (BeginFloorTransfer(TargetPallet->GetActorLocation().Z,EWarehouseAIState::PlanPickup)) break;
   if (PlanAutonomousRoute(PalletApproach(TargetPallet->GetActorTransform(),220)))
   { Next(EWarehouseAIState::NavigatePickup,TEXT("NAVIGATION TO PICKUP")); bRouteStarted=true; }
   else StopFor(TEXT("OBSTACLE / NO PICKUP ROUTE"));
@@ -399,6 +438,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   if (LiftTo(10.5f)) Next(EWarehouseAIState::PlanDelivery,TEXT("PLAN LOADED ROUTE"));
   break;
  case EWarehouseAIState::PlanDelivery:
+  if (BeginFloorTransfer(ActiveJob.Destination.GetLocation().Z,EWarehouseAIState::PlanDelivery)) break;
   if (!DestinationClear()) { FaultAI(TEXT("DESTINATION OCCUPIED / UNSUPPORTED")); break; }
   if (PlanAutonomousRoute(PalletApproach(ActiveJob.Destination,220)))
   { Next(EWarehouseAIState::NavigateDelivery,TEXT("NAVIGATION TO DESTINATION")); bRouteStarted=true; }
@@ -450,6 +490,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   if (bSupportingPallet) { FaultAI(TEXT("UNLOAD BEFORE CHARGING")); break; }
   if (!IsValid(ChargingStation) || !ChargingStation->TryReserve(this)) { FaultAI(TEXT("CHARGER BUSY / OFFLINE")); break; }
   if (!LiftTo(0)) break;
+  if (BeginFloorTransfer(ChargingStation->GetActorLocation().Z,EWarehouseAIState::PlanCharge)) break;
   ChargeExitPose=ChargingStation->GetActorTransform(); ChargeExitPose.AddToTranslation(ChargingStation->GetActorForwardVector()*120);
   if (ChargingStation->IsDocked(this)) Next(EWarehouseAIState::Charging,TEXT("CHARGING"));
   else if (PlanAutonomousRoute(ChargeExitPose)) { Next(EWarehouseAIState::NavigateCharge,TEXT("NAVIGATION TO CHARGER")); bRouteStarted=true; }
@@ -483,6 +524,38 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
  case EWarehouseAIState::LeaveCharger:
   if (MovePrecise(ChargeExitPose.GetLocation(),15,Dt))
   { if (IsValid(ChargingStation)) ChargingStation->Release(this); Next(EWarehouseAIState::Ready,TEXT("READY - WAITING FOR WORK ORDER")); }
+  break;
+ case EWarehouseAIState::ElevatorApproach:
+  Route(Elevator->WaitingPose(TransferFromFloor),EWarehouseAIState::ElevatorCall,TEXT("FMS CALL ELEVATOR"),LoadedTravelSpeedCm);
+  break;
+ case EWarehouseAIState::ElevatorCall:
+  if (Elevator->RequestTransfer(this,TransferFromFloor,TransferToFloor)) Next(EWarehouseAIState::ElevatorWait,TEXT("WAIT FOR ARRIVAL / OPEN DOOR / ENTRY PERMISSION"));
+  else if (AIElapsed>180.f) FaultAI(TEXT("ELEVATOR RESERVATION TIMEOUT"));
+  break;
+ case EWarehouseAIState::ElevatorWait:
+  if (Elevator->CanEnter(this)) Next(EWarehouseAIState::ElevatorBoard,TEXT("ENTER PLATFORM - PRECISE STOP"));
+  else if (AIElapsed>180.f) FaultAI(TEXT("ELEVATOR ARRIVAL TIMEOUT"));
+  break;
+ case EWarehouseAIState::ElevatorBoard:
+  if (!Elevator->CanEnter(this)) { StopFor(TEXT("OBSTACLE IN ELEVATOR / ENTRY INTERLOCK")); break; }
+  if (MovePrecise(Elevator->BoardingPose(TransferFromFloor).GetLocation(),15,Dt))
+  {
+   if (!Elevator->ConfirmBoarded(this)) { FaultAI(TEXT("ELEVATOR BOARDING POSE / LOAD ENVELOPE FAILED")); break; }
+   Next(EWarehouseAIState::ElevatorRide,TEXT("BOARDING CONFIRMED - WAIT FOR CLOSED DOORS / FLOOR TRANSFER"));
+  }
+  break;
+ case EWarehouseAIState::ElevatorRide:
+  if (Elevator->CanExit(this)) Next(EWarehouseAIState::ElevatorExit,TEXT("DESTINATION FLOOR / DOOR OPEN - EXIT"));
+  else if (AIElapsed>180.f) FaultAI(TEXT("ELEVATOR TRANSFER TIMEOUT"));
+  break;
+ case EWarehouseAIState::ElevatorExit:
+  if (!Elevator->CanExit(this)) { StopFor(TEXT("ELEVATOR EXIT INTERLOCK")); break; }
+  if (MovePrecise(Elevator->WaitingPose(TransferToFloor).GetLocation(),20,Dt))
+  {
+   if (!Elevator->ConfirmExited(this)) { FaultAI(TEXT("ELEVATOR EXIT CONFIRMATION FAILED")); break; }
+   bFloorTransfer=false;
+   Next(AfterElevator,TEXT("FLOOR MAP SELECTED - RESUME TRANSPORT"));
+  }
   break;
  case EWarehouseAIState::WaitingObstacle:
   WaitSeconds+=Dt;
