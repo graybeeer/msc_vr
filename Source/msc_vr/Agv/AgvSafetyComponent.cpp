@@ -26,7 +26,7 @@ void UAgvSafetyComponent::Step(float Dt)
 	const double Speed = FMath::Abs(Drive->SpeedCmS);
 	bActive = Drive->SpeedCmS < 1.f;
 	const double Band = FMath::CeilToDouble(FMath::Max(Speed, (double)StartSpeedCm) / SpeedBandCm) * SpeedBandCm;
-	ProtectiveLengthCm = (float)(Band * ResponseSeconds + Band * Band / (2.0 * FieldDecelerationCm) + FieldMarginCm);
+	ProtectiveLengthCm = (float)FMath::Max(Band * ResponseSeconds + Band * Band / (2.0 * FieldDecelerationCm) + FieldMarginCm, (double)MinProtectiveLengthCm);
 	WarningLengthCm = FMath::Max(WarningFieldLengthCm, ProtectiveLengthCm);
 
 	Scanner->TakePoints(ScanPoints);

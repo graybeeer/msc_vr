@@ -111,13 +111,20 @@ for payload in (0, 300):
     speed = abs(drive.get_editor_property('speed_cm_s'))
     face = vehicle.get_actor_location().x + BODY_FRONT + 200
     person = obstacle(face + 20, 0, (40, 40, 170))
-    closest = gap(face)
-    for _ in range(240):
+    t = 0.0
+    while abs(drive.get_editor_property('speed_cm_s')) > 0.5 and t < 5:  # the emergency stop itself
+        vehicle.step_simulation(DT)
+        t += DT
+    stopped = gap(face)
+    closest = stopped
+    for _ in range(240):  # afterwards it may creep up at warning speed to the standstill protective field (~1 m)
         vehicle.step_simulation(DT)
         closest = min(closest, gap(face))
     actors.destroy_actor(person)
-    print('AGV_SAFETY_CASE person steps in 200 cm ahead at %.0f cm/s, %d kg: closest %.0f cm' % (speed, payload, closest))
-    assert closest > 0, 'collision'
+    print('AGV_SAFETY_CASE person steps in 200 cm ahead at %.0f cm/s, %d kg: stopped in %.2f s after %.0f cm, %.0f cm short of them; '
+          'later creeps to %.0f cm' % (speed, payload, t, 200 - stopped, stopped, closest))
+    assert stopped > 100, ('emergency stop must keep over 1 m', stopped)
+    assert closest > 90, ('restart approach must respect the protective field', closest)
     nav.cancel()
 
 place()

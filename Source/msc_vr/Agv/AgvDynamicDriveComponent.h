@@ -81,6 +81,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Dynamics", meta=(ClampMin="1"))
 	float MaxDrivePowerW = 2200.f;
 
+	/** Holding brake on the drive wheel, applied at full force on a safety stop (category 1 stop). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Dynamics", meta=(ClampMin="0"))
+	float SafetyBrakeTorqueNm = 700.f;
+
 	/** Wheel plus motor rotor seen through the gearbox. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Dynamics", meta=(ClampMin="0.01"))
 	float DriveInertiaKgM2 = 1.5f;

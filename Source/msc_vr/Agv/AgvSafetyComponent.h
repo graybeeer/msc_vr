@@ -14,7 +14,7 @@ enum class EAgvSafetyState : uint8 { Clear, Warning, Stop };
  * Safety laser scanner evaluation, as in a safety-rated scanner's field sets. Ahead of the body front (main travel
  * direction, local -X) it keeps a protective field (object inside -> stop) and a larger warning field (-> slow).
  * The protective length is switched by speed band: response distance + braking distance + margin, never shorter
- * than the field for the starting speed. After a stop the vehicle restarts on its own once the field has been
+ * than the field for the starting speed or MinProtectiveLengthCm. A protective stop also asks the drive for full braking. After a stop the vehicle restarts on its own once the field has been
  * clear for RestartDelaySeconds. Acts on the drive's safety speed limit, below navigation.
  * Only covers travel with the body leading; forks-first travel needs the fork-side sensors (not yet fitted).
  */
@@ -51,7 +51,11 @@ public:
 	float FieldDecelerationCm = 50.f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
-	float FieldMarginCm = 20.f;
+	float FieldMarginCm = 50.f;
+
+	/** The protective field is never shorter than this, so even a slow approach stops well clear. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
+	float MinProtectiveLengthCm = 100.f;
 
 	/** Field sets switch in these speed steps. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="1"))

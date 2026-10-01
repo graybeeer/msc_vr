@@ -4,7 +4,7 @@
 
 namespace
 {
-	const double Gravity = 9.81;
+	const double StandardGravity = 9.81;
 	const int32 SolverIterations = 12;
 	/** Time constant of the acceleration that shifts the wheel loads (keeps the load / grip loop from ringing). */
 	const double LoadTransferLag = 0.02;
@@ -12,7 +12,6 @@ namespace
 	double Cross(const FVector2D& A, const FVector2D& B) { return A.X * B.Y - A.Y * B.X; }
 	/** Velocity of a point at R from the centre of mass due to the yaw rate. */
 	FVector2D Spin(double YawRate, const FVector2D& R) { return FVector2D(-YawRate * R.Y, YawRate * R.X); }
-	FVector2D Rotate(double Yaw, const FVector2D& Local) { return AgvMath::Dir(Yaw) * Local.X + AgvMath::Normal(Yaw) * Local.Y; }
 }
 
 UAgvDynamicDriveComponent::UAgvDynamicDriveComponent()
@@ -48,7 +47,7 @@ void UAgvDynamicDriveComponent::SetPayload(float MassKg, FVector InCenterOfMassC
 	const FVector After = MassProperties().CenterOfMass;
 	CenterOfMassCm = After * 100.0;
 	const double Yaw = FMath::DegreesToRadians(GetOwner()->GetActorRotation().Yaw);
-	Velocity += Spin(YawRate, Rotate(Yaw, FVector2D(After - Before)));
+	Velocity += Spin(YawRate, AgvMath::Rotate(Yaw, FVector2D(After - Before)));
 }
 
 void UAgvDynamicDriveComponent::Halt()
@@ -73,7 +72,7 @@ void UAgvDynamicDriveComponent::Step(float Dt)
 	const FMassProperties Body = MassProperties();
 	CenterOfMassCm = Body.CenterOfMass * 100.0;
 	const FVector2D LocalCenter(Body.CenterOfMass);
-	FVector2D Center = FVector2D(Location) / 100.0 + Rotate(Yaw, LocalCenter);
+	FVector2D Center = FVector2D(Location) / 100.0 + AgvMath::Rotate(Yaw, LocalCenter);
 
 	// Fixed substeps carry the remainder to the next frame, so the frame rate does not change the result.
 	TimeDebt += Dt;
@@ -83,10 +82,10 @@ void UAgvDynamicDriveComponent::Step(float Dt)
 		TimeDebt -= SubstepSeconds;
 	}
 
-	const FVector2D Origin = (Center - Rotate(Yaw, LocalCenter)) * 100.0;
+	const FVector2D Origin = (Center - AgvMath::Rotate(Yaw, LocalCenter)) * 100.0;
 	Owner->SetActorLocationAndRotation(FVector(Origin.X, Origin.Y, Location.Z), FRotator(0.0, FMath::RadiansToDegrees(Yaw), 0.0));
 
-	const FVector2D Reference = Rotate(Yaw, FVector2D(ReferenceOffsetCm / 100.0, 0.0) - LocalCenter);
+	const FVector2D Reference = AgvMath::Rotate(Yaw, FVector2D(ReferenceOffsetCm / 100.0, 0.0) - LocalCenter);
 	SpeedCmS = (float)(FVector2D::DotProduct(Velocity + Spin(YawRate, Reference), AgvMath::Dir(Yaw)) * 100.0);
 	YawRateDegS = (float)FMath::RadiansToDegrees(YawRate);
 }
@@ -98,7 +97,7 @@ void UAgvDynamicDriveComponent::SolveWheelLoads(const FMassProperties& Body, con
 	// plane over the contacts; with more than three wheels this is the equal-stiffness solution. A wheel that would
 	// need a negative load lifts off.
 	const int32 Count = Contacts.Num();
-	const double Weight = Body.Mass * Gravity;
+	const double Weight = Body.Mass * StandardGravity;
 	const double Height = Body.CenterOfMass.Z;
 	double Rhs[3] = { Weight, -Body.Mass * BodyAcceleration.X * Height, -Body.Mass * BodyAcceleration.Y * Height };
 	TArray<bool> Active;
@@ -191,6 +190,15 @@ void UAgvDynamicDriveComponent::Substep(double H, const FMassProperties& Body, F
 	{
 		WheelSpin = SpeedIntegral = 0.0;
 	}
+	else if (SafetySpeedLimitCmS <= 0.f)
+	{
+		// Safety stop: the brake clamps the wheel as hard as it can (never reversing it); the tyre decides how much of
+		// that reaches the ground, so a lightly loaded wheel locks and skids.
+		const double Stop = FMath::Min((double)SafetyBrakeTorqueNm, FMath::Abs(WheelSpin) * DriveInertiaKgM2 / H);
+		Torque = -FMath::Sign(WheelSpin) * Stop;
+		SpeedIntegral = 0.0;
+		WheelSpin += Torque / DriveInertiaKgM2 * H;
+	}
 	else
 	{
 		// Gains are scaled by the empty vehicle's inertia at the wheel: the controller does not know the payload.
@@ -225,7 +233,7 @@ void UAgvDynamicDriveComponent::Substep(double H, const FMassProperties& Body, F
 	TArray<FVector2D> Arms, Rolling, Lateral;
 	for (int32 Index = 0; Index < Count; ++Index)
 	{
-		Arms.Add(Rotate(Yaw, Contacts[Index]));
+		Arms.Add(AgvMath::Rotate(Yaw, Contacts[Index]));
 		const double Heading = Yaw + (Index == 0 ? FMath::DegreesToRadians((double)SteerAngleDeg) : 0.0);
 		Rolling.Add(AgvMath::Dir(Heading));
 		Lateral.Add(AgvMath::Normal(Heading));

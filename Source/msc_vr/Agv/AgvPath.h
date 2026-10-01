@@ -8,6 +8,8 @@ namespace AgvMath
 	inline FVector2D Dir(double Heading) { return FVector2D(FMath::Cos(Heading), FMath::Sin(Heading)); }
 	inline FVector2D Normal(double Heading) { return FVector2D(-FMath::Sin(Heading), FMath::Cos(Heading)); }
 	inline double Wrap(double Angle) { return FMath::UnwindRadians(Angle); }
+	/** A vector given in a frame with this heading, expressed in the outer frame. */
+	inline FVector2D Rotate(double Heading, const FVector2D& Local) { return Dir(Heading) * Local.X + Normal(Heading) * Local.Y; }
 
 	/** Solves A x = B (3x3, partial pivoting). A and B are overwritten. False when A is singular. */
 	inline bool Solve3(double A[3][3], double B[3], double X[3])

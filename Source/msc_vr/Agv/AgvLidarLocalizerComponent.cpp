@@ -11,8 +11,6 @@ DEFINE_LOG_CATEGORY_STATIC(LogAgvLocalization, Log, All);
 
 namespace
 {
-	FVector2D Rotate(double Yaw, const FVector2D& V) { return AgvMath::Dir(Yaw) * V.X + AgvMath::Normal(Yaw) * V.Y; }
-
 	/** Exact 1D squared distance transform (Felzenszwalb & Huttenlocher) of F into D, in cell units. */
 	void DistanceTransform1D(const TArray<double>& F, TArray<double>& D)
 	{
@@ -112,12 +110,12 @@ void UAgvLidarLocalizerComponent::OffsetEstimate(FVector2D OffsetCm, float YawDe
 	double Yaw;
 	ToMap(OdomPosition, OdomYaw, Position, Yaw);
 	CorrectionYaw += FMath::DegreesToRadians((double)YawDeg);
-	CorrectionOffset = Position + OffsetCm - Rotate(CorrectionYaw, OdomPosition);
+	CorrectionOffset = Position + OffsetCm - AgvMath::Rotate(CorrectionYaw, OdomPosition);
 }
 
 void UAgvLidarLocalizerComponent::ToMap(const FVector2D& Position, double Yaw, FVector2D& OutPosition, double& OutYaw) const
 {
-	OutPosition = Rotate(CorrectionYaw, Position) + CorrectionOffset;
+	OutPosition = AgvMath::Rotate(CorrectionYaw, Position) + CorrectionOffset;
 	OutYaw = Yaw + CorrectionYaw;
 }
 
@@ -184,7 +182,7 @@ void UAgvLidarLocalizerComponent::Step(float Dt)
 			{
 				continue;
 			}
-			ScanPoints.Add(VehicleOrigin + Rotate(OdomYaw, FVector2D(Vehicle)));
+			ScanPoints.Add(VehicleOrigin + AgvMath::Rotate(OdomYaw, FVector2D(Vehicle)));
 		}
 		if (Lidars[Index]->GetRevolutionCount() != SeenRevolutions[Index])
 		{
