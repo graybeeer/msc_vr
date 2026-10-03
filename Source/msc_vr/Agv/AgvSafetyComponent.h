@@ -11,12 +11,13 @@ UENUM(BlueprintType)
 enum class EAgvSafetyState : uint8 { Clear, Warning, Stop };
 
 /**
- * Safety laser scanner evaluation, as in a safety-rated scanner's field sets. Ahead of the body front (main travel
- * direction, local -X) it keeps a protective field (object inside -> stop) and a larger warning field (-> slow).
- * The protective length is switched by speed band: response distance + braking distance + margin, never shorter
- * than the field for the starting speed or MinProtectiveLengthCm. A protective stop also asks the drive for full braking. After a stop the vehicle restarts on its own once the field has been
- * clear for RestartDelaySeconds. Acts on the drive's safety speed limit, below navigation.
- * Only covers travel with the body leading; forks-first travel needs the fork-side sensors (not yet fitted).
+ * Safety field evaluation over all safety sensors, switched like a safety controller's field sets on the intended
+ * travel direction, speed band and steering band. The protective field is the area the vehicle footprint sweeps
+ * along its current arc over the stopping distance (response + braking + margin, never shorter than
+ * MinProtectiveLengthCm); turning on the spot sweeps the footprint through RotationLookaheadDeg. An object in it ->
+ * stop (and full braking in the drive); in the longer warning sweep -> slow. After a stop the vehicle restarts on its
+ * own once the field has stayed clear for RestartDelaySeconds. Forks-first travel is capped at ForksFirstMaxSpeedCm.
+ * What a sensor cannot see (blocked by the vehicle itself, below its beam) it cannot protect.
  */
 UCLASS(ClassGroup=(Agv), meta=(BlueprintSpawnableComponent))
 class MSC_VR_API UAgvSafetyComponent : public UActorComponent
@@ -26,18 +27,19 @@ class MSC_VR_API UAgvSafetyComponent : public UActorComponent
 public:
 	UAgvSafetyComponent();
 
-	/** Evaluates the scanner's completed scans; called by the owning vehicle after the sensors have stepped. */
+	/** Evaluates the sensors' completed scans; called by the owning vehicle after the sensors have stepped. */
 	void Step(float Dt);
 
+	/** Off only for tests of the bare vehicle (no fields, no limits). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
-	TObjectPtr<UAgvLidarComponent> Scanner;
+	bool bEnabled = true;
 
-	/** Local X of the body's front face and half the body width (refined model). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
-	float BodyFrontXCm = -94.f;
+	TArray<TObjectPtr<UAgvLidarComponent>> Scanners;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
-	float BodyHalfWidthCm = 61.f;
+	/** Whole vehicle outline in the actor frame (body + forks); the field is this outline swept along the path. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
+	FBox2D Footprint = FBox2D(FVector2D(-94.0, -61.0), FVector2D(182.0, 61.0));
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
 	float SideMarginCm = 10.f;
@@ -57,9 +59,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
 	float MinProtectiveLengthCm = 100.f;
 
-	/** Field sets switch in these speed steps. */
+	/** Field sets switch in these speed and steering steps. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="1"))
 	float SpeedBandCm = 20.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="1"))
+	float SteerBandDeg = 10.f;
 
 	/** Smallest field: the one needed to start moving again. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
@@ -78,7 +83,25 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
 	float WarningSpeedCm = 30.f;
 
-	/** Beams that must hit inside a field in one scan (object resolution; ignores single noisy returns). */
+	/** Turning on the spot: how far ahead the sweep looks (protective / warning). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="1", ClampMax="180"))
+	float RotationLookaheadDeg = 30.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="1", ClampMax="180"))
+	float WarningRotationDeg = 60.f;
+
+	/** Forks-first travel has less sensor coverage (and usually a load in the way), so it is slowed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="1"))
+	float ForksFirstMaxSpeedCm = 50.f;
+
+	/** Points between these heights above the floor are obstacles (below: the floor; above: clears the vehicle). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
+	float MinObstacleHeightCm = 5.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
+	float MaxObstacleHeightCm = 220.f;
+
+	/** Beams that must hit inside a field in one evaluation (object resolution; ignores single noisy returns). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="1"))
 	int32 MinObjectPoints = 2;
 
@@ -99,13 +122,17 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Safety|Status")
 	FString StatusText = TEXT("CLEAR");
 
+	/** Active field set: BODY FIRST / FORKS FIRST / ROTATE LEFT / ROTATE RIGHT. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Safety|Status")
+	FString FieldSet = TEXT("BODY FIRST");
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Safety|Status")
 	float ProtectiveLengthCm = 0.f;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Safety|Status")
 	float WarningLengthCm = 0.f;
 
-	/** Nearest object ahead of the body front within the warning width, from the last scan (-1 = none). */
+	/** Path length (cm, or degrees when rotating) to the nearest object inside the warning sweep; -1 = none. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Safety|Status")
 	float NearestObjectCm = -1.f;
 
@@ -113,17 +140,28 @@ public:
 	int32 SafetyStops = 0;
 
 private:
+	/** A footprint pose along the swept path, relative to the current reference point (cm, rad), and its path length. */
+	struct FSweepPose
+	{
+		FVector2D Position;
+		double Yaw;
+		double Along;
+	};
+	void BuildSweep();
 	void Evaluate();
 	void DrawFields() const;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UAgvDriveComponent> Drive;
 
-	TArray<FVector> ScanPoints;
-	int32 SeenRevolution = 0;
+	TArray<TArray<FVector>> PendingPoints;
+	TArray<TArray<FVector>> LatestPoints;
+	TArray<int32> SeenRevolutions;
+	TArray<FSweepPose> Sweep;
+	double ReferenceX = 0.0;
 	double ClearSeconds = 0.0;
 	double WarningClearSeconds = 1e9; // starts released
 	bool bProtectiveHit = false;
 	bool bWarningHit = false;
-	bool bActive = true;
+	bool bRotating = false;
 };

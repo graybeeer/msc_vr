@@ -1,6 +1,7 @@
 #include "AgvSafetyComponent.h"
 #include "AgvDriveComponent.h"
 #include "AgvLidarComponent.h"
+#include "AgvPath.h"
 #include "DrawDebugHelpers.h"
 #include "GameFramework/Actor.h"
 
@@ -17,24 +18,56 @@ void UAgvSafetyComponent::Step(float Dt)
 	{
 		Drive = GetOwner()->FindComponentByClass<UAgvDriveComponent>();
 	}
-	if (!Drive || !Scanner)
+	if (!Drive)
 	{
 		return;
 	}
-
-	// Field set for the current motion; the scanner only guards travel with the body leading (and turning on the spot).
-	const double Speed = FMath::Abs(Drive->SpeedCmS);
-	bActive = Drive->SpeedCmS < 1.f;
-	const double Band = FMath::CeilToDouble(FMath::Max(Speed, (double)StartSpeedCm) / SpeedBandCm) * SpeedBandCm;
-	ProtectiveLengthCm = (float)FMath::Max(Band * ResponseSeconds + Band * Band / (2.0 * FieldDecelerationCm) + FieldMarginCm, (double)MinProtectiveLengthCm);
-	WarningLengthCm = FMath::Max(WarningFieldLengthCm, ProtectiveLengthCm);
-
-	Scanner->TakePoints(ScanPoints);
-	if (Scanner->GetRevolutionCount() != SeenRevolution)
+	if (!bEnabled)
 	{
-		SeenRevolution = Scanner->GetRevolutionCount();
+		State = EAgvSafetyState::Clear;
+		StatusText = TEXT("DISABLED");
+		Drive->SetSafetySpeedLimit(TNumericLimits<float>::Max());
+		return;
+	}
+	PendingPoints.SetNum(Scanners.Num());
+	LatestPoints.SetNum(Scanners.Num());
+	SeenRevolutions.SetNum(Scanners.Num());
+
+	// Collect each sensor's points in the vehicle frame; a completed scan replaces that sensor's previous one.
+	const FTransform Actor = GetOwner()->GetActorTransform();
+	bool bNewScan = false;
+	TArray<FVector> Local;
+	for (int32 Index = 0; Index < Scanners.Num(); ++Index)
+	{
+		UAgvLidarComponent* Scanner = Scanners[Index];
+		if (!Scanner)
+		{
+			continue;
+		}
+		const FTransform Mount = Scanner->GetComponentTransform().GetRelativeTransform(Actor);
+		Local.Reset();
+		Scanner->TakePoints(Local);
+		for (const FVector& Point : Local)
+		{
+			const FVector Vehicle = Mount.TransformPosition(Point);
+			if (Vehicle.Z >= MinObstacleHeightCm && Vehicle.Z <= MaxObstacleHeightCm)
+			{
+				PendingPoints[Index].Add(Vehicle);
+			}
+		}
+		if (Scanner->GetRevolutionCount() != SeenRevolutions[Index])
+		{
+			SeenRevolutions[Index] = Scanner->GetRevolutionCount();
+			LatestPoints[Index] = MoveTemp(PendingPoints[Index]);
+			PendingPoints[Index].Reset();
+			bNewScan = true;
+		}
+	}
+
+	BuildSweep();
+	if (bNewScan)
+	{
 		Evaluate();
-		ScanPoints.Reset();
 	}
 
 	// Stop latches until the protective field has stayed clear for the restart delay.
@@ -53,11 +86,18 @@ void UAgvSafetyComponent::Step(float Dt)
 	if (State != Previous)
 	{
 		SafetyStops += State == EAgvSafetyState::Stop;
-		UE_LOG(LogAgvSafety, Log, TEXT("AGV_SAFETY %s: %s (speed %.0f cm/s, protective %.0f cm, nearest %.0f cm)"), *GetOwner()->GetName(),
-			State == EAgvSafetyState::Stop ? TEXT("STOP") : State == EAgvSafetyState::Warning ? TEXT("WARNING") : TEXT("CLEAR"), Speed, ProtectiveLengthCm, NearestObjectCm);
+		UE_LOG(LogAgvSafety, Log, TEXT("AGV_SAFETY %s: %s (%s, speed %.0f cm/s, protective %.0f, nearest %.0f)"), *GetOwner()->GetName(),
+			State == EAgvSafetyState::Stop ? TEXT("STOP") : State == EAgvSafetyState::Warning ? TEXT("WARNING") : TEXT("CLEAR"),
+			*FieldSet, FMath::Abs(Drive->SpeedCmS), ProtectiveLengthCm, NearestObjectCm);
 	}
 	StatusText = State == EAgvSafetyState::Stop ? TEXT("SAFETY STOP") : State == EAgvSafetyState::Warning ? TEXT("WARNING FIELD") : TEXT("CLEAR");
-	Drive->SetSafetySpeedLimit(State == EAgvSafetyState::Stop ? 0.f : State == EAgvSafetyState::Warning ? WarningSpeedCm : TNumericLimits<float>::Max());
+
+	float Limit = State == EAgvSafetyState::Stop ? 0.f : State == EAgvSafetyState::Warning ? WarningSpeedCm : TNumericLimits<float>::Max();
+	if (FieldSet == TEXT("FORKS FIRST"))
+	{
+		Limit = FMath::Min(Limit, ForksFirstMaxSpeedCm);
+	}
+	Drive->SetSafetySpeedLimit(Limit);
 
 	if (bDrawFields)
 	{
@@ -65,50 +105,151 @@ void UAgvSafetyComponent::Step(float Dt)
 	}
 }
 
+void UAgvSafetyComponent::BuildSweep()
+{
+	// Field switching on the intended motion: the controller's command picks the direction (so the right field is
+	// active before the vehicle starts), the actual speed picks the band, the steering encoder picks the curve.
+	// With no motion requested the last field set stays (a stopped vehicle still guards where it is about to go).
+	const double Speed = Drive->SpeedCmS;
+	const double Command = Drive->GetCommandSpeedCmS();
+	const double Turn = Drive->GetCommandYawRateDegS();
+	if (FMath::Abs(Speed) > 2.0 || FMath::Abs(Command) > 0.5)
+	{
+		FieldSet = (FMath::Abs(Speed) > 2.0 ? Speed : Command) > 0.0 ? TEXT("FORKS FIRST") : TEXT("BODY FIRST");
+	}
+	else if (FMath::Abs(Turn) > 0.5)
+	{
+		FieldSet = Turn > 0.0 ? TEXT("ROTATE LEFT") : TEXT("ROTATE RIGHT");
+	}
+	bRotating = FieldSet.StartsWith(TEXT("ROTATE"));
+
+	const UAgvTricycleDriveComponent* Tricycle = Cast<UAgvTricycleDriveComponent>(Drive);
+	ReferenceX = Drive->ReferenceOffsetCm;
+	const double Band = FMath::CeilToDouble(FMath::Max(FMath::Abs(Speed), (double)StartSpeedCm) / SpeedBandCm) * SpeedBandCm;
+	ProtectiveLengthCm = (float)FMath::Max(Band * ResponseSeconds + Band * Band / (2.0 * FieldDecelerationCm) + FieldMarginCm, (double)MinProtectiveLengthCm);
+	WarningLengthCm = FMath::Max(WarningFieldLengthCm, ProtectiveLengthCm);
+
+	Sweep.Reset();
+	if (bRotating)
+	{
+		const double Sign = FieldSet == TEXT("ROTATE LEFT") ? 1.0 : -1.0;
+		for (double Angle = 0.0; Angle <= WarningRotationDeg + 1e-3; Angle += 3.0)
+		{
+			Sweep.Add({ FVector2D::ZeroVector, Sign * FMath::DegreesToRadians(Angle), Angle });
+		}
+		return;
+	}
+
+	// Arc of the reference point for the banded steering angle (tricycle: heading change per distance = -tan(steer) / L).
+	const double Direction = FieldSet == TEXT("FORKS FIRST") ? 1.0 : -1.0;
+	double Curvature = 0.0;
+	if (Tricycle)
+	{
+		const double Steer = FMath::Clamp(FMath::RoundToDouble(Tricycle->SteerAngleDeg / SteerBandDeg) * SteerBandDeg, -80.0, 80.0);
+		const double Wheelbase = FMath::Max(1.0, (double)Tricycle->ReferenceOffsetCm - Tricycle->DriveWheelOffsetCm);
+		Curvature = -FMath::Tan(FMath::DegreesToRadians(Steer)) / Wheelbase;
+	}
+	const double StepCm = FMath::Min(10.0, FMath::DegreesToRadians(5.0) / FMath::Max(FMath::Abs(Curvature), 1e-6));
+	FVector2D Position = FVector2D::ZeroVector;
+	double Yaw = 0.0;
+	for (double Along = 0.0; Along <= WarningLengthCm + StepCm; Along += StepCm)
+	{
+		Sweep.Add({ Position, Yaw, Along });
+		const double Bend = Curvature * Direction * StepCm;
+		Position += AgvMath::Dir(Yaw + Bend * 0.5) * (Direction * StepCm);
+		Yaw += Bend;
+	}
+}
+
 void UAgvSafetyComponent::Evaluate()
 {
-	const FTransform Mount = Scanner->GetComponentTransform().GetRelativeTransform(GetOwner()->GetActorTransform());
-	const double Protective = BodyHalfWidthCm + SideMarginCm;
-	const double Warning = Protective + WarningExtraWidthCm;
-	int32 ProtectiveHits = 0, WarningHits = 0;
-	NearestObjectCm = -1.f;
-	for (const FVector& Point : ScanPoints)
+	// A point is in a field when some pose of the swept footprint (grown by the margins) contains it. Points inside
+	// the vehicle's own outline right now are the vehicle or its load.
+	// Margins on the sides and the leading end only (all round when turning on the spot): what the vehicle has
+	// already passed must not stop it.
+	auto Grow = [&](double Margin)
 	{
-		const FVector Vehicle = Mount.TransformPosition(Point);
-		const double Ahead = BodyFrontXCm - Vehicle.X;
-		const double Side = FMath::Abs(Vehicle.Y);
-		if (Ahead <= 0.0 || Side > Warning)
+		FBox2D Box = Footprint.ExpandBy(Margin);
+		if (FieldSet == TEXT("BODY FIRST"))
 		{
-			continue;
+			Box.Max.X = Footprint.Max.X;
 		}
-		if (Ahead <= WarningLengthCm)
+		else if (FieldSet == TEXT("FORKS FIRST"))
 		{
-			++WarningHits;
-			NearestObjectCm = NearestObjectCm < 0.f ? (float)Ahead : FMath::Min(NearestObjectCm, (float)Ahead);
-			ProtectiveHits += Ahead <= ProtectiveLengthCm && Side <= Protective;
+			Box.Min.X = Footprint.Min.X;
+		}
+		return Box;
+	};
+	const FBox2D Protective = Grow(SideMarginCm);
+	const FBox2D Warning = Grow(SideMarginCm + WarningExtraWidthCm);
+	const double ProtectiveReach = bRotating ? RotationLookaheadDeg : ProtectiveLengthCm;
+	int32 ProtectiveHits = 0, WarningHits = 0;
+	FVector FirstProtective = FVector::ZeroVector;
+	NearestObjectCm = -1.f;
+	for (const TArray<FVector>& Points : LatestPoints)
+	{
+		for (const FVector& Point : Points)
+		{
+			const FVector2D Vehicle(Point);
+			if (Footprint.IsInside(Vehicle))
+			{
+				continue;
+			}
+			// The two fields are judged separately: the wider warning outline reaches a point one pose earlier than the
+			// protective one, so stopping at the first warning pose would miss the protective field.
+			const FVector2D FromReference = Vehicle - FVector2D(ReferenceX, 0.0);
+			bool bInWarning = false, bInProtective = false;
+			for (const FSweepPose& Pose : Sweep)
+			{
+				const FVector2D InPose = AgvMath::Rotate(-Pose.Yaw, FromReference - Pose.Position) + FVector2D(ReferenceX, 0.0);
+				if (!bInWarning && Warning.IsInside(InPose))
+				{
+					bInWarning = true;
+					NearestObjectCm = NearestObjectCm < 0.f ? (float)Pose.Along : FMath::Min(NearestObjectCm, (float)Pose.Along);
+				}
+				bInProtective = Pose.Along <= ProtectiveReach && Protective.IsInside(InPose);
+				if (bInProtective || Pose.Along > ProtectiveReach && bInWarning)
+				{
+					break;
+				}
+			}
+			WarningHits += bInWarning;
+			if (bInProtective && ProtectiveHits++ == 0)
+			{
+				FirstProtective = Point;
+			}
 		}
 	}
-	bProtectiveHit = bActive && ProtectiveHits >= MinObjectPoints;
-	bWarningHit = bActive && WarningHits >= MinObjectPoints;
+	bProtectiveHit = ProtectiveHits >= MinObjectPoints;
+	if (bProtectiveHit && State != EAgvSafetyState::Stop)
+	{
+		UE_LOG(LogAgvSafety, Verbose, TEXT("AGV_SAFETY %s: protective hit by %d points, first at vehicle (%.0f, %.0f, %.0f)"), *GetOwner()->GetName(), ProtectiveHits, FirstProtective.X, FirstProtective.Y, FirstProtective.Z);
+	}
+	bWarningHit = WarningHits >= MinObjectPoints;
 }
 
 void UAgvSafetyComponent::DrawFields() const
 {
-	const AActor* Owner = GetOwner();
-	const FTransform Actor = Owner->GetActorTransform();
-	const double Z = 17.0;
-	auto Box = [&](double Length, double HalfWidth, const FColor& Color)
+	const FTransform Actor = GetOwner()->GetActorTransform();
+	const double ProtectiveReach = bRotating ? RotationLookaheadDeg : ProtectiveLengthCm;
+	auto Outline = [&](const FSweepPose& Pose, const FBox2D& Box, const FColor& Color)
 	{
-		const FVector Corners[4] = { FVector(BodyFrontXCm, -HalfWidth, Z), FVector(BodyFrontXCm - Length, -HalfWidth, Z),
-			FVector(BodyFrontXCm - Length, HalfWidth, Z), FVector(BodyFrontXCm, HalfWidth, Z) };
+		const FVector2D Corners[4] = { Box.Min, FVector2D(Box.Max.X, Box.Min.Y), Box.Max, FVector2D(Box.Min.X, Box.Max.Y) };
 		for (int32 Index = 0; Index < 4; ++Index)
 		{
-			DrawDebugLine(GetWorld(), Actor.TransformPosition(Corners[Index]), Actor.TransformPosition(Corners[(Index + 1) % 4]), Color, false, -1.f, 0, 2.f);
+			auto World = [&](const FVector2D& C)
+			{
+				const FVector2D Local = AgvMath::Rotate(Pose.Yaw, C - FVector2D(ReferenceX, 0.0)) + Pose.Position + FVector2D(ReferenceX, 0.0);
+				return Actor.TransformPosition(FVector(Local, 17.0));
+			};
+			DrawDebugLine(GetWorld(), World(Corners[Index]), World(Corners[(Index + 1) % 4]), Color, false, -1.f, 0, 2.f);
 		}
 	};
-	if (bActive)
+	const FColor Red = State == EAgvSafetyState::Stop ? FColor::Red : FColor(255, 120, 120);
+	const FColor Yellow = State == EAgvSafetyState::Warning ? FColor::Orange : FColor::Yellow;
+	for (int32 Index = 0; Index < Sweep.Num(); Index += 6)
 	{
-		Box(WarningLengthCm, BodyHalfWidthCm + SideMarginCm + WarningExtraWidthCm, State == EAgvSafetyState::Warning ? FColor::Orange : FColor::Yellow);
-		Box(ProtectiveLengthCm, BodyHalfWidthCm + SideMarginCm, State == EAgvSafetyState::Stop ? FColor::Red : FColor(255, 120, 120));
+		const bool bProtective = Sweep[Index].Along <= ProtectiveReach;
+		Outline(Sweep[Index], Footprint.ExpandBy(SideMarginCm + (bProtective ? 0.0 : WarningExtraWidthCm)), bProtective ? Red : Yellow);
 	}
 }

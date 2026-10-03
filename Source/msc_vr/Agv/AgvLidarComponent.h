@@ -8,7 +8,8 @@
  * Spinning multi-channel LiDAR, attached at its real mount. Each step it traces only the columns the head sweeps
  * through in that time, so a scan taken while driving is distorted exactly like a real one. Ranges get Gaussian
  * noise and random dropouts. Points are reported in this component's frame (cm, X = 0 deg azimuth, Z up).
- * Traces ignore the owning vehicle: its own parts are removed by the receiver's self filter, as real drivers do.
+ * Beams hit anything solid (traced by object type: people's Pawn capsules ignore the Visibility channel), not
+ * overlap-only volumes. The owning vehicle's own body blocks beams (self-occlusion) and its returns are dropped.
  */
 UCLASS(ClassGroup=(Agv), meta=(BlueprintSpawnableComponent))
 class MSC_VR_API UAgvLidarComponent : public USceneComponent
@@ -65,6 +66,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|LiDAR")
 	int32 NoiseSeed = 7;
 
+	/** Own-vehicle surfaces closer than this are the sensor's housing and window, which the beam passes through. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|LiDAR", meta=(ClampMin="0"))
+	float HousingRadiusCm = 15.f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Debug")
 	bool bDrawPoints = false;
 
@@ -75,6 +80,16 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|LiDAR")
 	float LastStepMilliseconds = 0.f;
 
+	/** Last completed scan: beams fired, points returned, beams blocked by the vehicle's own body. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|LiDAR")
+	int32 LastScanBeams = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|LiDAR")
+	int32 LastScanPoints = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|LiDAR")
+	int32 LastScanSelfBlocked = 0;
+
 private:
 	TArray<FVector> Points;
 	FRandomStream Noise;
@@ -82,4 +97,7 @@ private:
 	/** Head position in columns, fractional. */
 	double Column = 0.0;
 	int32 RevolutionCount = 0;
+	int32 ScanBeams = 0;
+	int32 ScanPoints = 0;
+	int32 ScanSelfBlocked = 0;
 };

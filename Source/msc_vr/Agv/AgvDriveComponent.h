@@ -30,6 +30,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category="AGV|Drive")
 	void SetSafetySpeedLimit(float LimitCmS) { SafetySpeedLimitCmS = FMath::Max(0.f, LimitCmS); }
 
+	/** What the vehicle controller is asking for; the safety system switches its fields on the intended motion. */
+	double GetCommandSpeedCmS() const { return CommandSpeedCmS; }
+	double GetCommandYawRateDegS() const { return CommandYawRateDegS; }
+
 	/** Actual pose of the reference point. Navigation must read it through the localizer, not from here. */
 	void GetTruePose(FVector2D& OutPosition, double& OutYaw) const;
 

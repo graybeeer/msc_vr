@@ -58,10 +58,10 @@ for name, centre, size in (('WallW', (-1250, 300, 200), (20, 3120, 400)), ('Wall
                            ('Pillar1', (400, 300, 200), (40, 40, 400)), ('Pillar2', (1200, 300, 200), (40, 40, 400))):
     block(name, centre, size)
 
-# Racks: two lines of uprights 100 cm apart, every 270 cm, beams at 100 and 200 cm.
-RACKS = {'RackS': ((-200, -550), (1, 0), 9), 'RackN': ((-200, 1350), (1, 0), 9), 'RackE': ((2250, -200), (0, 1), 6)}
-for name, ((x0, y0), (dx, dy), bays) in RACKS.items():
-    side = (dy * 100, dx * 100)  # depth direction
+# Racks: two lines of uprights 100 cm apart (the second line away from the lanes), every 270 cm, beams at 100 and 200 cm.
+RACKS = {'RackS': ((-200, -550), (1, 0), (0, -100), 9), 'RackN': ((-200, 1350), (1, 0), (0, 100), 9),
+         'RackE': ((2250, -200), (0, 1), (100, 0), 6)}
+for name, ((x0, y0), (dx, dy), side, bays) in RACKS.items():
     for face in (0, 1):
         ox, oy = x0 + side[0] * face, y0 + side[1] * face
         for i in range(bays + 1):

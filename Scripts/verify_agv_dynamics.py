@@ -13,6 +13,7 @@ vehicle = next(a for a in all_actors if isinstance(a, unreal.AgvTestVehicle))
 nav = vehicle.get_editor_property('navigator')
 drive = vehicle.get_editor_property('drive')
 vehicle.get_editor_property('localizer').set_editor_property('ideal_pose', True)  # vehicle behaviour only
+vehicle.get_editor_property('safety').set_editor_property('enabled', False)  # bare vehicle: no safety fields or speed caps
 nav.set_editor_property('draw_debug', False)
 OFFSET = drive.get_editor_property('reference_offset_cm')
 

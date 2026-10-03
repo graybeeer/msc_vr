@@ -21,7 +21,10 @@ AAgvTestVehicle::AAgvTestVehicle()
 		Mesh->SetupAttachment(Parent);
 		Mesh->SetStaticMesh(ConstructorHelpers::FObjectFinder<UStaticMesh>(*FString::Printf(TEXT("/Game/Warehouse/AGV/Refined/SM_AGV_%s"), Name)).Object);
 		Mesh->SetRelativeLocation(Location);
-		Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		// Solid to queries only (no physics): blocks the vehicle's own sensors and is seen by everyone else's.
+		Mesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		Mesh->SetCollisionObjectType(ECC_WorldDynamic);
+		Mesh->SetCollisionResponseToAllChannels(ECR_Block);
 		return Mesh;
 	};
 	Chassis = Part(TEXT("Chassis"), RootComponent, FVector::ZeroVector);
@@ -67,8 +70,32 @@ AAgvTestVehicle::AAgvTestVehicle()
 	FrontScanner->DropoutProbability = 0.005f;
 	FrontScanner->NoiseSeed = 23;
 
+	// Fork-side 3D obstacle sensors (ToF depth cameras) in the two lenses at the ends of the tower crossbar, looking
+	// toward the forks and down: 80 x 50 deg, 20 frames/s, 0.2-6 m. The +Y one sits behind the mast as modelled.
+	auto ForkSensor = [&](const TCHAR* Name, double Y)
+	{
+		UAgvLidarComponent* Sensor = CreateDefaultSubobject<UAgvLidarComponent>(Name);
+		Sensor->SetupAttachment(Chassis);
+		Sensor->SetRelativeLocationAndRotation(FVector(-22, Y, 235), FRotator(-30.0, 0.0, 0.0));
+		Sensor->bUseForLocalization = false;
+		Sensor->HorizontalFovDeg = 80.f;
+		Sensor->HorizontalResolutionDeg = 1.5f;
+		Sensor->Channels = 30;
+		Sensor->VerticalMinDeg = -25.f;
+		Sensor->VerticalMaxDeg = 25.f;
+		Sensor->RotationHz = 20.f;
+		Sensor->MinRangeCm = 20.f;
+		Sensor->MaxRangeCm = 600.f;
+		Sensor->RangeNoiseCm = 1.f;
+		Sensor->DropoutProbability = 0.01f;
+		Sensor->NoiseSeed = Y > 0.0 ? 31 : 37;
+		return Sensor;
+	};
+	ForkSensorL = ForkSensor(TEXT("ForkSensorL"), 26.0);
+	ForkSensorR = ForkSensor(TEXT("ForkSensorR"), -46.0);
+
 	Safety = CreateDefaultSubobject<UAgvSafetyComponent>(TEXT("Safety"));
-	Safety->Scanner = FrontScanner;
+	Safety->Scanners = { FrontScanner, ForkSensorL, ForkSensorR };
 
 	// No load wheels under the forks: the non-slip point is the middle of the fixed support-wheel axle.
 	Drive->ReferenceOffsetCm = 27.f;
@@ -87,6 +114,8 @@ void AAgvTestVehicle::StepSimulation(float Dt)
 	UpdateWheelMeshes();
 	TopLidar->Step(Dt);
 	FrontScanner->Step(Dt);
+	ForkSensorL->Step(Dt);
+	ForkSensorR->Step(Dt);
 	Safety->Step(Dt);
 	Localizer->Step(Dt);
 }

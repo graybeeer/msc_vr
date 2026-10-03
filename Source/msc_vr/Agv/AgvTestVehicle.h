@@ -50,6 +50,13 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV")
 	TObjectPtr<UAgvLidarComponent> FrontScanner;
 
+	/** Fork-side 3D obstacle sensors in the crossbar lenses (+Y behind the mast, -Y beside it). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV")
+	TObjectPtr<UAgvLidarComponent> ForkSensorL;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV")
+	TObjectPtr<UAgvLidarComponent> ForkSensorR;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV")
 	TObjectPtr<UAgvSafetyComponent> Safety;
 

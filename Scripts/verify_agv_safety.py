@@ -19,7 +19,7 @@ safety = vehicle.get_editor_property('safety')
 nav.set_editor_property('draw_debug', False)
 safety.set_editor_property('draw_fields', False)
 cube = unreal.load_asset('/Engine/BasicShapes/Cube')
-BODY_FRONT = -safety.get_editor_property('body_front_x_cm')  # body leads toward world +X at yaw 180
+BODY_FRONT = -safety.get_editor_property('footprint').min.x  # body front; it leads toward world +X at yaw 180
 
 
 def place(x=0, y=0, yaw=180, payload=0):
