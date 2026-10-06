@@ -37,6 +37,7 @@ public:
 	virtual bool GetPose(FVector2D& OutPosition, double& OutYaw) const override;
 	virtual void Step(float Dt) override;
 	virtual void InitializePose() override;
+	virtual bool IsMappedStructure(const FVector2D& WorldPointCm, double ToleranceCm) const override;
 
 	/** Shifts the estimate (world cm, degrees about the reference point): a wrong initial pose, a bump. */
 	UFUNCTION(BlueprintCallable, Category="AGV|Localization")

@@ -27,7 +27,7 @@ def reference():
     return location.x + math.cos(yaw) * OFFSET, location.y + math.sin(yaw) * OFFSET
 
 
-def reset(payload_kg=0, x=-1000, y=-1000, yaw=0):
+def reset(payload_kg=0, x=-800, y=-1000, yaw=0):  # the body reaches 2.5 m behind the reference (fork rollers)
     nav.cancel()
     vehicle.teleport_reference(unreal.Vector2D(x, y), yaw)
     drive.clear_payload()
@@ -67,32 +67,31 @@ def report(name, r):
 a, b = launch(0, 1 / 30), launch(0, 1 / 120)
 assert math.dist(a['end'], b['end']) < 0.05, ('frame-rate dependence', a['end'], b['end'])
 
-# 2. Empty vs loaded: same command, the heavier vehicle accelerates later and stops longer.
-empty, light, heavy = launch(0), launch(200), launch(400)
-for name, r in (('empty', empty), ('200kg', light), ('400kg', heavy)):
+# 2. Empty vs loaded up to the rating: same command, the heavier vehicle accelerates later and stops longer.
+empty, light, heavy = launch(0), launch(700), launch(1400)
+for name, r in (('empty', empty), ('700kg', light), ('1400kg', heavy)):
     report(name, r)
 assert empty['reach'] < light['reach'] < (heavy['reach'] or 99), 'acceleration vs payload'
 assert empty['stop'] < light['stop'] < heavy['stop'], 'stopping distance vs payload'
 assert empty['slip'] < 2.0, ('empty vehicle should keep grip', empty['slip'])
 
-# 3. Grip: with the load on the forks the drive wheel (behind the support axle) carries little weight and spins.
-assert heavy['slip'] > 5.0, ('loaded drive wheel should slip at full power', heavy['slip'])
-assert not empty['tip'] and not heavy['tip']
+# 3. The fork load rollers carry the load: no tipping up to the rating, even at full power and full braking.
+assert not empty['tip'] and not heavy['tip'], 'tipped within the rating'
 
-# 4. Static capacity on the forks before the drive wheel lifts (no load wheels under the forks in this model).
+# 4. Static capacity on the forks before a wheel lifts (the load rollers carry the load).
 def static_margin(kg):
     reset(kg)
     vehicle.step_simulation(DT)
     return get('stability_margin')
 
-low, high = 0.0, 1400.0
+rated = static_margin(1400)
+low, high = 0.0, 20000.0
 for _ in range(30):
     mid = (low + high) / 2
     low, high = (mid, high) if static_margin(mid) > 0 else (low, mid)
-print('AGV_DYN_CASE capacity: drive wheel lifts above %.0f kg on the forks (VNSL14 rating 1400 kg with fork load wheels)' % low)
-reset(1000)
-vehicle.step_simulation(DT)
-assert get('tip_over'), '1000 kg on the forks must tip this wheel layout'
+print('AGV_DYN_CASE capacity: at the 1400 kg rating the lightest wheel keeps %.0f%% of the weight; a wheel lifts above %.0f kg'
+      % (100 * rated, low))
+assert rated > 0 and low > 1400, 'the rated load must not lift a wheel'
 
 # 5. Route with a payload: arrives; report how precision changes.
 for kg in (0, 300):

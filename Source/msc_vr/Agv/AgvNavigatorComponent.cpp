@@ -178,6 +178,27 @@ void UAgvNavigatorComponent::BeginFollow()
 	StatusText = TEXT("FOLLOW PATH");
 }
 
+bool UAgvNavigatorComponent::GetPathAhead(double DistanceCm, double StepCm, TArray<FVector>& OutPoses) const
+{
+	OutPoses.Reset();
+	if (State != EAgvNavState::Follow || !Path.Legs.IsValidIndex(LegIndex) || StepCm <= 0.0)
+	{
+		return false;
+	}
+	const FAgvLeg& Leg = Path.Legs[LegIndex];
+	const double End = FMath::Min(Leg.Length, LegS + DistanceCm);
+	for (double S = LegS;; S += StepCm)
+	{
+		const FAgvPathSample Sample = Leg.Sample(FMath::Min(S, End));
+		OutPoses.Add(FVector(Sample.Position, Sample.Heading + (Leg.bReverse ? UE_DOUBLE_PI : 0.0)));
+		if (S >= End)
+		{
+			break;
+		}
+	}
+	return true;
+}
+
 double UAgvNavigatorComponent::ProfileSpeed(double S) const
 {
 	const double Scaled = FMath::Clamp(S / ProfileStepCm, 0.0, double(SpeedProfile.Num() - 1));
@@ -283,10 +304,12 @@ void UAgvNavigatorComponent::StepFollow(const FVector2D& Position, double Yaw, f
 	const double Allowed = FMath::Min(ProfileSpeed(LegS) * FMath::Clamp(FMath::Cos(Heading), 0.2, 1.0), (double)Drive->SafetySpeedLimitCmS);
 	CommandSpeed = FMath::Min(Allowed, CommandSpeed + AccelCm * Dt);
 
-	// Path curvature plus a critically damped correction: both errors decay over ConvergenceLengthCm of travel.
+	// Path curvature (read slightly ahead) plus a critically damped correction: both errors decay over
+	// ConvergenceLengthCm of travel.
 	const double Length = ConvergenceLengthCm;
 	const double MaxCurvature = 1.0 / MinTrackingRadiusCm;
-	const double Curvature = FMath::Clamp(Target.Curvature - Lateral / (Length * Length) - 2.0 / Length * FMath::Sin(Heading), -MaxCurvature, MaxCurvature);
+	const double Preview = FMath::Min(Leg.Length, LegS + CommandSpeed * CurvaturePreviewSeconds);
+	const double Curvature = FMath::Clamp(Leg.Sample(Preview).Curvature - Lateral / (Length * Length) - 2.0 / Length * FMath::Sin(Heading), -MaxCurvature, MaxCurvature);
 	double YawRate = FMath::RadiansToDegrees(CommandSpeed * Curvature);
 	if (FMath::Abs(YawRate) > MaxYawRateDeg)
 	{

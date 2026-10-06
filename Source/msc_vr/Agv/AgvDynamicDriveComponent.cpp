@@ -90,12 +90,12 @@ void UAgvDynamicDriveComponent::Step(float Dt)
 	YawRateDegS = (float)FMath::RadiansToDegrees(YawRate);
 }
 
-void UAgvDynamicDriveComponent::SolveWheelLoads(const FMassProperties& Body, const TArray<FVector2D>& Contacts, TArray<double>& OutLoads)
+void UAgvDynamicDriveComponent::SolveWheelLoads(const FMassProperties& Body, const TArray<FVector2D>& Contacts, const TArray<double>& Stiffness, TArray<double>& OutLoads)
 {
 	// Three-point support: total load = weight, and the load moments balance the inertial force at the centre of
 	// mass height (accelerating loads the rear, braking the front, cornering the outside). Each wheel's load is a
-	// plane over the contacts; with more than three wheels this is the equal-stiffness solution. A wheel that would
-	// need a negative load lifts off.
+	// spring: stiffness x the deflection of a plane over the contacts (with three wheels the stiffness drops out; with
+	// more it decides the split). A wheel that would need a negative load lifts off.
 	const int32 Count = Contacts.Num();
 	const double Weight = Body.Mass * StandardGravity;
 	const double Height = Body.CenterOfMass.Z;
@@ -116,7 +116,7 @@ void UAgvDynamicDriveComponent::SolveWheelLoads(const FMassProperties& Body, con
 				{
 					for (int32 J = 0; J < 3; ++J)
 					{
-						A[I][J] += Row[I] * Row[J];
+						A[I][J] += Stiffness[Index] * Row[I] * Row[J];
 					}
 				}
 			}
@@ -130,7 +130,7 @@ void UAgvDynamicDriveComponent::SolveWheelLoads(const FMassProperties& Body, con
 		int32 Lowest = INDEX_NONE;
 		for (int32 Index = 0; Index < Count; ++Index)
 		{
-			OutLoads[Index] = Active[Index] ? Plane[0] + Plane[1] * Contacts[Index].X + Plane[2] * Contacts[Index].Y : 0.0;
+			OutLoads[Index] = Active[Index] ? Stiffness[Index] * (Plane[0] + Plane[1] * Contacts[Index].X + Plane[2] * Contacts[Index].Y) : 0.0;
 			if (Active[Index] && (Lowest == INDEX_NONE || OutLoads[Index] < OutLoads[Lowest]))
 			{
 				Lowest = Index;
@@ -173,9 +173,11 @@ void UAgvDynamicDriveComponent::Substep(double H, const FMassProperties& Body, F
 
 	// Contact points relative to the centre of mass, body frame; index 0 is the drive wheel.
 	TArray<FVector2D> Contacts{ FVector2D(DriveWheelOffsetCm / 100.0, 0.0) - LocalCenter };
+	TArray<double> Stiffness{ (double)DriveWheelStiffness };
 	for (const FAgvPassiveWheel& Wheel : PassiveWheels)
 	{
 		Contacts.Add(Wheel.PositionCm / 100.0 - LocalCenter);
+		Stiffness.Add(Wheel.Stiffness);
 	}
 
 	// The AGV's controller: inverse kinematics, steering servo, wheel speed loop -> motor torque.
@@ -220,7 +222,7 @@ void UAgvDynamicDriveComponent::Substep(double H, const FMassProperties& Body, F
 	MotorTorqueNm = (float)Torque;
 
 	TArray<double> Loads;
-	SolveWheelLoads(Body, Contacts, Loads);
+	SolveWheelLoads(Body, Contacts, Stiffness, Loads);
 	if (!bBrake)
 	{
 		const double Drag = RollingResistance * Loads[0] * Radius / DriveInertiaKgM2 * H;

@@ -68,7 +68,8 @@ nav.set_editor_property('drive_reversed', True)
 
 # 5. Starting mid-lane drives straight to the goal instead of detouring to a node.
 place(400, 0, 180)
-assert drive_to('P0', (0, 0), track_cm=0.5) < 14  # a detour via a node takes far longer
+drive_to('P0', (0, 0), track_cm=0.5)
+assert [str(n) for n in nav.get_editor_property('planned_node_ids')] == ['P0'], 'joins the lane, no detour via another node'
 
 # 6. Off the network: joins at the nearest node first.
 place(300, -300, 180)

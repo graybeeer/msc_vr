@@ -104,12 +104,13 @@ assert nav.go_to_node('P3')
 report('C worker on the lane just around a corner', *watch(person, 34, 30))
 actors.destroy_actor(person)
 
-# D. Worker beside the lane (outside every field on the approach) where the forks end up after the pivot at P4:
-#    turning from heading east to north body-first swings the forks through the south-west quadrant.
+# D. Worker beside the lane (outside every field on the approach) where the body end swings when the vehicle turns on
+#    the spot at P4: it pivots about the fork load-roller axle, so turning from heading east to north body-first
+#    swings the 2.5 m body through the north-east quadrant.
 place(1200, 600, 180)
-person = worker(1552, 468)
+person = worker(1741, 741)
 assert nav.go_to_node('S1')
-report('D worker in the fork swing of a pivot turn', *watch(person, 34, 40), '(fork sensors turn with the vehicle: late view)')
+report('D worker in the body swing of a pivot turn', *watch(person, 34, 60), '(corner scanners)')
 actors.destroy_actor(person)
 
 # E. Forks-first travel toward a worker.

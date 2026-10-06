@@ -1,6 +1,8 @@
 #include "AgvSafetyComponent.h"
 #include "AgvDriveComponent.h"
 #include "AgvLidarComponent.h"
+#include "AgvLocalizerComponent.h"
+#include "AgvNavigatorComponent.h"
 #include "AgvPath.h"
 #include "DrawDebugHelpers.h"
 #include "GameFramework/Actor.h"
@@ -17,6 +19,8 @@ void UAgvSafetyComponent::Step(float Dt)
 	if (!Drive)
 	{
 		Drive = GetOwner()->FindComponentByClass<UAgvDriveComponent>();
+		Navigator = GetOwner()->FindComponentByClass<UAgvNavigatorComponent>();
+		Localizer = GetOwner()->FindComponentByClass<UAgvLocalizerComponent>();
 	}
 	if (!Drive)
 	{
@@ -92,7 +96,16 @@ void UAgvSafetyComponent::Step(float Dt)
 	}
 	StatusText = State == EAgvSafetyState::Stop ? TEXT("SAFETY STOP") : State == EAgvSafetyState::Warning ? TEXT("WARNING FIELD") : TEXT("CLEAR");
 
-	float Limit = State == EAgvSafetyState::Stop ? 0.f : State == EAgvSafetyState::Warning ? WarningSpeedCm : TNumericLimits<float>::Max();
+	// Warning: slow down to the warning speed at the field's design deceleration (no jolt); stop: at once.
+	if (State == EAgvSafetyState::Warning)
+	{
+		WarningRampCm = FMath::Max((double)WarningSpeedCm, FMath::Min(WarningRampCm, (double)FMath::Abs(Drive->SpeedCmS)) - FieldDecelerationCm * Dt);
+	}
+	else
+	{
+		WarningRampCm = TNumericLimits<float>::Max();
+	}
+	float Limit = State == EAgvSafetyState::Stop ? 0.f : State == EAgvSafetyState::Warning ? (float)WarningRampCm : TNumericLimits<float>::Max();
 	if (FieldSet == TEXT("FORKS FIRST"))
 	{
 		Limit = FMath::Min(Limit, ForksFirstMaxSpeedCm);
@@ -140,7 +153,28 @@ void UAgvSafetyComponent::BuildSweep()
 		return;
 	}
 
-	// Arc of the reference point for the banded steering angle (tricycle: heading change per distance = -tan(steer) / L).
+	// Along the planned path when there is one, as the vehicle controller would select the field set for the coming
+	// segment: the field bends with the path and ends where the vehicle will stop, so a wall behind the goal or a
+	// rack beyond a corner does not slow it. Poses are taken relative to where the vehicle believes it is.
+	TArray<FVector> Ahead;
+	FVector2D Here;
+	double HereYaw;
+	if (bFieldsFollowPath && Navigator && Localizer && Navigator->GetPathAhead(WarningLengthCm, 10.0, Ahead) && Ahead.Num() > 0 && Localizer->GetPose(Here, HereYaw))
+	{
+		double Along = 0.0;
+		for (int32 Index = 0; Index < Ahead.Num(); ++Index)
+		{
+			if (Index > 0)
+			{
+				Along += FVector2D::Distance(FVector2D(Ahead[Index]), FVector2D(Ahead[Index - 1]));
+			}
+			Sweep.Add({ AgvMath::Rotate(-HereYaw, FVector2D(Ahead[Index]) - Here), AgvMath::Wrap(Ahead[Index].Z - HereYaw), Along });
+		}
+		return;
+	}
+
+	// Otherwise the arc of the reference point for the banded steering angle (tricycle: heading change per distance =
+	// -tan(steer) / L).
 	const double Direction = FieldSet == TEXT("FORKS FIRST") ? 1.0 : -1.0;
 	double Curvature = 0.0;
 	if (Tricycle)
@@ -185,6 +219,12 @@ void UAgvSafetyComponent::Evaluate()
 	const double ProtectiveReach = bRotating ? RotationLookaheadDeg : ProtectiveLengthCm;
 	int32 ProtectiveHits = 0, WarningHits = 0;
 	FVector FirstProtective = FVector::ZeroVector;
+	// Where the vehicle believes it is, to look warning points up in the map.
+	FVector2D Reference;
+	double Yaw = 0.0;
+	const bool bMapFilter = bWarningIgnoresMappedStructure && Localizer && Localizer->GetPose(Reference, Yaw);
+	const FVector2D Origin = bMapFilter ? Reference - AgvMath::Dir(Yaw) * ReferenceX : FVector2D::ZeroVector;
+	MappedPointsIgnored = 0;
 	NearestObjectCm = -1.f;
 	for (const TArray<FVector>& Points : LatestPoints)
 	{
@@ -212,6 +252,12 @@ void UAgvSafetyComponent::Evaluate()
 				{
 					break;
 				}
+			}
+			if (bInWarning && !bInProtective && bMapFilter
+				&& Localizer->IsMappedStructure(Origin + AgvMath::Rotate(Yaw, Vehicle), MappedStructureToleranceCm))
+			{
+				bInWarning = false;
+				++MappedPointsIgnored;
 			}
 			WarningHits += bInWarning;
 			if (bInProtective && ProtectiveHits++ == 0)

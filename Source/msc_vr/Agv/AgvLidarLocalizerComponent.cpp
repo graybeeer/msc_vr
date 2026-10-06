@@ -104,6 +104,11 @@ void UAgvLidarLocalizerComponent::InitializePose()
 	StatusText = bUseLidar ? TEXT("LIDAR") : TEXT("ODOMETRY ONLY");
 }
 
+bool UAgvLidarLocalizerComponent::IsMappedStructure(const FVector2D& WorldPointCm, double ToleranceCm) const
+{
+	return Map && Map->Width > 0 && Map->Sample(WorldPointCm) <= ToleranceCm;
+}
+
 void UAgvLidarLocalizerComponent::OffsetEstimate(FVector2D OffsetCm, float YawDeg)
 {
 	FVector2D Position;

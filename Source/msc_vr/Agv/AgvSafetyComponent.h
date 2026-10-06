@@ -6,6 +6,8 @@
 
 class UAgvDriveComponent;
 class UAgvLidarComponent;
+class UAgvLocalizerComponent;
+class UAgvNavigatorComponent;
 
 UENUM(BlueprintType)
 enum class EAgvSafetyState : uint8 { Clear, Warning, Stop };
@@ -13,7 +15,8 @@ enum class EAgvSafetyState : uint8 { Clear, Warning, Stop };
 /**
  * Safety field evaluation over all safety sensors, switched like a safety controller's field sets on the intended
  * travel direction, speed band and steering band. The protective field is the area the vehicle footprint sweeps
- * along its current arc over the stopping distance (response + braking + margin, never shorter than
+ * along the planned path (cut at the next stop; the current steering arc when no path is being followed) over the
+ * stopping distance (response + braking + margin, never shorter than
  * MinProtectiveLengthCm); turning on the spot sweeps the footprint through RotationLookaheadDeg. An object in it ->
  * stop (and full braking in the drive); in the longer warning sweep -> slow. After a stop the vehicle restarts on its
  * own once the field has stayed clear for RestartDelaySeconds. Forks-first travel is capped at ForksFirstMaxSpeedCm.
@@ -36,6 +39,22 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
 	TArray<TObjectPtr<UAgvLidarComponent>> Scanners;
+
+	/** Sweep the fields along the planned path (cut at the next stop). Off = along the current steering arc only. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
+	bool bFieldsFollowPath = true;
+
+	/**
+	 * The warning field (slow down, not a safety function) ignores points on mapped static structures: racks, walls and
+	 * pillars the route was laid out around. People, protruding loads and fallen cargo are not in the map and still
+	 * count. The protective field always counts every point.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
+	bool bWarningIgnoresMappedStructure = true;
+
+	/** How close to a mapped surface a point must be to count as that structure (localization error + map cell). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
+	float MappedStructureToleranceCm = 15.f;
 
 	/** Whole vehicle outline in the actor frame (body + forks); the field is this outline swept along the path. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
@@ -139,6 +158,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Safety|Status")
 	int32 SafetyStops = 0;
 
+	/** Warning-field points dropped in the last evaluation because they lie on mapped structure. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Safety|Status")
+	int32 MappedPointsIgnored = 0;
+
 private:
 	/** A footprint pose along the swept path, relative to the current reference point (cm, rad), and its path length. */
 	struct FSweepPose
@@ -154,6 +177,12 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UAgvDriveComponent> Drive;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UAgvNavigatorComponent> Navigator;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAgvLocalizerComponent> Localizer;
+
 	TArray<TArray<FVector>> PendingPoints;
 	TArray<TArray<FVector>> LatestPoints;
 	TArray<int32> SeenRevolutions;
@@ -161,6 +190,8 @@ private:
 	double ReferenceX = 0.0;
 	double ClearSeconds = 0.0;
 	double WarningClearSeconds = 1e9; // starts released
+	/** Speed cap while slowing down in the warning field (ramps at FieldDecelerationCm). */
+	double WarningRampCm = TNumericLimits<float>::Max();
 	bool bProtectiveHit = false;
 	bool bWarningHit = false;
 	bool bRotating = false;

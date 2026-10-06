@@ -33,7 +33,7 @@ def place(x=0, y=0, yaw=180, payload=0):
     assert safety.get_editor_property('state') == SAFETY.CLEAR
 
 
-def obstacle(x, y, size):
+def obstacle(x, y, size):  # spawned at runtime, not part of the localization map
     actor = actors.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector(x, y, size[2] / 2))
     actor.static_mesh_component.set_static_mesh(cube)
     actor.set_actor_scale3d(unreal.Vector(size[0] / 100, size[1] / 100, size[2] / 100))
@@ -126,6 +126,32 @@ for payload in (0, 300):
     assert stopped > 100, ('emergency stop must keep over 1 m', stopped)
     assert closest > 90, ('restart approach must respect the protective field', closest)
     nav.cancel()
+
+# 5. Warning field and the map: turning on the spot at (400, 0) swings the body past the mapped pillar at (400, 300)
+#    (about 27 cm clear): no slowdown for mapped structure. The same swing with an unmapped person-sized object in it
+#    must still warn / stop (the protective field never uses the map).
+def pivot_states(blocker=None):
+    place(400, 0, 180)
+    actor = obstacle(*blocker) if blocker else None
+    assert nav.go_to_node('P0')
+    seen, ignored = set(), 0
+    for _ in range(int(40 / DT)):
+        vehicle.step_simulation(DT)
+        seen.add(safety.get_editor_property('state'))
+        ignored = max(ignored, safety.get_editor_property('mapped_points_ignored'))
+        if not nav.is_navigating():
+            break
+    if actor:
+        actors.destroy_actor(actor)
+    nav.cancel()
+    return seen, ignored
+
+seen, ignored = pivot_states()
+print('AGV_SAFETY_CASE pivot past the mapped pillar: states %s, up to %d mapped points ignored' % (sorted(str(x) for x in seen), ignored))
+assert SAFETY.WARNING not in seen and SAFETY.STOP not in seen and ignored > 0
+seen, _ = pivot_states((230, 170, (40, 40, 170)))
+print('AGV_SAFETY_CASE same pivot with an unmapped person-sized object in the swing: states %s' % sorted(str(x) for x in seen))
+assert SAFETY.STOP in seen or SAFETY.WARNING in seen
 
 place()
 print('AGV_SAFETY_VERIFIED')

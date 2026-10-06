@@ -20,6 +20,10 @@ struct FAgvPassiveWheel
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Wheels")
 	bool bCaster = false;
 
+	/** Vertical stiffness relative to the other wheels; spring-loaded stabiliser casters carry less of the weight. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Wheels", meta=(ClampMin="0.01"))
+	float Stiffness = 1.f;
+
 	/** Signed distance rolled (odometry); divide by the radius for the spin angle. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Wheels")
 	double TravelCm = 0.0;
@@ -92,6 +96,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Dynamics", meta=(ClampMin="1"))
 	float DriveWheelRadiusCm = 20.5f;
 
+	/** Vertical stiffness of the drive wheel relative to the passive wheels (matters with more than three wheels). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Dynamics", meta=(ClampMin="0.01"))
+	float DriveWheelStiffness = 1.f;
+
 	// Wheel speed controller, tuned for the empty vehicle: bandwidth (1/s) and integral gain (1/s^2).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Dynamics", meta=(ClampMin="0"))
 	float SpeedLoopGain = 10.f;
@@ -147,7 +155,7 @@ private:
 	};
 	FMassProperties MassProperties() const;
 	void Substep(double H, const FMassProperties& Body, FVector2D& CenterOfMass, double& Yaw);
-	void SolveWheelLoads(const FMassProperties& Body, const TArray<FVector2D>& Contacts, TArray<double>& OutLoads);
+	void SolveWheelLoads(const FMassProperties& Body, const TArray<FVector2D>& Contacts, const TArray<double>& Stiffness, TArray<double>& OutLoads);
 
 	// Rigid-body state in SI units: centre-of-mass velocity (world), yaw rate, drive wheel spin.
 	FVector2D Velocity = FVector2D::ZeroVector;

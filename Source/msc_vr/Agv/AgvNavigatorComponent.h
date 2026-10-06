@@ -41,6 +41,12 @@ public:
 	/** One control cycle; called by the owning vehicle before the drive is stepped. */
 	void Step(float Dt);
 
+	/**
+	 * Reference-point poses (world X, Y and vehicle yaw in radians as Z) along the planned path from where the vehicle
+	 * is now, every StepCm, up to DistanceCm or the next stop (a pivot or the destination). False when not following a path.
+	 */
+	bool GetPathAhead(double DistanceCm, double StepCm, TArray<FVector>& OutPoses) const;
+
 	// Limits. Defaults follow VNSL14_SPEC.md; wheel-dependent values stay configurable.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Limits", meta=(ClampMin="1"))
 	float MaxSpeedCm = 130.f;
@@ -82,6 +88,13 @@ public:
 	/** Tightest curve the tracking correction may request. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Tracking", meta=(ClampMin="1"))
 	float MinTrackingRadiusCm = 30.f;
+
+	/**
+	 * The path curvature is read this far ahead in time, so the steering starts turning before an arc begins and
+	 * reaches it about when the vehicle does (the steering takes time to swing). 0 = no preview.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Tracking", meta=(ClampMin="0"))
+	float CurvaturePreviewSeconds = 0.4f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Tracking", meta=(ClampMin="0"))
 	float DeviationWarnCm = 10.f;

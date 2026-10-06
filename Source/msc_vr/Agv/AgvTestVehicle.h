@@ -11,7 +11,10 @@ class UAgvSafetyComponent;
 class UAgvNavigatorComponent;
 class UStaticMeshComponent;
 
-/** Test vehicle on the refined orange AGV model with the force-driven tricycle drive; the wheel meshes follow the drive state. */
+/**
+ * Test vehicle: the five-wheel orange AGV (original model + drive-steer unit) on the force-driven drive. Drive-steer
+ * wheel in the middle, casters at the rear corners, fixed load rollers in the fork legs; the meshes follow the drive.
+ */
 UCLASS()
 class MSC_VR_API AAgvTestVehicle : public AActor
 {
@@ -46,9 +49,12 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV")
 	TObjectPtr<UAgvLidarComponent> TopLidar;
 
-	/** 2D safety laser scanner low in the body front (assumed built in; not in the mesh). */
+	/** The model's two low safety laser scanners at the body-end corners (+Y, -Y). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV")
-	TObjectPtr<UAgvLidarComponent> FrontScanner;
+	TObjectPtr<UAgvLidarComponent> ScannerL;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV")
+	TObjectPtr<UAgvLidarComponent> ScannerR;
 
 	/** Fork-side 3D obstacle sensors in the crossbar lenses (+Y behind the mast, -Y beside it). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV")
@@ -61,6 +67,12 @@ public:
 	TObjectPtr<UAgvSafetyComponent> Safety;
 
 private:
+	/**
+	 * Local X of the drive-steer axis: centred under the body on the fork side, near the mast (the layout the user
+	 * confirmed); as far forward as its steering circle clears the fork legs (from x 17, |y| 21).
+	 */
+	static constexpr double DriveWheelX = 5.0;
+
 	/** Steer and roll the wheel meshes to the drive's actual state. */
 	void UpdateWheelMeshes();
 
@@ -73,14 +85,21 @@ private:
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UStaticMeshComponent> DriveWheel;
 
+	/** Rear casters and fork-leg load rollers, in the order of the drive's PassiveWheels. */
 	UPROPERTY(VisibleAnywhere)
-	TObjectPtr<UStaticMeshComponent> SupportWheelL;
+	TObjectPtr<UStaticMeshComponent> RearWheelL;
 
 	UPROPERTY(VisibleAnywhere)
-	TObjectPtr<UStaticMeshComponent> SupportWheelR;
+	TObjectPtr<UStaticMeshComponent> RearWheelR;
 
 	UPROPERTY(VisibleAnywhere)
-	TObjectPtr<UStaticMeshComponent> MastInner;
+	TObjectPtr<UStaticMeshComponent> LoadRollerL;
+
+	UPROPERTY(VisibleAnywhere)
+	TObjectPtr<UStaticMeshComponent> LoadRollerR;
+
+	UPROPERTY(VisibleAnywhere)
+	TObjectPtr<UStaticMeshComponent> LiftStage;
 
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UStaticMeshComponent> LiftCarriage;

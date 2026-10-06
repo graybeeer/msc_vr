@@ -25,6 +25,9 @@ public:
 	/** Sets the estimate to the vehicle's actual pose, as an operator does when placing the AGV. */
 	virtual void InitializePose() {}
 
+	/** True when a world point (cm) lies on a mapped static structure (rack, wall, pillar). False without a map. */
+	virtual bool IsMappedStructure(const FVector2D& WorldPointCm, double ToleranceCm) const { return false; }
+
 	/** GetPose for Blueprint / Python: reference point (cm) and yaw (degrees). */
 	UFUNCTION(BlueprintCallable, Category="AGV|Localization")
 	bool GetEstimatedPose(FVector2D& PositionCm, float& YawDeg) const;
