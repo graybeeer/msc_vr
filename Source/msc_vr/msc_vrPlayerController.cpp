@@ -47,7 +47,7 @@ void Amsc_vrPlayerController::BeginPlay()
 			[SNew(SBorder).Padding(12).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 				.BorderBackgroundColor(FLinearColor(0.02f,0.03f,0.04f,.9f))
 				.Visibility_Lambda([this]() { return GetCargoReadout().IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible; })
-				[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",20)).ColorAndOpacity(FLinearColor::White)
+				[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",28)).ColorAndOpacity(FLinearColor::White)
 					.Text_Lambda([this]() { return GetCargoReadout(); })]];
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(CargoReadoutWidget.ToSharedRef(),5);
 	}
@@ -344,7 +344,14 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
  FCollisionQueryParams Params(SCENE_QUERY_STAT(CargoReadout),true,GetPawn());
  for (AActor* Roof : HiddenActors) if (Roof) Params.AddIgnoredActor(Roof);
  if (GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+PlayerCameraManager->GetCameraRotation().Vector()*(bObserverView ? 18000.f : 400.f),ECC_Visibility,Params))
+ {
   if (auto* Cargo=Cast<AWarehouseCargo>(Hit.GetActor())) return Cargo->GetCargoDescription();
+  if (!bObserverView && Hit.Distance<=250.f)
+   if (auto* Vehicle=Cast<AWarehouseForklift>(Hit.GetActor()))
+    return FText::FromString(FString::Printf(TEXT("E : %s\n%s\n배터리 %.0f%% · 적재 %.0f / %.0f kg"),
+     Vehicle->bPowered ? TEXT("자율 운행 정지") : TEXT("자율 운행 시작 / 재개"),
+     *Vehicle->Status,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
+ }
  return FText::GetEmpty();
 }
 

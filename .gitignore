@@ -98,3 +98,6 @@ DerivedDataCache/*
 
 # Rebuild refined model intermediate imports from the tracked FBX.
 /Content/Warehouse/AGV/RefinedSource/
+
+# Rebuild licensed Fab truck derivative locally with configure_truck_interior.py.
+/Content/Warehouse/Exterior/TruckInterior/
