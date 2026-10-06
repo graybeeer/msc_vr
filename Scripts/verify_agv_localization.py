@@ -104,7 +104,7 @@ assert results['odometry only'][0] > 2 * results['lidar'][0], 'LiDAR must beat o
 for name, use_lidar in (('odometry only', False), ('lidar', True)):
     place(0, 0, 180, use_lidar=use_lidar)
     drive.set_editor_property('friction_coefficient', 0.15)
-    drive.set_payload(300, unreal.Vector(100, 0, 90), unreal.Vector2D(110, 110))
+    drive.set_payload(300, unreal.Vector(55, 0, 90), unreal.Vector2D(110, 110))
     errors, _ = run(['P2', 'P0'])
     worst, mean, heading = summary(errors)
     arrived = nav.get_editor_property('state') == STATE.ARRIVED

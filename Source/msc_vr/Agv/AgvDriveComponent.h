@@ -94,7 +94,7 @@ public:
 	virtual void Step(float Dt) override;
 	virtual void Halt() override;
 
-	/** Local X of the drive wheel's steer axis; the wheelbase is ReferenceOffsetCm minus this. */
+	/** Local X of the drive wheel's steer axis; the wheelbase is ReferenceOffsetCm minus this (either side). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Wheels")
 	float DriveWheelOffsetCm = -40.f;
 
@@ -138,8 +138,18 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Wheels")
 	double SupportWheelTravelNegYCm = 0.0;
 
+	/**
+	 * Signed wheelbase: reference point (fixed axle) minus drive wheel along local X. Positive when the drive wheel is
+	 * behind the fixed axle (load rollers under the forks), negative when it is ahead of it (fixed rear axle); the
+	 * tricycle relations below hold for both signs.
+	 */
+	double WheelbaseCm() const
+	{
+		const double Wheelbase = (double)ReferenceOffsetCm - DriveWheelOffsetCm;
+		return FMath::Abs(Wheelbase) < 1.0 ? (Wheelbase < 0.0 ? -1.0 : 1.0) : Wheelbase;
+	}
+
 protected:
-	double WheelbaseCm() const { return FMath::Max(1.0, (double)ReferenceOffsetCm - DriveWheelOffsetCm); }
 
 	/** Steer angle (rad) and signed wheel rim speed (cm/s) that realise the current command, before actuator limits. */
 	void WheelTarget(double& OutSteer, double& OutSpeedCm) const;

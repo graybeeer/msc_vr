@@ -97,6 +97,7 @@ void UAgvLidarLocalizerComponent::InitializePose()
 		SeenRevolutions[Index] = Lidars[Index]->GetRevolutionCount();
 	}
 	ScanPoints.Reset();
+	bPartialScan = true;
 	TravelSinceMatchCm = 0.f;
 	AcceptedMatches = RejectedMatches = 0;
 	bLost = false;
@@ -164,8 +165,7 @@ void UAgvLidarLocalizerComponent::Step(float Dt)
 	const double Gauss = FMath::Sqrt(-2.0 * FMath::Loge(FMath::Max(Noise.FRand(), 1e-12f))) * FMath::Cos(2.0 * UE_DOUBLE_PI * Noise.FRand());
 	const double Measured = Travel * (1.0 + WheelRadiusErrorPercent / 100.0) * (1.0 + Gauss * EncoderNoisePercent / 100.0);
 	const double Steer = FMath::DegreesToRadians((double)Drive->SteerAngleDeg + SteerOffsetDeg);
-	const double Wheelbase = FMath::Max(1.0, (double)Drive->ReferenceOffsetCm - Drive->DriveWheelOffsetCm);
-	const double TurnRad = -Measured * FMath::Sin(Steer) / Wheelbase;
+	const double TurnRad = -Measured * FMath::Sin(Steer) / Drive->WheelbaseCm();
 	OdomPosition += AgvMath::Dir(OdomYaw + TurnRad * 0.5) * (Measured * FMath::Cos(Steer));
 	OdomYaw += TurnRad;
 	TravelSinceMatchCm += (float)FMath::Abs(Measured);
@@ -197,10 +197,13 @@ void UAgvLidarLocalizerComponent::Step(float Dt)
 	}
 	if (bRevolution)
 	{
-		if (bUseLidar)
+		// A scan cut short by a re-initialisation covers only part of the surroundings and biases the match (5.5 cm on
+		// the test tour): wait for the first whole revolution.
+		if (bUseLidar && !bPartialScan)
 		{
 			MatchScan();
 		}
+		bPartialScan = false;
 		ScanPoints.Reset();
 	}
 

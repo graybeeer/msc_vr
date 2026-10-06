@@ -17,7 +17,8 @@ enum class EAgvSafetyState : uint8 { Clear, Warning, Stop };
  * travel direction, speed band and steering band. The protective field is the area the vehicle footprint sweeps
  * along the planned path (cut at the next stop; the current steering arc when no path is being followed) over the
  * stopping distance (response + braking + margin, never shorter than
- * MinProtectiveLengthCm); turning on the spot sweeps the footprint through RotationLookaheadDeg. An object in it ->
+ * MinProtectiveLengthCm); turning on the spot sweeps the footprint through RotationLookaheadDeg (a planned turn: only
+ * through the rotation still to go plus its stopping angle). An object in it ->
  * stop (and full braking in the drive); in the longer warning sweep -> slow. After a stop the vehicle restarts on its
  * own once the field has stayed clear for RestartDelaySeconds. Forks-first travel is capped at ForksFirstMaxSpeedCm.
  * What a sensor cannot see (blocked by the vehicle itself, below its beam) it cannot protect.
@@ -32,6 +33,10 @@ public:
 
 	/** Evaluates the sensors' completed scans; called by the owning vehicle after the sensors have stepped. */
 	void Step(float Dt);
+
+	/** Forget the scans and any stop: the vehicle was put down somewhere else (an operator relocating it). */
+	UFUNCTION(BlueprintCallable, Category="AGV|Safety")
+	void ResetScans();
 
 	/** Off only for tests of the bare vehicle (no fields, no limits). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
@@ -108,6 +113,18 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="1", ClampMax="180"))
 	float WarningRotationDeg = 60.f;
+
+	/**
+	 * With bFieldsFollowPath, a planned turn on the spot cuts both rotation fields at the rotation still to go plus the
+	 * angle to stop from the current yaw rate (ResponseSeconds, RotationDecelerationDeg) plus this margin, as the
+	 * travel fields end at the next stop: a 1 deg alignment beside a column does not guard 30 deg of swing.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
+	float RotationMarginDeg = 3.f;
+
+	/** Yaw deceleration the stopping angle assumes (deg/s^2). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="1"))
+	float RotationDecelerationDeg = 90.f;
 
 	/** Forks-first travel has less sensor coverage (and usually a load in the way), so it is slowed. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="1"))
@@ -188,6 +205,8 @@ private:
 	TArray<int32> SeenRevolutions;
 	TArray<FSweepPose> Sweep;
 	double ReferenceX = 0.0;
+	/** Protective reach of the rotation sweep this step (deg). */
+	double ProtectiveRotationDeg = 0.0;
 	double ClearSeconds = 0.0;
 	double WarningClearSeconds = 1e9; // starts released
 	/** Speed cap while slowing down in the warning field (ramps at FieldDecelerationCm). */

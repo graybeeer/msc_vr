@@ -126,6 +126,31 @@ bool UAgvNavigatorComponent::FollowPoints(const TArray<FVector>& Points, float C
 
 bool UAgvNavigatorComponent::StartPath()
 {
+	FVector2D Position;
+	double Yaw;
+	if (bChooseLegDirection && Localizer && Localizer->GetPose(Position, Yaw))
+	{
+		for (int32 Index = 0; Index < Path.Legs.Num(); ++Index)
+		{
+			FAgvLeg& Leg = Path.Legs[Index];
+			const double Start = Leg.Segments[0].StartHeading;
+			const double End = Leg.Sample(Leg.Length).Heading;
+			const bool bLast = Index == Path.Legs.Num() - 1;
+			// Vehicle yaw on the leg is the motion heading, plus half a turn when local -X leads.
+			auto Turning = [&](bool bReverse)
+			{
+				const double Flip = bReverse ? UE_DOUBLE_PI : 0.0;
+				double Total = FMath::Abs(AgvMath::Wrap(Start + Flip - Yaw));
+				if (bLast && Path.bHasFinalYaw)
+				{
+					Total += FMath::Abs(AgvMath::Wrap(Path.FinalYaw - (End + Flip)));
+				}
+				return Total;
+			};
+			Leg.bReverse = Turning(bDriveReversed) - Turning(!bDriveReversed) > UE_DOUBLE_HALF_PI ? !bDriveReversed : bDriveReversed;
+			Yaw = End + (Leg.bReverse ? UE_DOUBLE_PI : 0.0);
+		}
+	}
 	LegIndex = 0;
 	MaxTrueCrossTrackErrorCm = TrueCrossTrackErrorCm = CrossTrackErrorCm = 0.f;
 	bDeviationWarning = false;

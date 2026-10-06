@@ -20,8 +20,11 @@ nav.set_editor_property('draw_debug', False)
 safety.set_editor_property('draw_fields', False)
 cube = unreal.load_asset('/Engine/BasicShapes/Cube')
 OFFSET = drive.get_editor_property('reference_offset_cm')
-# Footprint in the actor frame (cm): body and the two forks.
-FOOTPRINT = [((-94, -61), (37, 61)), ((37, -40), (182, -22)), ((37, 22), (182, 40))]
+# Footprint in the actor frame (cm): body to the fork heels and the two full-size forks (115 cm, y 16-34).
+_fp = safety.get_editor_property('footprint')
+BODY_END, HALF_WIDTH, FORK_TIP = -_fp.min.x, _fp.max.y, _fp.max.x
+HEEL = FORK_TIP - 115
+FOOTPRINT = [((-BODY_END, -HALF_WIDTH), (HEEL, HALF_WIDTH)), ((HEEL, -34), (FORK_TIP, -16)), ((HEEL, 16), (FORK_TIP, 34))]
 results = []
 
 
@@ -90,7 +93,7 @@ place(0, 0, 180)
 assert nav.go_to_node('P2')
 while abs(drive.get_editor_property('speed_cm_s')) < 125:
     vehicle.step_simulation(DT)
-front = vehicle.get_actor_location().x + 94
+front = vehicle.get_actor_location().x + BODY_END
 cross_x = front + 125 * 2.0 + 250  # where the body front would be in 2 s, plus 250 cm
 person = worker(cross_x, -280)
 walk = lambda t: person.set_actor_location(unreal.Vector(cross_x, -280 + 140 * t, 96), False, True)
@@ -104,20 +107,20 @@ assert nav.go_to_node('P3')
 report('C worker on the lane just around a corner', *watch(person, 34, 30))
 actors.destroy_actor(person)
 
-# D. Worker beside the lane (outside every field on the approach) where the body end swings when the vehicle turns on
-#    the spot at P4: it pivots about the fork load-roller axle, so turning from heading east to north body-first
-#    swings the 2.5 m body through the north-east quadrant.
+# D. Worker beside the lane (outside every field on the approach) where the forks swing when the vehicle turns on the
+#    spot at P4: it pivots about the support-wheel axle, so turning from heading east to north body-first swings the
+#    1.25 m forks through the south-west quadrant.
 place(1200, 600, 180)
-person = worker(1741, 741)
+person = worker(1540, 485)
 assert nav.go_to_node('S1')
-report('D worker in the body swing of a pivot turn', *watch(person, 34, 60), '(corner scanners)')
+report('D worker in the fork swing of a pivot turn', *watch(person, 34, 60), '(corner scanners)')
 actors.destroy_actor(person)
 
 # E. Forks-first travel toward a worker.
 place(0, 0, 0, forks_lead=True)
 person = worker(900, 0)
 assert nav.go_to_node('P2')
-report('E forks-first travel toward a worker', *watch(person, 34, 25), '(forks-first capped at 50 cm/s)')
+report('E forks-first travel toward a worker', *watch(person, 34, 40), '(forks-first capped at 30 cm/s)')
 actors.destroy_actor(person)
 nav.set_editor_property('drive_reversed', True)
 
@@ -126,7 +129,7 @@ place(0, 0, 180)
 assert nav.go_to_node('P2')
 while abs(drive.get_editor_property('speed_cm_s')) < 125:
     vehicle.step_simulation(DT)
-drop_x = vehicle.get_actor_location().x + 94 + 300
+drop_x = vehicle.get_actor_location().x + BODY_END + 300
 carton = box(drop_x, 0, 270, (60, 40, 40))
 fall = lambda t: carton.set_actor_location(unreal.Vector(drop_x, 0, max(20.0, 270 - 0.5 * 981 * t * t)), False, True)
 report('F carton falls from the rack into the lane ahead', *watch(carton, 30, 12, fall))

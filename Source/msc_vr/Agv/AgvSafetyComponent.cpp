@@ -14,6 +14,25 @@ UAgvSafetyComponent::UAgvSafetyComponent()
 	PrimaryComponentTick.bCanEverTick = false;
 }
 
+void UAgvSafetyComponent::ResetScans()
+{
+	for (int32 Index = 0; Index < Scanners.Num(); ++Index)
+	{
+		TArray<FVector> Discard;
+		if (Scanners[Index])
+		{
+			Scanners[Index]->TakePoints(Discard);
+		}
+	}
+	PendingPoints.Reset();
+	LatestPoints.Reset();
+	SeenRevolutions.Reset();
+	bProtectiveHit = bWarningHit = false;
+	ClearSeconds = RestartDelaySeconds;
+	WarningClearSeconds = 1e9;
+	State = EAgvSafetyState::Clear;
+}
+
 void UAgvSafetyComponent::Step(float Dt)
 {
 	if (!Drive)
@@ -120,19 +139,39 @@ void UAgvSafetyComponent::Step(float Dt)
 
 void UAgvSafetyComponent::BuildSweep()
 {
-	// Field switching on the intended motion: the controller's command picks the direction (so the right field is
-	// active before the vehicle starts), the actual speed picks the band, the steering encoder picks the curve.
-	// With no motion requested the last field set stays (a stopped vehicle still guards where it is about to go).
+	// Field switching on the intended motion: following a path, the planned motion picks the set (straight travel in
+	// the path's direction, or the turn on the spot in progress), so a vehicle stopped after a turn does not keep a
+	// rotation field that blocks the travel it is about to start (and, stopped, could never switch out of). Otherwise
+	// the controller's command picks the direction (so the right field is active before the vehicle starts). The actual
+	// speed picks the band, the steering encoder picks the curve. While the vehicle still moves without a request the
+	// last set stays; parked with nothing planned there is no field (STANDSTILL).
 	const double Speed = Drive->SpeedCmS;
 	const double Command = Drive->GetCommandSpeedCmS();
 	const double Turn = Drive->GetCommandYawRateDegS();
-	if (FMath::Abs(Speed) > 2.0 || FMath::Abs(Command) > 0.5)
+	double Remaining;
+	if (bFieldsFollowPath && Navigator && Navigator->IsNavigating())
+	{
+		if (!Navigator->GetPivotRemainingDeg(Remaining))
+		{
+			FieldSet = Navigator->IsLegReversed() ? TEXT("BODY FIRST") : TEXT("FORKS FIRST");
+		}
+		else if (FMath::Abs(Remaining) > 0.05)
+		{
+			FieldSet = Remaining > 0.0 ? TEXT("ROTATE LEFT") : TEXT("ROTATE RIGHT");
+		}
+	}
+	else if (FMath::Abs(Speed) > 2.0 || FMath::Abs(Command) > 0.5)
 	{
 		FieldSet = (FMath::Abs(Speed) > 2.0 ? Speed : Command) > 0.0 ? TEXT("FORKS FIRST") : TEXT("BODY FIRST");
 	}
 	else if (FMath::Abs(Turn) > 0.5)
 	{
 		FieldSet = Turn > 0.0 ? TEXT("ROTATE LEFT") : TEXT("ROTATE RIGHT");
+	}
+	else if (FMath::Abs(Speed) <= 2.0 && FMath::Abs((double)Drive->YawRateDegS) < 1.0)
+	{
+		// Parked with nothing planned: no motion to guard (a new order switches the set before the vehicle moves).
+		FieldSet = TEXT("STANDSTILL");
 	}
 	bRotating = FieldSet.StartsWith(TEXT("ROTATE"));
 
@@ -143,11 +182,28 @@ void UAgvSafetyComponent::BuildSweep()
 	WarningLengthCm = FMath::Max(WarningFieldLengthCm, ProtectiveLengthCm);
 
 	Sweep.Reset();
+	if (FieldSet == TEXT("STANDSTILL"))
+	{
+		return;
+	}
 	if (bRotating)
 	{
 		const double Sign = FieldSet == TEXT("ROTATE LEFT") ? 1.0 : -1.0;
-		for (double Angle = 0.0; Angle <= WarningRotationDeg + 1e-3; Angle += 3.0)
+		double WarningReach = WarningRotationDeg;
+		ProtectiveRotationDeg = RotationLookaheadDeg;
+		double ToGo;
+		if (bFieldsFollowPath && Navigator && Navigator->GetPivotRemainingDeg(ToGo))
 		{
+			const double Rate = FMath::Abs((double)Drive->YawRateDegS);
+			const double Planned = FMath::Abs(ToGo) + Rate * ResponseSeconds + Rate * Rate / (2.0 * RotationDecelerationDeg) + RotationMarginDeg;
+			WarningReach = FMath::Min(WarningReach, Planned);
+			ProtectiveRotationDeg = FMath::Min(ProtectiveRotationDeg, Planned);
+		}
+		// Poses at most 3 deg apart, the last one exactly at the reach.
+		const int32 Steps = FMath::Max(1, FMath::CeilToInt32(WarningReach / 3.0));
+		for (int32 Index = 0; Index <= Steps; ++Index)
+		{
+			const double Angle = WarningReach * Index / Steps;
 			Sweep.Add({ FVector2D::ZeroVector, Sign * FMath::DegreesToRadians(Angle), Angle });
 		}
 		return;
@@ -180,8 +236,7 @@ void UAgvSafetyComponent::BuildSweep()
 	if (Tricycle)
 	{
 		const double Steer = FMath::Clamp(FMath::RoundToDouble(Tricycle->SteerAngleDeg / SteerBandDeg) * SteerBandDeg, -80.0, 80.0);
-		const double Wheelbase = FMath::Max(1.0, (double)Tricycle->ReferenceOffsetCm - Tricycle->DriveWheelOffsetCm);
-		Curvature = -FMath::Tan(FMath::DegreesToRadians(Steer)) / Wheelbase;
+		Curvature = -FMath::Tan(FMath::DegreesToRadians(Steer)) / Tricycle->WheelbaseCm();
 	}
 	const double StepCm = FMath::Min(10.0, FMath::DegreesToRadians(5.0) / FMath::Max(FMath::Abs(Curvature), 1e-6));
 	FVector2D Position = FVector2D::ZeroVector;
@@ -216,7 +271,7 @@ void UAgvSafetyComponent::Evaluate()
 	};
 	const FBox2D Protective = Grow(SideMarginCm);
 	const FBox2D Warning = Grow(SideMarginCm + WarningExtraWidthCm);
-	const double ProtectiveReach = bRotating ? RotationLookaheadDeg : ProtectiveLengthCm;
+	const double ProtectiveReach = bRotating ? ProtectiveRotationDeg : ProtectiveLengthCm;
 	int32 ProtectiveHits = 0, WarningHits = 0;
 	FVector FirstProtective = FVector::ZeroVector;
 	// Where the vehicle believes it is, to look warning points up in the map.
@@ -277,7 +332,7 @@ void UAgvSafetyComponent::Evaluate()
 void UAgvSafetyComponent::DrawFields() const
 {
 	const FTransform Actor = GetOwner()->GetActorTransform();
-	const double ProtectiveReach = bRotating ? RotationLookaheadDeg : ProtectiveLengthCm;
+	const double ProtectiveReach = bRotating ? ProtectiveRotationDeg : ProtectiveLengthCm;
 	auto Outline = [&](const FSweepPose& Pose, const FBox2D& Box, const FColor& Color)
 	{
 		const FVector2D Corners[4] = { Box.Min, FVector2D(Box.Max.X, Box.Min.Y), Box.Max, FVector2D(Box.Min.X, Box.Max.Y) };

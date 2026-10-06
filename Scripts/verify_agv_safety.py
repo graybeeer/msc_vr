@@ -26,7 +26,7 @@ def place(x=0, y=0, yaw=180, payload=0):
     nav.cancel()
     drive.clear_payload()
     if payload:
-        drive.set_payload(payload, unreal.Vector(100, 0, 90), unreal.Vector2D(110, 110))
+        drive.set_payload(payload, unreal.Vector(55, 0, 90), unreal.Vector2D(110, 110))
     vehicle.teleport_reference(unreal.Vector2D(x, y), yaw)
     for _ in range(150):  # settle 2.5 s: localization map built before any obstacle exists, a previous stop released
         vehicle.step_simulation(DT)
@@ -127,11 +127,13 @@ for payload in (0, 300):
     assert closest > 90, ('restart approach must respect the protective field', closest)
     nav.cancel()
 
-# 5. Warning field and the map: turning on the spot at (400, 0) swings the body past the mapped pillar at (400, 300)
+# 5. Warning field and the map: turning on the spot about the rear axle at (400, 0) swings the forks past the mapped
+#    pillar at (400, -172)
 #    (about 27 cm clear): no slowdown for mapped structure. The same swing with an unmapped person-sized object in it
 #    must still warn / stop (the protective field never uses the map).
 def pivot_states(blocker=None):
     place(400, 0, 180)
+    nav.set_editor_property('choose_leg_direction', False)  # turn round here rather than back up
     actor = obstacle(*blocker) if blocker else None
     assert nav.go_to_node('P0')
     seen, ignored = set(), 0
@@ -144,12 +146,13 @@ def pivot_states(blocker=None):
     if actor:
         actors.destroy_actor(actor)
     nav.cancel()
+    nav.set_editor_property('choose_leg_direction', True)
     return seen, ignored
 
 seen, ignored = pivot_states()
 print('AGV_SAFETY_CASE pivot past the mapped pillar: states %s, up to %d mapped points ignored' % (sorted(str(x) for x in seen), ignored))
 assert SAFETY.WARNING not in seen and SAFETY.STOP not in seen and ignored > 0
-seen, _ = pivot_states((230, 170, (40, 40, 170)))
+seen, _ = pivot_states((330, -95, (40, 40, 170)))
 print('AGV_SAFETY_CASE same pivot with an unmapped person-sized object in the swing: states %s' % sorted(str(x) for x in seen))
 assert SAFETY.STOP in seen or SAFETY.WARNING in seen
 

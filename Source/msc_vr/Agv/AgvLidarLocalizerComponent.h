@@ -167,4 +167,7 @@ private:
 
 	/** Points of the scan in progress, odometry frame (cm). */
 	TArray<FVector2D> ScanPoints;
+
+	/** The revolution in progress when the pose was (re)initialised is only partly collected: not matched. */
+	bool bPartialScan = false;
 };

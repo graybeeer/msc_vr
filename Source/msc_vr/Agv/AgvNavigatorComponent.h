@@ -47,6 +47,16 @@ public:
 	 */
 	bool GetPathAhead(double DistanceCm, double StepCm, TArray<FVector>& OutPoses) const;
 
+	/** Whether the vehicle's local -X leads on the leg being driven (or about to be). */
+	bool IsLegReversed() const { return Path.Legs.IsValidIndex(LegIndex) ? Path.Legs[LegIndex].bReverse : bDriveReversed; }
+
+	/** While turning on the spot: the rotation still to go (deg, signed, + = left). False otherwise. */
+	bool GetPivotRemainingDeg(double& OutDeg) const
+	{
+		OutDeg = HeadingErrorDeg;
+		return State == EAgvNavState::Pivot;
+	}
+
 	// Limits. Defaults follow VNSL14_SPEC.md; wheel-dependent values stay configurable.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Limits", meta=(ClampMin="1"))
 	float MaxSpeedCm = 130.f;
@@ -67,6 +77,14 @@ public:
 	/** The vehicle's local -X leads (VNSL14 main travel direction: forks trailing). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Limits")
 	bool bDriveReversed = true;
+
+	/**
+	 * Drive a leg the other way round (bDriveReversed flipped: forks first, slower) when that saves more than a quarter
+	 * turn on the spot, counting the turn onto the leg and, on the last leg, the turn to the final yaw. A long vehicle
+	 * turning round in a narrow lane sweeps more than the lane has; real AGVs back up instead.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Limits")
+	bool bChooseLegDirection = true;
 
 	// Path shape.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Path", meta=(ClampMin="0"))

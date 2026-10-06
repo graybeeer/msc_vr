@@ -117,7 +117,9 @@ def wheels():
             support[0].get_editor_property('travel_cm'), support[1].get_editor_property('travel_cm'))
 
 
+# By default the vehicle would back up (forks first) instead of turning round; this case checks the turn itself.
 place(0, 0, 0)
+nav.set_editor_property('choose_leg_direction', False)
 start_yaw = vehicle.get_actor_rotation().yaw
 assert nav.go_to_node('P2')
 for _ in range(120):
@@ -128,6 +130,13 @@ for _ in range(120):
 assert abs(wheels()[0]) > 80, ('steer for pivot', wheels()[0])
 vehicle.simulate_until_idle(120, DT)
 assert state() == STATE.ARRIVED
+nav.set_editor_property('choose_leg_direction', True)
+# With the choice on, the same order backs up to P2 without turning round.
+place(0, 0, 0)
+assert nav.go_to_node('P2')
+vehicle.simulate_until_idle(120, DT)
+assert state() == STATE.ARRIVED and abs(unreal.MathLibrary.normalize_axis(vehicle.get_actor_rotation().yaw)) < 1.0, 'backed up'
+print('AGV_NAV_CASE opposite start: turns on the spot with the choice off, backs up forks first with it on')
 
 # 12. Straight run: the wheels roll exactly the distance travelled; the steering ends straight.
 place(0, 0, 180)

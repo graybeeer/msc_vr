@@ -13,14 +13,14 @@ AAgvTestVehicle::AAgvTestVehicle()
 	PrimaryActorTick.bCanEverTick = true;
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 
-	// Five-wheel orange AGV, forks along local +X: the original model's parts (/Game/Warehouse/AGV/Original5) plus the
-	// refined model's drive-steer unit under the middle of the chassis. Wheel parts are pivoted at their centres,
-	// everything else at the vehicle origin (see FORKLIFT_NAVIGATION.md).
-	auto Part = [&](const TCHAR* Name, const TCHAR* Asset, USceneComponent* Parent, const FVector& Location)
+	// The teammate's orange AGV (WarehouseForklift on main), forks along local +X, origin at the fork heel face: the same
+	// meshes (/Game/Warehouse/AGV/Meshes, the refined model at 215 / 282.55, wheels pivoted at their centres) at the same
+	// places. Three wheels: drive-steer under the rear body, fixed support wheels beside the fork heels.
+	auto Part = [&](const TCHAR* Name, USceneComponent* Parent, const FVector& Location)
 	{
 		UStaticMeshComponent* Mesh = CreateDefaultSubobject<UStaticMeshComponent>(Name);
 		Mesh->SetupAttachment(Parent);
-		Mesh->SetStaticMesh(ConstructorHelpers::FObjectFinder<UStaticMesh>(Asset).Object);
+		Mesh->SetStaticMesh(ConstructorHelpers::FObjectFinder<UStaticMesh>(*FString::Printf(TEXT("/Game/Warehouse/AGV/Meshes/SM_Refined_AGV_%s"), Name)).Object);
 		Mesh->SetRelativeLocation(Location);
 		// Solid to queries only (no physics): blocks the vehicle's own sensors and is seen by everyone else's.
 		Mesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
@@ -28,62 +28,77 @@ AAgvTestVehicle::AAgvTestVehicle()
 		Mesh->SetCollisionResponseToAllChannels(ECR_Block);
 		return Mesh;
 	};
-	Chassis = Part(TEXT("Body"), TEXT("/Game/Warehouse/AGV/Original5/SM_AGV5_Body"), RootComponent, FVector::ZeroVector);
-	LiftStage = Part(TEXT("LiftStage"), TEXT("/Game/Warehouse/AGV/Original5/SM_AGV5_LiftStage"), Chassis, FVector::ZeroVector);
-	LiftCarriage = Part(TEXT("Carriage"), TEXT("/Game/Warehouse/AGV/Original5/SM_AGV5_Carriage"), LiftStage, FVector::ZeroVector);
-	Part(TEXT("Forks"), TEXT("/Game/Warehouse/AGV/Original5/SM_AGV5_Forks"), LiftCarriage, FVector::ZeroVector);
-
-	// Wheels: drive-steer (middle), casters (rear corners), fixed load rollers (fork legs). Positions match PassiveWheels.
-	DriveSteer = Part(TEXT("DriveSteer"), TEXT("/Game/Warehouse/AGV/Refined/SM_AGV_DriveSteer"), Chassis, FVector(DriveWheelX, 0, 43.5));
-	DriveWheel = Part(TEXT("DriveWheel"), TEXT("/Game/Warehouse/AGV/Refined/SM_AGV_Wheel_Drive"), DriveSteer, FVector(0, 0, -23));
-	RearWheelL = Part(TEXT("RearWheelL"), TEXT("/Game/Warehouse/AGV/Original5/SM_AGV5_RearWheelL"), Chassis, FVector(-58, 34, 17));
-	RearWheelR = Part(TEXT("RearWheelR"), TEXT("/Game/Warehouse/AGV/Original5/SM_AGV5_RearWheelR"), Chassis, FVector(-58, -34, 17));
-	LoadRollerL = Part(TEXT("LoadRollerL"), TEXT("/Game/Warehouse/AGV/Original5/SM_AGV5_LoadRollerL"), Chassis, FVector(153, 31, 9.8));
-	LoadRollerR = Part(TEXT("LoadRollerR"), TEXT("/Game/Warehouse/AGV/Original5/SM_AGV5_LoadRollerR"), Chassis, FVector(153, -31, 9.8));
+	Chassis = Part(TEXT("Body"), RootComponent, FVector::ZeroVector);
+	UStaticMeshComponent* LiftStage = Part(TEXT("LiftStage"), Chassis, FVector::ZeroVector);
+	Part(TEXT("LiftRam"), LiftStage, FVector::ZeroVector);
+	Part(TEXT("LiftPulley"), LiftStage, FVector::ZeroVector);
+	Part(TEXT("LiftChains"), Chassis, FVector(0.0, 0.0, 15.0))->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	// The carrier sits behind the fork heels, as on the teammate's model.
+	USceneComponent* Carriage = CreateDefaultSubobject<USceneComponent>(TEXT("CarriageFrame"));
+	Carriage->SetupAttachment(Chassis);
+	Part(TEXT("Carriage"), Carriage, FVector(-10.0, 0.0, 0.0));
+	Part(TEXT("ForkL"), Carriage, FVector::ZeroVector);
+	Part(TEXT("ForkR"), Carriage, FVector::ZeroVector);
+	// The drive unit's mesh is modelled in place: hang it off a pivot on its steer axis so it turns about that axis.
+	SteerPivot = CreateDefaultSubobject<USceneComponent>(TEXT("SteerPivot"));
+	SteerPivot->SetupAttachment(Chassis);
+	SteerPivot->SetRelativeLocation(FVector(DriveWheelX, 0.0, 0.0));
+	Part(TEXT("DriveSteer"), SteerPivot, FVector(-DriveWheelX, 0.0, 0.0));
+	DriveWheel = Part(TEXT("DriveWheel"), SteerPivot, FVector(0.0, 0.0, 15.6));
+	SupportWheelL = Part(TEXT("LoadWheelL"), Chassis, FVector(SupportWheelX, SupportWheelY, 8.0));
+	SupportWheelR = Part(TEXT("LoadWheelR"), Chassis, FVector(SupportWheelX, -SupportWheelY, 8.0));
 
 	Navigator = CreateDefaultSubobject<UAgvNavigatorComponent>(TEXT("Navigator"));
 	Drive = CreateDefaultSubobject<UAgvDynamicDriveComponent>(TEXT("Drive"));
 	Localizer = CreateDefaultSubobject<UAgvLidarLocalizerComponent>(TEXT("Localizer"));
 
-	// The load rollers' fixed axle is the non-slip line: the reference point is its middle, and turning on the spot
-	// pivots there, swinging the body end through a radius of about 2.5 m. Wheels sit on the ground at their radius
-	// (the model's roller centre is 0.7 cm and its rear wheel centre 1 cm above its own floor).
-	Drive->ReferenceOffsetCm = 153.f;
-	Drive->DriveWheelOffsetCm = DriveWheelX;
-	// Centre of mass from a part estimate: battery, drive and electronics in the body (~550 kg at x -30), mast,
-	// carriage and forks (~250 kg at x 35), fork legs (~100 kg at x 90), tower and covers (~100 kg at x -20).
-	Drive->ChassisCenterOfMassCm = FVector(0.0, 0.0, 70.0);
-	Drive->ChassisYawInertiaKgM2 = 400.f;
-	// The stabiliser casters are spring-loaded (a fifth of the stiffness), so the drive wheel and the load rollers
-	// carry the weight and the drive wheel keeps its grip, as on real stackers.
-	auto Wheel = [](double X, double Y, double Radius, bool bCaster)
+	// The support wheels' fixed axle is the non-slip line: the reference point is its middle, and turning on the spot
+	// pivots there, swinging the fork tips through a radius of about 1.25 m and the body end about 1.05 m.
+	Drive->ReferenceOffsetCm = (float)SupportWheelX;
+	Drive->DriveWheelOffsetCm = (float)DriveWheelX;
+	Drive->DriveWheelRadiusCm = 15.6f;
+	// Centre of mass from a part estimate (refined source cm): battery, drive and electronics in the body (~650 kg at
+	// x -30), mast, carriage and forks (~250 kg at x 35), tower and covers (~100 kg at x -20), 70 cm high: 1,000 kg
+	// (VNSL14), about 36 cm behind the fork heels. No counterweight: the load hangs in front of the support wheels and
+	// the body behind them holds it (RatedLoadKg; the tipping limit is in FORKLIFT_NAVIGATION.md).
+	Drive->ChassisMassKg = 1000.f;
+	Drive->ChassisCenterOfMassCm = Refined((650.0 * -30.0 + 250.0 * 35.0 + 100.0 * -20.0) / 1000.0, 0.0, 70.0);
+	Drive->ChassisYawInertiaKgM2 = (float)(400.0 * ModelScale * ModelScale);
+	// Same tractive and braking force as at the source model's wheel (radius 20.5).
+	Drive->MaxDriveTorqueNm = (float)(Drive->MaxDriveTorqueNm * Drive->DriveWheelRadiusCm / 20.5);
+	Drive->SafetyBrakeTorqueNm = (float)(Drive->SafetyBrakeTorqueNm * Drive->DriveWheelRadiusCm / 20.5);
+	auto Wheel = [](double Y)
 	{
 		FAgvPassiveWheel Result;
-		Result.PositionCm = FVector2D(X, Y);
-		Result.RadiusCm = (float)Radius;
-		Result.bCaster = bCaster;
-		Result.Stiffness = bCaster ? 0.2f : 1.f;
+		Result.PositionCm = FVector2D(SupportWheelX, Y);
+		Result.RadiusCm = 8.f;
 		return Result;
 	};
-	Drive->PassiveWheels = { Wheel(-58, 34, 17, true), Wheel(-58, -34, 17, true), Wheel(153, 31, 9.8, false), Wheel(153, -31, 9.8, false) };
-	// The body end moves at yaw rate x 2.5 m when turning on the spot; 25 deg/s keeps it near 1.1 m/s.
-	Navigator->MaxYawRateDeg = 25.f;
+	Drive->PassiveWheels = { Wheel(SupportWheelY), Wheel(-SupportWheelY) };
+	// The fork tips move at yaw rate x 1.25 m when turning on the spot; 45 deg/s keeps them near 1 m/s.
+	Navigator->MaxYawRateDeg = 45.f;
+	// The short wheelbase (51 cm) turns quickly: steer 0.2 s before an arc (0.4 s overshoots it by 5 cm, 0.2 s: 1.3 cm).
+	Navigator->CurvaturePreviewSeconds = 0.2f;
 
-	// Optical centre of the puck on the sensor tower mast.
+	// Sensors at the refined model's positions (Refined()), on the root. Optical centre of the puck on the sensor tower.
 	TopLidar = CreateDefaultSubobject<UAgvLidarComponent>(TEXT("TopLidar"));
-	TopLidar->SetupAttachment(Chassis);
-	TopLidar->SetRelativeLocation(FVector(-36, -10, 277));
+	TopLidar->SetupAttachment(RootComponent);
+	TopLidar->SetRelativeLocation(Refined(-36, -10, 272));
+	// Sensor resolutions below are halved/quartered from the first build to keep the ray casting real-time in the
+	// warehouse (all five sensors 14 -> about 5 ms per frame); localization and detection are re-checked with them.
+	TopLidar->HorizontalResolutionDeg = 0.8f;
 
-	// The model's two low safety scanners at the body-end corners (optical belt 27 cm above the floor), each facing
-	// diagonally outward with 270 deg: together they cover the main travel direction (-X) and both sides of the body.
+	// Two low safety scanners at the body-end corners (optical belt about 21 cm above the floor), each facing diagonally
+	// outward with 270 deg: together they cover the main travel direction (-X) and both sides of the body. The refined
+	// model has none modelled; this is where the original model has them, moved out to the refined body's corners.
 	auto CornerScanner = [&](const TCHAR* Name, double Y, double Yaw, int32 Seed)
 	{
 		UAgvLidarComponent* Scanner = CreateDefaultSubobject<UAgvLidarComponent>(Name);
-		Scanner->SetupAttachment(Chassis);
-		Scanner->SetRelativeLocationAndRotation(FVector(-73, Y, 27), FRotator(0.0, Yaw, 0.0));
+		Scanner->SetupAttachment(RootComponent);
+		Scanner->SetRelativeLocationAndRotation(Refined(-73, Y, 27), FRotator(0.0, Yaw, 0.0));
 		Scanner->bUseForLocalization = false;
 		Scanner->HorizontalFovDeg = 270.f;
-		Scanner->HorizontalResolutionDeg = 0.5f;
+		Scanner->HorizontalResolutionDeg = 1.f;
 		Scanner->Channels = 1;
 		Scanner->VerticalMinDeg = Scanner->VerticalMaxDeg = 0.f;
 		Scanner->RotationHz = 25.f;
@@ -94,20 +109,20 @@ AAgvTestVehicle::AAgvTestVehicle()
 		Scanner->NoiseSeed = Seed;
 		return Scanner;
 	};
-	ScannerL = CornerScanner(TEXT("ScannerL"), 41.0, 135.0, 23);
-	ScannerR = CornerScanner(TEXT("ScannerR"), -41.0, -135.0, 29);
+	ScannerL = CornerScanner(TEXT("ScannerL"), 47.0, 135.0, 23);
+	ScannerR = CornerScanner(TEXT("ScannerR"), -47.0, -135.0, 29);
 
 	// Fork-side 3D obstacle sensors (ToF depth cameras) in the two lenses at the ends of the tower crossbar, looking
 	// toward the forks and down: 80 x 50 deg, 20 frames/s, 0.2-6 m. The +Y one sits behind the mast as modelled.
 	auto ForkSensor = [&](const TCHAR* Name, double Y)
 	{
 		UAgvLidarComponent* Sensor = CreateDefaultSubobject<UAgvLidarComponent>(Name);
-		Sensor->SetupAttachment(Chassis);
-		Sensor->SetRelativeLocationAndRotation(FVector(-22, Y, 235), FRotator(-30.0, 0.0, 0.0));
+		Sensor->SetupAttachment(RootComponent);
+		Sensor->SetRelativeLocationAndRotation(Refined(-22, Y, 235), FRotator(-30.0, 0.0, 0.0));
 		Sensor->bUseForLocalization = false;
 		Sensor->HorizontalFovDeg = 80.f;
-		Sensor->HorizontalResolutionDeg = 1.5f;
-		Sensor->Channels = 30;
+		Sensor->HorizontalResolutionDeg = 3.f;
+		Sensor->Channels = 15;
 		Sensor->VerticalMinDeg = -25.f;
 		Sensor->VerticalMaxDeg = 25.f;
 		Sensor->RotationHz = 20.f;
@@ -123,7 +138,10 @@ AAgvTestVehicle::AAgvTestVehicle()
 
 	Safety = CreateDefaultSubobject<UAgvSafetyComponent>(TEXT("Safety"));
 	Safety->Scanners = { ScannerL, ScannerR, ForkSensorL, ForkSensorR };
-	Safety->Footprint = FBox2D(FVector2D(-94.0, -54.0), FVector2D(182.0, 54.0));
+	// Body end (-97.4) to the fork tips (115), across the support wheels (+-49.7), as measured on the teammate's model.
+	Safety->Footprint = FBox2D(FVector2D(-97.4, -49.7), FVector2D(115.0, 49.7));
+	// VNSL14: 0.3 m/s with the forks leading.
+	Safety->ForksFirstMaxSpeedCm = 30.f;
 }
 
 void AAgvTestVehicle::Tick(float DeltaSeconds)
@@ -148,22 +166,19 @@ void AAgvTestVehicle::StepSimulation(float Dt)
 
 void AAgvTestVehicle::UpdateWheelMeshes()
 {
-	// The wheels roll about their local Y axis; casters first swivel about the vertical into their direction of travel.
+	// The wheels roll about their local Y axis; the drive unit turns about its steer axis.
 	const auto Spin = [](double TravelCm, double RadiusCm)
 	{
 		return -FMath::Fmod(FMath::RadiansToDegrees(TravelCm / RadiusCm), 360.0);
 	};
-	DriveSteer->SetRelativeRotation(FRotator(0.0, Drive->SteerAngleDeg, 0.0));
+	SteerPivot->SetRelativeRotation(FRotator(0.0, Drive->SteerAngleDeg, 0.0));
 	DriveWheel->SetRelativeRotation(FRotator(Spin(Drive->DriveWheelTravelCm, Drive->DriveWheelRadiusCm), 0.0, 0.0));
 	// In the order of the drive's PassiveWheels.
-	UStaticMeshComponent* const Meshes[] = { RearWheelL, RearWheelR, LoadRollerL, LoadRollerR };
+	UStaticMeshComponent* const Meshes[] = { SupportWheelL, SupportWheelR };
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Meshes) && Index < Drive->PassiveWheels.Num(); ++Index)
 	{
 		const FAgvPassiveWheel& Wheel = Drive->PassiveWheels[Index];
-		if (Meshes[Index])
-		{
-			Meshes[Index]->SetRelativeRotation(FRotator(Spin(Wheel.TravelCm, Wheel.RadiusCm), Wheel.bCaster ? Wheel.SwivelDeg : 0.0, 0.0));
-		}
+		Meshes[Index]->SetRelativeRotation(FRotator(Spin(Wheel.TravelCm, Wheel.RadiusCm), Wheel.bCaster ? Wheel.SwivelDeg : 0.0, 0.0));
 	}
 }
 
@@ -184,4 +199,5 @@ void AAgvTestVehicle::TeleportReference(FVector2D Position, float YawDeg)
 	const FVector2D Origin = Position - AgvMath::Dir(FMath::DegreesToRadians((double)YawDeg)) * Drive->ReferenceOffsetCm;
 	SetActorLocationAndRotation(FVector(Origin.X, Origin.Y, GetActorLocation().Z), FRotator(0.0, YawDeg, 0.0));
 	Localizer->InitializePose();
+	Safety->ResetScans();
 }

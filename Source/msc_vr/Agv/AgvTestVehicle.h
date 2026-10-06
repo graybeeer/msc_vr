@@ -12,8 +12,9 @@ class UAgvNavigatorComponent;
 class UStaticMeshComponent;
 
 /**
- * Test vehicle: the five-wheel orange AGV (original model + drive-steer unit) on the force-driven drive. Drive-steer
- * wheel in the middle, casters at the rear corners, fixed load rollers in the fork legs; the meshes follow the drive.
+ * Test vehicle: the teammate's three-wheel orange AGV on the force-driven drive. Drive-steer wheel under the rear body,
+ * fixed support wheels beside the fork heels (nothing under the forks, so they reach the warehouse pallets and rack
+ * beams). The meshes follow the drive.
  */
 UCLASS()
 class MSC_VR_API AAgvTestVehicle : public AActor
@@ -66,41 +67,40 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV")
 	TObjectPtr<UAgvSafetyComponent> Safety;
 
-private:
 	/**
-	 * Local X of the drive-steer axis: centred under the body on the fork side, near the mast (the layout the user
-	 * confirmed); as far forward as its steering circle clears the fork legs (from x 17, |y| 21).
+	 * The teammate's forklift (WarehouseForklift, main): the refined model scaled uniformly to 215 cm high, actor origin at
+	 * the fork heel face, forks along +X (VNSL14 115 x 18 x 6 cm, centres 50 cm apart). The warehouse pallets and racks
+	 * are laid out for it. Refined source cm (origin at the floor centre, heel at x 34) -> vehicle cm: Refined().
 	 */
-	static constexpr double DriveWheelX = 5.0;
+	static constexpr double ModelScale = 215.0 / 282.55;
+	static FVector Refined(double X, double Y, double Z) { return FVector((X - 34.0) * ModelScale, Y * ModelScale, Z * ModelScale); }
 
+	/** Drive-steer axis and fixed support wheels as on the teammate's model (vehicle cm). */
+	static constexpr double DriveWheelX = -56.3;
+	static constexpr double SupportWheelX = -5.3;
+	static constexpr double SupportWheelY = 45.0;
+
+	/** Rated load (pallet + cargo), agreed 2026-10-06 with no counterweight (see FORKLIFT_NAVIGATION.md). */
+	static constexpr double RatedLoadKg = 250.0;
+
+private:
 	/** Steer and roll the wheel meshes to the drive's actual state. */
 	void UpdateWheelMeshes();
 
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UStaticMeshComponent> Chassis;
 
+	/** Vertical steer axis of the drive unit; the unit's meshes hang off it. */
 	UPROPERTY(VisibleAnywhere)
-	TObjectPtr<UStaticMeshComponent> DriveSteer;
+	TObjectPtr<USceneComponent> SteerPivot;
 
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UStaticMeshComponent> DriveWheel;
 
-	/** Rear casters and fork-leg load rollers, in the order of the drive's PassiveWheels. */
+	/** Support wheels on local +Y / -Y, in the order of the drive's PassiveWheels. */
 	UPROPERTY(VisibleAnywhere)
-	TObjectPtr<UStaticMeshComponent> RearWheelL;
+	TObjectPtr<UStaticMeshComponent> SupportWheelL;
 
 	UPROPERTY(VisibleAnywhere)
-	TObjectPtr<UStaticMeshComponent> RearWheelR;
-
-	UPROPERTY(VisibleAnywhere)
-	TObjectPtr<UStaticMeshComponent> LoadRollerL;
-
-	UPROPERTY(VisibleAnywhere)
-	TObjectPtr<UStaticMeshComponent> LoadRollerR;
-
-	UPROPERTY(VisibleAnywhere)
-	TObjectPtr<UStaticMeshComponent> LiftStage;
-
-	UPROPERTY(VisibleAnywhere)
-	TObjectPtr<UStaticMeshComponent> LiftCarriage;
+	TObjectPtr<UStaticMeshComponent> SupportWheelR;
 };

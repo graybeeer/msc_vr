@@ -1,11 +1,12 @@
 """Headless check of the force-driven AGV drive on Lvl_AgvMotionTest: payload effects, grip, tipping, determinism.
-Steps the simulation directly; saves nothing. Payload on the forks: centre (100, 0, 90) cm, a seated 1.1 m pallet."""
+Steps the simulation directly; saves nothing. Payload on the forks: centre (55, 0, 90) cm, a 1.1 m pallet seated at the heels (x 0)."""
 import math
 import unreal
 
 LEVEL = '/Game/AgvTest/Lvl_AgvMotionTest'
 DT = 1 / 60
-FORK_LOAD = unreal.Vector(100, 0, 90)
+FORK_LOAD = unreal.Vector(55, 0, 90)
+RATED_KG = 250  # AgvTestVehicle::RatedLoadKg; the load hangs in front of the support wheels (FORKLIFT_NAVIGATION.md)
 
 assert unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).load_level(LEVEL), LEVEL
 all_actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors()
@@ -27,7 +28,7 @@ def reference():
     return location.x + math.cos(yaw) * OFFSET, location.y + math.sin(yaw) * OFFSET
 
 
-def reset(payload_kg=0, x=-800, y=-1000, yaw=0):  # the body reaches 2.5 m behind the reference (fork rollers)
+def reset(payload_kg=0, x=-800, y=-1000, yaw=0):  # the body end is 0.9 m behind the reference (support wheels)
     nav.cancel()
     vehicle.teleport_reference(unreal.Vector2D(x, y), yaw)
     drive.clear_payload()
@@ -68,30 +69,36 @@ a, b = launch(0, 1 / 30), launch(0, 1 / 120)
 assert math.dist(a['end'], b['end']) < 0.05, ('frame-rate dependence', a['end'], b['end'])
 
 # 2. Empty vs loaded up to the rating: same command, the heavier vehicle accelerates later and stops longer.
-empty, light, heavy = launch(0), launch(700), launch(1400)
-for name, r in (('empty', empty), ('700kg', light), ('1400kg', heavy)):
+empty, light, heavy = launch(0), launch(RATED_KG // 2), launch(RATED_KG)
+for name, r in (('empty', empty), ('%dkg' % (RATED_KG // 2), light), ('%dkg' % RATED_KG, heavy)):
     report(name, r)
 assert empty['reach'] < light['reach'] < (heavy['reach'] or 99), 'acceleration vs payload'
 assert empty['stop'] < light['stop'] < heavy['stop'], 'stopping distance vs payload'
 assert empty['slip'] < 2.0, ('empty vehicle should keep grip', empty['slip'])
 
-# 3. The fork load rollers carry the load: no tipping up to the rating, even at full power and full braking.
+# 3. No tipping up to the rating, even at full power and full braking.
 assert not empty['tip'] and not heavy['tip'], 'tipped within the rating'
 
-# 4. Static capacity on the forks before a wheel lifts (the load rollers carry the load).
-def static_margin(kg):
+# 4. Static capacity on the forks: where a wheel lifts and where the vehicle tips (load in front of the load casters,
+#    held by the body and counterweight behind them).
+def static(kg):
     reset(kg)
     vehicle.step_simulation(DT)
-    return get('stability_margin')
+    return get('stability_margin'), get('tip_over')
 
-rated = static_margin(1400)
-low, high = 0.0, 20000.0
-for _ in range(30):
-    mid = (low + high) / 2
-    low, high = (mid, high) if static_margin(mid) > 0 else (low, mid)
-print('AGV_DYN_CASE capacity: at the 1400 kg rating the lightest wheel keeps %.0f%% of the weight; a wheel lifts above %.0f kg'
-      % (100 * rated, low))
-assert rated > 0 and low > 1400, 'the rated load must not lift a wheel'
+def bisect(ok):
+    low, high = 0.0, 20000.0
+    for _ in range(30):
+        mid = (low + high) / 2
+        low, high = (mid, high) if ok(mid) else (low, mid)
+    return low
+
+rated, _ = static(RATED_KG)
+lift = bisect(lambda kg: static(kg)[0] > 0)
+tip = bisect(lambda kg: not static(kg)[1])
+print('AGV_DYN_CASE capacity: at the %d kg rating the lightest wheel keeps %.0f%% of the weight; a wheel lifts above %.0f kg, '
+      'the vehicle tips above %.0f kg (%.1fx the rating)' % (RATED_KG, 100 * rated, lift, tip, tip / RATED_KG))
+assert rated > 0 and tip > 1.5 * RATED_KG, 'the rating needs a wheel on the ground and a 1.5x tipping margin'
 
 # 5. Route with a payload: arrives; report how precision changes.
 for kg in (0, 300):
