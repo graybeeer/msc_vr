@@ -92,3 +92,12 @@ DerivedDataCache/*
 # Licensed Fab Boxes & Pallets Pack: install locally per WAREHOUSE.md.
 /SourceAssets/Cargo/BoxesPalletsPack/
 /Content/Warehouse/Cargo/BoxesPalletsPack/
+
+# Rebuild original FBX import; final original rig/materials remain tracked.
+/Content/Warehouse/AGV/OriginalSource/
+
+# Rebuild refined model intermediate imports from the tracked FBX.
+/Content/Warehouse/AGV/RefinedSource/
+
+# Rebuild licensed Fab truck derivative locally with configure_truck_interior.py.
+/Content/Warehouse/Exterior/TruckInterior/

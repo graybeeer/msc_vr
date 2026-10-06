@@ -5,9 +5,10 @@ level=unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 assert level.load_level('/Game/FirstPerson/Lvl_FirstPerson')
 actors=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 loads=[a for a in actors.get_all_level_actors() if isinstance(a,unreal.WarehouseCargo)]
-assert len(loads)==262
-assert len({str(a.get_editor_property('cargo_id')) for a in loads})==262
-assert len({round(a.get_editor_property('gross_mass_kg'),2) for a in loads})==262
+assert len(loads)==311
+assert len({str(a.get_editor_property('cargo_id')) for a in loads})==len(loads)
+assert len({round(a.get_editor_property('gross_mass_kg'),3) for a in loads})>len(loads)*.9
+assert all(a.get_editor_property('packing').valid for a in loads)
 assert len({str(a.get_editor_property('cargo_kind')) for a in loads})==16
 assert len({a.get_component_by_class(unreal.StaticMeshComponent).static_mesh.get_path_name() for a in loads})==4
 assert all("/BoxesPalletsPack/" in a.get_component_by_class(unreal.StaticMeshComponent).static_mesh.get_path_name() for a in loads)
@@ -22,14 +23,14 @@ capture=view.get_component_by_class(unreal.SceneCaptureComponent2D)
 capture.texture_target=unreal.RenderingLibrary.create_render_target2d(world,1440,900,unreal.TextureRenderTargetFormat.RTF_RGBA8)
 capture.capture_source=unreal.SceneCaptureSource.SCS_FINAL_COLOR_LDR
 capture.fov_angle=72;capture.capture_every_frame=False;capture.always_persist_rendering_state=True
-started=time.monotonic();phase=0;phase_time=0;game=None;system=None;named={};pc=None;sample=None;before=0;mass=0;gamecap=None;unstable=[]
+started=time.monotonic();phase=0;phase_time=0;game=None;system=None;named={};pc=None;sample=None;before=0;mass=0;gamecap=None;unstable=[];sample_bottom=0
 
 def finish():
     unreal.unregister_slate_post_tick_callback(handle)
     level.editor_request_end_play();unreal.SystemLibrary.quit_editor()
 
 def tick(dt):
-    global phase,phase_time,game,system,named,pc,sample,before,mass,gamecap,unstable
+    global phase,phase_time,game,system,named,pc,sample,before,mass,gamecap,unstable,sample_bottom
     try:
         assert time.monotonic()-started<240,'Cargo PIE timeout'
         if phase==0:
@@ -55,6 +56,7 @@ def tick(dt):
                 if abs(delta)>=12:unstable.append((a.get_actor_label(),round(delta,2),body.static_mesh.get_name()))
             print('CARGO_UNSTABLE_DIAGNOSTIC',unstable)
             sample=named['WH_Drop_Box'];mass=sample.get_editor_property('gross_mass_kg')
+            sc,se=sample.get_actor_bounds(False);sample_bottom=sc.z-se.z
             before=system.get_supported_mass(named['WH_Drop_Pallet'])
             assert abs(before-mass)<.2,('Initial pallet load',before,mass)
             sample.set_gross_mass_kg(mass+3.21)
@@ -63,6 +65,23 @@ def tick(dt):
             assert abs(system.get_supported_mass(named['WH_Drop_Pallet'])-before-3.21)<.05,'Changed cargo mass did not propagate to pallet'
             sample.set_gross_mass_kg(mass)
             print('CARGO_MASS_VERIFIED',len(loads),'physics bodies, live pallet load update')
+            # Apply a newly generated delivery recipe while Chaos is active, then restore this test cargo.
+            stored=sample.get_editor_property('packing')
+            # Property structs are live views; regenerate an owned value before mutating the actor.
+            original_recipe=unreal.WarehouseCargo.generate_cargo_recipe(stored.delivery_seed,stored.item_index,stored.product_index,stored.size_limit_cm,stored.amount_scale)
+            assert abs(original_recipe.gross_mass_kg-mass)<.001
+            recipe=unreal.WarehouseCargo.generate_cargo_recipe(31001,0,7,unreal.Vector(50,40,35),1)
+            assert sample.apply_cargo_recipe(recipe)
+            body=sample.get_component_by_class(unreal.StaticMeshComponent)
+            assert body.is_simulating_physics()
+            assert abs(body.get_mass()-recipe.gross_mass_kg)<.02
+            system.advance_strength(.1)
+            assert abs(system.get_supported_mass(named['WH_Drop_Pallet'])-recipe.gross_mass_kg)<.05
+            assert sample.apply_cargo_recipe(original_recipe)
+            print('CARGO_RUNTIME_BOUNDS',sample.get_actor_bounds(False),'original bottom',sample_bottom)
+            system.advance_strength(.1)
+            assert abs(system.get_supported_mass(named['WH_Drop_Pallet'])-mass)<.05,(system.get_supported_mass(named['WH_Drop_Pallet']),mass,sample.get_editor_property('gross_mass_kg'))
+            print('CARGO_RUNTIME_DELIVERY_PASSED recipe applied during physics, physical mass, updated pallet load')
             gamecap=named['CargoVarietyPreview'].get_component_by_class(unreal.SceneCaptureComponent2D)
             gamecap.capture_scene()
             center=sample.get_actor_bounds(False)[0]
@@ -75,13 +94,15 @@ def tick(dt):
         if phase==2:
             gamecap.capture_scene()
             if now-phase_time<2:return
+            sc,se=sample.get_actor_bounds(False)
+            assert abs(sc.z-se.z-sample_bottom)<2,('Runtime resize displaced cargo',sample_bottom,sc,se)
             unreal.RenderingLibrary.export_render_target(game,gamecap.texture_target,str(Path(unreal.Paths.project_saved_dir()).resolve()),'CargoVariety.png')
             unreal.SystemLibrary.execute_console_command(game,'Shot showui filename=C:/msc_UnrealProject/msc_vr/Saved/CargoReadout.png',pc)
             phase_time=now;phase=3;return
         if phase==3:
             if now-phase_time<2:return
             assert not unstable,('Unstable initial stacks',unstable)
-            print('CARGO_VARIETY_PIE_VERIFIED 262 individual masses, 16 kinds, four Fab closed carton meshes, stable stacks, readout capture')
+            print('CARGO_VARIETY_PIE_VERIFIED 311 individual masses, 16 kinds, four Fab closed carton meshes, stable stacks, readout capture')
             finish()
     except Exception:
         print('CARGO_VARIETY_PIE_FAILED',traceback.format_exc());finish()

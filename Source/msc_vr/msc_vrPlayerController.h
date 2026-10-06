@@ -30,6 +30,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Settings") void ToggleWarehouseMenu();
 	UFUNCTION(BlueprintCallable, Category="Settings") void ToggleObserverView();
 	UFUNCTION(BlueprintCallable, Category="Settings") void FrameWarehouse();
+	UFUNCTION(BlueprintCallable, Category="Settings") void SetObserverFloor(int32 Floor);
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Settings") int32 ObserverFloor=-1;
 	UFUNCTION(BlueprintPure, Category="Settings") bool IsObserverView() const { return bObserverView; }
 	UFUNCTION(BlueprintPure, Category="Settings") bool IsWarehouseMenuOpen() const { return MenuWidget.IsValid(); }
 	virtual void PlayerTick(float DeltaTime) override;
@@ -75,6 +77,7 @@ protected:
 	FVector ObserverFocus = FVector::ZeroVector;
 	FRotator ObserverRotation = FRotator(-70,90,0);
 	float ObserverDistance = 6000.f;
+	float ObserverVisibilityElapsed = 0;
 	TSharedPtr<SWidget> MenuWidget;
 	UPROPERTY(Transient) TObjectPtr<ACameraActor> ObserverCamera;
 	bool bObserverView = false;

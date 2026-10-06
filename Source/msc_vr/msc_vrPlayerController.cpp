@@ -20,6 +20,7 @@
 #include "EngineUtils.h"
 #include "WarehousePallet.h"
 #include "WarehouseCargo.h"
+#include "WarehouseForklift.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -46,7 +47,7 @@ void Amsc_vrPlayerController::BeginPlay()
 			[SNew(SBorder).Padding(12).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 				.BorderBackgroundColor(FLinearColor(0.02f,0.03f,0.04f,.9f))
 				.Visibility_Lambda([this]() { return GetCargoReadout().IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible; })
-				[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",20)).ColorAndOpacity(FLinearColor::White)
+				[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",28)).ColorAndOpacity(FLinearColor::White)
 					.Text_Lambda([this]() { return GetCargoReadout(); })]];
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(CargoReadoutWidget.ToSharedRef(),5);
 	}
@@ -159,7 +160,9 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 	Text(TEXT("물류창고 · 설정 / 관찰"));
 	Text(TEXT("F1: 메뉴  |  Shift: 달리기  |  Ctrl: 앉기  |  E: 집기 / 적재\n메뉴와 관찰 중에도 창고 시뮬레이션은 계속됩니다."));
 	Button(bObserverView ? TEXT("1인칭 캐릭터로 돌아가기") : TEXT("전지적 관찰 시점으로 전환"),[this]() { ToggleObserverView(); CloseWarehouseMenu(); });
-	Button(TEXT("창고 전체 보기"),[this]() { if (!bObserverView) ToggleObserverView(); FrameWarehouse(); CloseWarehouseMenu(); });
+	Button(TEXT("창고 전체 보기"),[this]() { if (!bObserverView) ToggleObserverView(); SetObserverFloor(-1); CloseWarehouseMenu(); });
+    for (int32 Floor=0; Floor<3; ++Floor)
+        Button(FString::Printf(TEXT("%d층 관찰 (위층 구조 숨기기)"),Floor+1),[this,Floor]() { SetObserverFloor(Floor); CloseWarehouseMenu(); });
 	Text(TEXT("관찰: WASD 평면 이동 · 휠 확대/축소 · 우클릭 드래그 회전\nSpace/Ctrl 축소/확대 · Shift 가속\n지붕은 관찰 중 투명해집니다. F1 메뉴에서 1인칭으로 복귀하세요."));
 	Text(TEXT("마우스 감도 (0.2 ~ 3.0)"));
 	Panel->AddSlot().AutoHeight().Padding(12)[SNew(SSlider).IsFocusable(false).Value((MouseSensitivity-.2f)/2.8f)
@@ -193,6 +196,16 @@ void Amsc_vrPlayerController::ToggleObserverView()
 		if (!ObserverCamera) return;
 		ObserverCamera->GetCameraComponent()->SetFieldOfView(ViewFOV);
 		ObserverCamera->GetCameraComponent()->bConstrainAspectRatio=false;
+        // An overview needs a neutral, sharp camera, independent of cinematic lens effects.
+        auto& PP=ObserverCamera->GetCameraComponent()->PostProcessSettings;
+        PP.bOverride_VignetteIntensity=true; PP.VignetteIntensity=0.f;
+        PP.bOverride_FilmGrainIntensity=true; PP.FilmGrainIntensity=0.f;
+        PP.bOverride_SceneFringeIntensity=true; PP.SceneFringeIntensity=0.f;
+        PP.bOverride_MotionBlurAmount=true; PP.MotionBlurAmount=0.f;
+        PP.bOverride_DepthOfFieldFstop=true; PP.DepthOfFieldFstop=32.f;
+        PP.bOverride_BloomIntensity=true; PP.BloomIntensity=0.f;
+        PP.bOverride_AutoExposureBias=true; PP.AutoExposureBias=-2.f;
+        ObserverCamera->GetCameraComponent()->PostProcessBlendWeight=1.f;
 		bObserverView=true;
 		SetObserverRoofVisibility(true);
 		FrameWarehouse();
@@ -244,16 +257,33 @@ void Amsc_vrPlayerController::FrameWarehouse()
 	UpdateObserverCamera();
 }
 
+void Amsc_vrPlayerController::SetObserverFloor(int32 Floor)
+{
+ if (Floor < -1 || Floor > 2) return;
+ if (!bObserverView) ToggleObserverView();
+ SetObserverRoofVisibility(false);
+ ObserverFloor=Floor;
+ SetObserverRoofVisibility(true);
+ FrameWarehouse();
+ if (Floor>=0) { ObserverFocus.Z=Floor*400.f+100.f; UpdateObserverCamera(); }
+}
+
 void Amsc_vrPlayerController::SetObserverRoofVisibility(bool Hide)
 {
 	if (Hide)
 	{
-		for (TActorIterator<AActor> It(GetWorld()); It; ++It)
-			if (It->ActorHasTag(TEXT("ObserverRoof")) && !HiddenActors.Contains(*It))
-			{
-				HiddenActors.Add(*It);
-				ObserverHiddenRoofs.Add(*It);
-			}
+        for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+        {
+            const bool Dynamic=It->IsA<AWarehouseForklift>() || It->IsA<AWarehousePallet>() || It->IsA<AWarehouseCargo>();
+            const bool Above=ObserverFloor>=0 && (Dynamic ? It->GetActorLocation().Z>=(ObserverFloor+1)*400.f-1.f :
+                ((ObserverFloor<1 && It->ActorHasTag(TEXT("WarehouseFloor1"))) ||
+                 (ObserverFloor<2 && It->ActorHasTag(TEXT("WarehouseFloor2")))));
+            if ((Above || It->ActorHasTag(TEXT("ObserverRoof"))) && !HiddenActors.Contains(*It))
+            {
+                HiddenActors.Add(*It);
+                ObserverHiddenRoofs.Add(*It);
+            }
+        }
 	}
 	else
 	{
@@ -275,6 +305,15 @@ void Amsc_vrPlayerController::PlayerTick(float Dt)
 	ViewFOV=FMath::Clamp(ViewFOV,70.f,110.f);
 	if (GetPawn()) if (auto* Camera=GetPawn()->FindComponentByClass<UCameraComponent>()) Camera->SetFieldOfView(ViewFOV);
 	if (!bObserverView || !IsValid(ObserverCamera)) return;
+    if (ObserverFloor>=0)
+    {
+        ObserverVisibilityElapsed+=Dt;
+        if (ObserverVisibilityElapsed>=.25f)
+        {
+            ObserverVisibilityElapsed=0;
+            SetObserverRoofVisibility(false); SetObserverRoofVisibility(true);
+        }
+    }
 	ObserverCamera->GetCameraComponent()->SetFieldOfView(ViewFOV);
 	if (MenuWidget.IsValid() || !GetWorld()->GetGameViewport() || !GetWorld()->GetGameViewport()->Viewport || !GetWorld()->GetGameViewport()->Viewport->HasFocus()) return;
 	float X=0,Y=0; GetInputMouseDelta(X,Y);
@@ -305,7 +344,14 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
  FCollisionQueryParams Params(SCENE_QUERY_STAT(CargoReadout),true,GetPawn());
  for (AActor* Roof : HiddenActors) if (Roof) Params.AddIgnoredActor(Roof);
  if (GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+PlayerCameraManager->GetCameraRotation().Vector()*(bObserverView ? 18000.f : 400.f),ECC_Visibility,Params))
+ {
   if (auto* Cargo=Cast<AWarehouseCargo>(Hit.GetActor())) return Cargo->GetCargoDescription();
+  if (!bObserverView && Hit.Distance<=250.f)
+   if (auto* Vehicle=Cast<AWarehouseForklift>(Hit.GetActor()))
+    return FText::FromString(FString::Printf(TEXT("E : %s\n%s\n배터리 %.0f%% · 적재 %.0f / %.0f kg"),
+     Vehicle->bPowered ? TEXT("자율 운행 정지") : TEXT("자율 운행 시작 / 재개"),
+     *Vehicle->Status,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
+ }
  return FText::GetEmpty();
 }
 

@@ -61,3 +61,7 @@ Details의 Self Check에서 Safety Scanner, E-Stop, Brake, Steering, Fork/Mast S
 검증 스크립트는 각각 별도 에디터 프로세스에서 실행한다. 파손·운반 검사는 저장하지 않은 액터/물리 상태를 변경하므로, 같은 에디터 세션에서 연속 실행해 상태를 공유하지 않는다. 일반 통합 검사는 `-ExecutePythonScript`, 실제 플레이 검사는 `-ExecCmds="py .../verify_forklift_autonomy_pie.py"`를 사용한다.
 
 2026-09-30 검증: UE 5.8 Development Editor 빌드, 기본 맵 충돌, 하중·파손, 자율 운반 23개 단계, 충전, 사람 정지/재개, 센서 고장 복구, 불완전 삽입 거부, 곡선 경로와 실제 화물 이송, 하역 위치 점유 거부, PIE/Chaos 운반·하역 검사를 통과했다. 로컬 로그: `Saved/Logs/AutonomyMigrated.log`.
+
+## 3층 복층 운반
+
+`WarehouseElevator` 참조가 있는 차량은 출발지·목적지·충전소의 바닥 높이가 다르면 먼저 승강기 절차를 수행한다. 대기점 이동 → FMS 호출 → 도착/문/진입 신호 → 정위치 탑승 → 문 닫힘/층 이동 → 도착/문/하차 신호 → 목적층 경로 재계획 순서다. 기존 포크 삽입·하역 검사를 유지한다. 층 높이, 합산 2000kg 제한, 배치/테스트와 모델 범위는 [MEZZANINE.md](MEZZANINE.md)를 확인한다.

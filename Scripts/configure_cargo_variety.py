@@ -1,24 +1,15 @@
 """Give each existing cargo a stable SKU, individual mass and varied real-world packaging.
 Mass ranges are training assumptions, not manufacturer specifications. Existing pallets stay unchanged.
 """
-import json,random,re,zlib,unreal
+import json,re,zlib,unreal
 from pathlib import Path
 import os,sys
 sys.path.insert(0,os.path.dirname(__file__))
 from apply_real_world_scale import fit
-from prepare_warehouse_assets import collision_mesh
 
-# Contents, package centimetres, plausible gross kg range.
-PROFILES=(
- ('의류 / 면 티셔츠',(48,34,32),(3,7)),('서적 / 단행본',(36,28,22),(8,17)),
- ('식품 / 건면',(40,30,28),(4,10)),('음료 / 생수',(40,30,27),(10,20)),
- ('생활용품 / 세제',(36,26,30),(6,13)),('주방용품 / 식기',(50,36,32),(5,12)),
- ('전자제품 / 공유기',(46,32,26),(4,10)),('기계부품 / 베어링',(34,26,20),(12,24)),
- ('전기자재 / 케이블',(38,28,23),(6,14)),('화장품 / 스킨케어',(30,22,18),(2,6)),
- ('문구 / 복사용지',(34,25,24),(5,11)),('신발 / 운동화',(52,34,28),(3,8)),
- ('식품 / 농산물',(40,30,25),(5,12)),('생활용품 / 수건',(44,32,30),(2,5)),
- ('전자부품 / 센서',(32,24,20),(2,8)),('식품 / 통조림',(36,28,24),(9,18)),
-)
+# The native runtime generator is the single source for editor cargo and future truck deliveries.
+# Keep this seed stable: arrival time, iteration order, and actor count must not affect cargo recipes.
+DELIVERY_SEED = 20261001
 
 def configure_cargo_variety():
     actors=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
@@ -32,7 +23,7 @@ def configure_cargo_variety():
         label=a.get_actor_label();match=re.fullmatch(r'(WH_Stock_\d+_\d_\d)_(\d)',label)
         group,layer=(match[1],int(match[2])) if match else (label.removesuffix('_Top'),int(label.endswith('_Top')))
         groups.setdefault(group,[]).append((layer,a))
-    rows=[];used_masses=set()
+    rows=[]
     for group,stack in sorted(groups.items()):
         stack.sort(key=lambda item:item[0])
         center,extent=stack[0][1].get_actor_bounds(False)
@@ -42,6 +33,8 @@ def configure_cargo_variety():
         elif group.startswith('WH_Stock_'):support_label='WH_DispatchPallet_'+group.split('_')[2]
         elif group.startswith(('WH_MediumStock_','WH_LightStock_')):support_label=group.replace('Stock_','Shelf_')
         elif group in ('WH_Pickup_Box','WH_Drop_Box'):support_label=group.replace('_Box','_Pallet')
+        elif group.startswith('MZ_Cargo_'):support_label=group.replace('MZ_Cargo_','MZ_Pallet_',1)
+        elif group=='MZ_TransferCargo':support_label='WH_TrainingPallet'
         bottom=center.z-extent.z
         if support_label in named:
             support_center,support_extent=named[support_label].get_actor_bounds(False)
@@ -55,24 +48,26 @@ def configure_cargo_variety():
         footprint=maximum[:2]
         for layer,a in stack:
             label=a.get_actor_label();seed=zlib.crc32(label.encode())
-            rng=random.Random(seed);index=seed%len(PROFILES)
-            kind,size,mass_range=PROFILES[index]
-            # Scale package proportions uniformly; upper packages cannot overhang their support.
-            limit=min(maximum[0]/size[0],maximum[1]/size[1],maximum[2]/size[2],footprint[0]/size[0],footprint[1]/size[1])
-            factor=min(1.1,limit)*rng.uniform(.90,1.0)
-            dimensions=tuple(round(s*factor,2) for s in size)
-            # Different contents need different mass even when cartons share a mesh.
-            cents=round(rng.uniform(*mass_range)*min(1.0,factor**3)*100)
-            while cents in used_masses:cents+=1
-            used_masses.add(cents);mass=cents/100
+            quarter_turns=round(a.get_actor_rotation().yaw/90)
+            limits=[min(maximum[0],footprint[0]),min(maximum[1],footprint[1]),maximum[2]]
+            if quarter_turns%2:limits[0],limits[1]=limits[1],limits[0]
+            # CRC item keys stay stable when boxes are added, removed, or reordered.
+            recipe=unreal.WarehouseCargo.generate_cargo_recipe(DELIVERY_SEED,seed & 0x7fffffff,-1,unreal.Vector(*limits),1.0)
+            assert recipe.valid,label
             mesh=meshes[seed%len(meshes)]
             a.modify();a.set_cargo_mesh(mesh)
             a.get_component_by_class(unreal.StaticMeshComponent).set_editor_property('override_materials',[])
+            assert a.apply_cargo_recipe(recipe),label
+            dimensions=[recipe.size_cm.x,recipe.size_cm.y,recipe.size_cm.z]
+            if quarter_turns%2:dimensions[0],dimensions[1]=dimensions[1],dimensions[0]
             fit(a,dimensions,(center.x,center.y,bottom+dimensions[2]/2))
             a.set_editor_property('cargo_id',unreal.Name(label.removeprefix('WH_')))
-            a.set_editor_property('cargo_kind',unreal.Text(kind))
-            a.set_gross_mass_kg(mass)
-            rows.append({'id':str(a.get_editor_property('cargo_id')),'actor':label,'kind':kind,'gross_kg':mass,'size_cm':dimensions,'mesh':mesh.get_path_name()})
+            rows.append({'id':str(a.get_editor_property('cargo_id')),'actor':label,'kind':str(recipe.product_kind),
+                         'gross_kg':recipe.gross_mass_kg,'net_kg':recipe.net_mass_kg,'packaging_kg':recipe.packaging_mass_kg,
+                         'packed_density_kg_m3':recipe.packed_density_kg_m3,'fragile':recipe.fragile,
+                         'size_cm':dimensions,'local_size_cm':[recipe.size_cm.x,recipe.size_cm.y,recipe.size_cm.z],
+                         'delivery_seed':recipe.delivery_seed,'item_index':recipe.item_index,'product_index':recipe.product_index,
+                         'rule_version':recipe.rule_version,'size_limit_cm':limits,'amount_scale':recipe.amount_scale,'mesh':mesh.get_path_name()})
             bottom+=dimensions[2]+.1
             footprint=dimensions[:2]
     (Path(unreal.Paths.project_saved_dir())/'CargoManifest.json').write_text(json.dumps(rows,ensure_ascii=False,indent=2),encoding='utf-8')

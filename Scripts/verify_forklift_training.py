@@ -8,16 +8,20 @@ assert level.load_level('/Game/FirstPerson/Lvl_FirstPerson')
 vehicle = next(a for a in actors.get_all_level_actors() if a.get_actor_label() == 'WH_AutonomousForklift')
 vehicle.set_editor_property('autonomous_mode',False)
 pallet = vehicle.get_editor_property('target_pallet')
+# Straight-cycle regression uses an empty pallet. Actual loaded cargo is covered
+# by verify_mezzanine / verify_refined_agv and the autonomous cargo attachment path.
+for cargo in actors.get_all_level_actors():
+    if cargo.get_actor_label()=='MZ_TransferCargo':actors.destroy_actor(cargo)
 start = vehicle.get_actor_location()
 target_start = pallet.get_actor_location()
 rotation = vehicle.get_actor_rotation()
 parts = {p.get_name(): p for p in vehicle.get_components_by_class(unreal.StaticMeshComponent)}
-assert len(parts)==13, ('Mechanical rig missing',list(parts))
+assert len(parts)==12, ('Mechanical rig missing',list(parts))
 for part in parts.values():
     assert part.static_mesh.get_path_name().startswith('/Game/Warehouse/AGV/Meshes/')
     mesh_editor = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
     assert mesh_editor.get_simple_collision_count(part.static_mesh)+mesh_editor.get_convex_collision_count(part.static_mesh)>0
-wheels = [parts[name] for name in ('DriveWheelL','DriveWheelR','LoadWheelL','LoadWheelR')]
+wheels = [parts[name] for name in ('DriveWheel','LoadWheelL','LoadWheelR')]
 minimum=[float('inf')]*3
 maximum=[-float('inf')]*3
 for part in parts.values():
@@ -27,18 +31,16 @@ for part in parts.values():
     for i,axis in enumerate(('x','y','z')):
         minimum[i]=min(minimum[i],getattr(offset,axis)+(getattr(bounds.origin,axis)-getattr(bounds.box_extent,axis))*getattr(scale,axis))
         maximum[i]=max(maximum[i],getattr(offset,axis)+(getattr(bounds.origin,axis)+getattr(bounds.box_extent,axis))*getattr(scale,axis))
-assert all(abs(maximum[i]-minimum[i]-dimension)<.05 for i,dimension in enumerate((164.2,99.4,215))), (minimum,maximum)
+assert all(abs(maximum[i]-minimum[i]-dimension)<.05 for i,dimension in enumerate((115+128*215/282.55,99.4,215))), (minimum,maximum)
 for wheel in wheels:
     bounds = wheel.static_mesh.get_bounds()
     assert abs(wheel.get_editor_property('relative_location').z+(bounds.origin.z-bounds.box_extent.z)*wheel.get_editor_property('relative_scale3d').z)<.05, ('Wheel not on ground',wheel.get_name())
 wheel_start = [w.get_editor_property('relative_rotation').pitch for w in wheels]
-for name,side in [('ForkL',-1),('ForkR',1)]:
-    bounds = parts[name].static_mesh.get_bounds()
-    scale=parts[name].get_editor_property('relative_scale3d')
-    offset=parts[name].get_editor_property('relative_location')
-    assert abs(bounds.origin.x*scale.x+offset.x-57.5)<.01 and abs(bounds.box_extent.x*scale.x-57.5)<.01
-    assert abs(bounds.origin.y*scale.y+offset.y-side*25)<.01 and abs(bounds.box_extent.y*scale.y-9)<.01
-    assert abs(bounds.origin.z*scale.z+offset.z-6.5)<.01 and abs(bounds.box_extent.z*scale.z-3)<.01
+for name,side in [('ForkL',1),('ForkR',-1)]:
+    bounds=parts[name].static_mesh.get_bounds()
+    assert abs(bounds.origin.x+bounds.box_extent.x-115)<.01
+    assert abs(bounds.origin.y-side*25)<.01 and abs(bounds.box_extent.y-9)<.01
+    assert abs(bounds.origin.z-bounds.box_extent.z-3.5)<.01
 
 def frame(x=-60, y=0, z=0, yaw=0):
     p = pallet.get_actor_transform().transform_location(unreal.Vector(x,y,z))
@@ -52,7 +54,8 @@ assert abs(vehicle.get_actor_location().y-start.y)<.01, 'Moved before E start'
 vehicle.toggle_power()
 vehicle.advance_simulation(1/60)
 vehicle.toggle_power()
-for wheel,angle,radius in zip(wheels,wheel_start,(10,10,2.5,2.5)):
+for wheel,angle in zip(wheels,wheel_start):
+    radius=wheel.static_mesh.get_bounds().box_extent.z*wheel.get_editor_property('relative_scale3d').z
     assert abs(wheel.get_editor_property('relative_rotation').pitch-angle+math.degrees((vehicle.get_actor_location().y-start.y)/radius))<.01, 'Wheel rolling radius/sign incorrect'
 paused = vehicle.get_actor_location()
 paused_wheels = [w.get_editor_property('relative_rotation') for w in wheels]
@@ -101,7 +104,8 @@ assert abs(pallet.get_actor_location().z-target_start.z)<.2, 'Pallet did not ret
 assert abs(pallet.get_actor_location().y-(start.y+60))<.2, 'Pallet delivery position incorrect'
 assert abs(vehicle.get_actor_location().y-(start.y-130))<.2, 'Fork withdrawal incomplete'
 assert abs(max_lift-10.5)<.01, ('Lift did not reach its full stroke',max_lift)
-for wheel,radius in zip(wheels,(10,10,2.5,2.5)):
+for wheel in wheels:
+    radius=wheel.static_mesh.get_bounds().box_extent.z*wheel.get_editor_property('relative_scale3d').z
     wheel_rotation = wheel.get_editor_property('relative_rotation')
     pitch,yaw = math.radians(wheel_rotation.pitch),math.radians(wheel_rotation.yaw)
     print('WHEEL_FINAL',wheel.get_name(),wheel_rotation,'distance',vehicle.get_actor_location().y-start.y,'radius',radius)

@@ -180,7 +180,7 @@ def apply_scale():
         forklift.set_actor_scale3d(unreal.Vector(1, 1, 1))
     from configure_cargo_variety import configure_cargo_variety
     configure_cargo_variety()
-    print('REAL_WORLD_SCALE_APPLIED', 'cm; AGV 164.2x99.4x215, clear pallet aisle 320, pallet 110x110x15, shelf tops 20/140, bay clear 250x100x250')
+    print('REAL_WORLD_SCALE_APPLIED', 'cm; AGV original-proportion body 237.73x99.4x215, clear pallet aisle 320, pallet 110x110x15, shelf tops 20/140, bay clear 250x100x250')
 
 
 if __name__ == '__main__':

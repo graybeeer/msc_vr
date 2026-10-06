@@ -29,7 +29,7 @@ def cargo_fits(actor, maximum):
 
 
 ground = bounds(named['Floor'])[1][2]
-dimensions(named['WH_AutonomousForklift'], (99.4, 164.2, 215))  # yaw 90
+dimensions(named['WH_AutonomousForklift'], (99.4, 117+131*94/102, 215))  # yaw 90
 dimensions(named['WH_TrainingPallet'], (110, 110, 15))
 pallet_actors = [a for label, a in named.items() if label.startswith(('WH_Pallet_', 'WH_DispatchPallet_')) or label in ('WH_Pickup_Pallet', 'WH_Drop_Pallet', 'WH_TrainingPallet')]
 assert len(pallet_actors) == 97

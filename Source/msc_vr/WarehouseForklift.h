@@ -9,6 +9,7 @@ class UPointLightComponent;
 class UTextRenderComponent;
 class UStaticMeshComponent;
 class AWarehouseChargingStation;
+class AWarehouseElevator;
 
 UENUM(BlueprintType)
 enum class EWarehouseCycle : uint8 { Idle, Approach, Lift, TravelLower, Reverse, Lower, Withdraw, Complete, ToCharger, Docking, Charging, Returning };
@@ -19,6 +20,11 @@ class MSC_VR_API AWarehouseForklift : public AActor
  GENERATED_BODY()
 public:
  AWarehouseForklift();
+ UFUNCTION(BlueprintCallable, Category="Editor") static void RebuildEditedMesh(UStaticMesh* Mesh);
+ UFUNCTION(BlueprintCallable, Category="Editor") static void ConfigureForkCollision(UStaticMesh* Mesh);
+ UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="Elevator") TObjectPtr<AWarehouseElevator> Elevator;
+ UFUNCTION(BlueprintPure, Category="Elevator") float GetTransferMassKg() const { return VehicleMassKg+(bSupportingPallet ? GetLoadMassKg() : 0.f); }
+ UFUNCTION(BlueprintPure, Category="Elevator") bool IsLiftAtTravelHeight() const { return LiftOffset<=20.f; }
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Autonomy") bool bAutonomousMode = true;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Autonomy") TArray<FWarehouseWorkOrder> PendingJobs;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Autonomy") TArray<FTransform> NavigationAnchors;
@@ -78,6 +84,12 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") EWarehouseCycle State = EWarehouseCycle::Idle;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") FString Status = TEXT("E : START");
 private:
+ bool BeginFloorTransfer(float TargetZ, EWarehouseAIState Resume);
+ float FloorBase(float WorldZ) const;
+ EWarehouseAIState AfterElevator = EWarehouseAIState::Ready;
+ int32 TransferFromFloor=0;
+ int32 TransferToFloor=0;
+ bool bFloorTransfer=false;
  void AdvanceAutonomy(float Dt);
  void ToggleAutonomy();
  void TransitionAI(EWarehouseAIState Next,const FString& Message);
@@ -106,7 +118,8 @@ private:
  int32 RouteIndex = 0;
  UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> Carriage;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> LiftStage;
- UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UStaticMeshComponent>> Wheels;
+ UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> LiftChains;
+ UPROPERTY(VisibleAnywhere, Transient) TArray<TObjectPtr<UStaticMeshComponent>> Wheels;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UPointLightComponent> Beacon;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UTextRenderComponent> Display;
  FVector StartLocation = FVector::ZeroVector;
