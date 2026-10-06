@@ -65,6 +65,8 @@ UE 5.8.2의 오프스크린 Nanite 렌더링에서 원본·복사본 모두 잎�
 
 ## 팀원 설치 및 에셋 재생성
 
+팀원에게 전달할 단일 설치 안내는 [TEAM_ASSETS.md](TEAM_ASSETS.md)를 확인한다. 필수 팩 5개, FBX 상자 임포트, 프로젝트 목록 누락 해결, 충돌·트럭 파생 메시 준비 순서를 정리했다.
+
 Fab `Scene_Warehouse`와 위 외부 에셋 3종은 각 팀원이 설치한다. 복사된 대용량 충돌 에셋 `Content/Warehouse/Collision`, `Content/Warehouse/Physics`도 Git에서 제외하며 원본 팩으로 재생성한다. `prepare_warehouse_assets.py`는 실내와 외부 세 메시의 충돌 복사본을 모두 준비한다. 재질·맵·코드·스크립트는 공유한다.
 
 Editor 타깃 빌드 후, 에디터를 닫고 프로젝트 루트에서 한 번 실행한다:

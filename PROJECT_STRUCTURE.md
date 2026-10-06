@@ -35,7 +35,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 설정 메뉴·전지적 관찰 카메라·지붕 숨김 | `Source/msc_vr/msc_vrPlayerController.h/.cpp`, `Scripts/configure_observer_view.py` | `Scripts/verify_observer_view_pie.py`, `Scripts/verify_warehouse_interaction_pie.py`, `Saved/Config/WindowsEditor/Game.ini` (로컬 설정) |
 | 1인칭 조작·카메라 | `Source/msc_vr/msc_vrCharacter.*`, `msc_vrPlayerController.*`, `msc_vrCameraManager.*` | `Content/FirstPerson/Blueprints/`, `Content/Input/`, `Config/DefaultInput.ini` |
 | 시작 맵·게임 모드 | `Config/DefaultEngine.ini`, `Source/msc_vr/msc_vrGameMode.*`, `Content/FirstPerson/Blueprints/` | `msc_vr.uproject` |
-| Fab 창고 에셋·팀원 설치 | `WAREHOUSE.md`, `Scripts/prepare_warehouse_assets.py`, `.gitignore` | `Content/Scene_Warehouse/` 원본 팩 |
+| Fab 창고 에셋·팀원 설치 | `TEAM_ASSETS.md` (필수 5개·설치·목록 누락 해결·로컬 재생성), `WAREHOUSE.md`, `Scripts/prepare_warehouse_assets.py`, `.gitignore` | `Content/Scene_Warehouse/` 원본 팩 |
 | Fab 트럭·나무·관목 설치·배치 | `WAREHOUSE.md`의 외부 에셋 절, `Scripts/apply_exterior_fab_assets.py`, `Scripts/prepare_warehouse_assets.py` | `Content/VehicleVarietyPack/`, `Content/EuropeanBeech/`, `Content/MSPresets/`, `Content/GV_FreeShrubsPack/` (Git 제외 원본 팩) |
 | 구조 문서 갱신 | `AGENTS.md`, `Scripts/update_structure_summary.ps1`, 이 문서 | 없음 |
 
@@ -56,6 +56,7 @@ msc_vr/
   PROJECT_STRUCTURE.md
   README.md
   REFINED_AGV.md
+  TEAM_ASSETS.md
   VNSL14_SPEC.md
   WAREHOUSE.md
   Config/
