@@ -95,3 +95,6 @@ DerivedDataCache/*
 
 # Rebuild original FBX import; final original rig/materials remain tracked.
 /Content/Warehouse/AGV/OriginalSource/
+
+# Rebuild refined model intermediate imports from the tracked FBX.
+/Content/Warehouse/AGV/RefinedSource/

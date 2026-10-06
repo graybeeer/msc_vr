@@ -7,50 +7,66 @@
 #include "Components/TextRenderComponent.h"
 #include "Materials/MaterialInterface.h"
 #include "Engine/World.h"
+#include "Engine/StaticMesh.h"
+#include "PhysicsEngine/BodySetup.h"
 #include "CollisionQueryParams.h"
 #include "UObject/ConstructorHelpers.h"
 
+void AWarehouseForklift::RebuildEditedMesh(UStaticMesh* Mesh)
+{
+#if WITH_EDITOR
+ if (Mesh) { Mesh->CommitMeshDescription(0); Mesh->PostEditChange(); Mesh->MarkPackageDirty(); }
+#endif
+}
+void AWarehouseForklift::ConfigureForkCollision(UStaticMesh* Mesh)
+{
+#if WITH_EDITOR
+ if (!Mesh || !Mesh->GetBodySetup()) return;
+ auto* Setup=Mesh->GetBodySetup();
+ Setup->AggGeom.EmptyElements();
+ const FBox Bounds=Mesh->GetBoundingBox();
+ FKBoxElem Blade; Blade.Center=FVector(57.5,Bounds.GetCenter().Y,6.5); Blade.X=115; Blade.Y=18; Blade.Z=6;
+ Setup->AggGeom.BoxElems.Add(Blade);
+ FKBoxElem Heel; Heel.Center=FVector(Bounds.Min.X*.5,Bounds.GetCenter().Y,(3.5+Bounds.Max.Z)*.5);
+ Heel.X=-Bounds.Min.X; Heel.Y=18; Heel.Z=Bounds.Max.Z-3.5;
+ Setup->AggGeom.BoxElems.Add(Heel);
+ Setup->CollisionTraceFlag=CTF_UseSimpleAndComplex;
+ Setup->InvalidatePhysicsData(); Setup->CreatePhysicsMeshes(); Mesh->MarkPackageDirty();
+#endif
+}
 AWarehouseForklift::AWarehouseForklift()
 {
  PrimaryActorTick.bCanEverTick = true;
  RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
  Carriage = CreateDefaultSubobject<USceneComponent>(TEXT("CarriagePivot"));
  Carriage->SetupAttachment(RootComponent);
- // Rigid mechanical rig: metal assemblies retain their shape; pivots are baked by prepare_orange_agv.py.
+ // Refined FBX geometry is baked at real size; no nonuniform chassis scaling.
  auto Part = [&](const TCHAR* Name, USceneComponent* Parent, FVector Pivot=FVector::ZeroVector)
  {
-  auto* Mesh = CreateDefaultSubobject<UStaticMeshComponent>(Name);
+  auto* Mesh=CreateDefaultSubobject<UStaticMeshComponent>(Name);
   Mesh->SetupAttachment(Parent);
-  const FString Path=FString::Printf(TEXT("/Game/Warehouse/AGV/Meshes/SM_AGV_%s"),Name);
+  const FString Path=FString::Printf(TEXT("/Game/Warehouse/AGV/Meshes/SM_Refined_AGV_%s"),Name);
   ConstructorHelpers::FObjectFinder<UStaticMesh> Asset(*Path);
   Mesh->SetStaticMesh(Asset.Object);
   Mesh->SetRelativeLocation(Pivot);
   Mesh->SetCollisionProfileName(TEXT("BlockAllDynamic"));
   return Mesh;
  };
- // Restore only chassis proportions. Fork, mast, sensor and wheel geometry stay calibrated.
- auto Sized=[&](const TCHAR* Name,USceneComponent* Parent,FVector Location,FVector Scale)
- {
-  auto* Mesh=Part(Name,Parent,Location);
-  Mesh->SetRelativeScale3D(Scale);
-  return Mesh;
- };
- const double BodyScale=94./102.;
- auto* Body=Sized(TEXT("Body"),RootComponent,FVector(-2.-48.5*BodyScale,0,0),FVector(BodyScale));
- ConstructorHelpers::FObjectFinder<UStaticMesh> OriginalBody(TEXT("/Game/Warehouse/AGV/Meshes/SM_Original_AGV_Body"));
- Body->SetStaticMesh(OriginalBody.Object);
- Sized(TEXT("MastFrame"),RootComponent,FVector(-25,0,0),FVector(.5,.6,200./244.5));
- Sized(TEXT("SensorTower"),RootComponent,FVector::ZeroVector,FVector::OneVector);
- Sized(TEXT("OutriggerL"),RootComponent,FVector(-5-28.5*115/146.,-.2,-.303571),FVector(115/146.,.4,2.5/14.));
- Sized(TEXT("OutriggerR"),RootComponent,FVector(-5-28.5*115/146.,.2,-.303571),FVector(115/146.,.4,2.5/14.));
- Sized(TEXT("Carriage"),Carriage,FVector(-23.555555,0,-.7),FVector(8/18.,.9,.7));
- Sized(TEXT("ForkL"),Carriage,FVector(-50*115/120.,24.5,-4.75),FVector(115/120.,2.25,1.5));
- Sized(TEXT("ForkR"),Carriage,FVector(-50*115/120.,-24.5,-4.75),FVector(115/120.,2.25,1.5));
- LiftStage=Sized(TEXT("LiftStage"),RootComponent,FVector(-25,0,0),FVector(.5,.6,200./244.5));
- Wheels.Add(Sized(TEXT("DriveWheelL"),RootComponent,FVector(-10,-45.428,10),FVector(10/17.,.6,10/17.)));
- Wheels.Add(Sized(TEXT("DriveWheelR"),RootComponent,FVector(-10,45.428,10),FVector(10/17.,.6,10/17.)));
- Wheels.Add(Sized(TEXT("LoadWheelL"),RootComponent,FVector(106,-24.755,2.5),FVector(2.5/9.8,.35,2.5/9.8)));
- Wheels.Add(Sized(TEXT("LoadWheelR"),RootComponent,FVector(106,25.245,2.5),FVector(2.5/9.8,.35,2.5/9.8)));
+ constexpr double Scale=215./282.55;
+ Part(TEXT("Body"),RootComponent);
+ Part(TEXT("DriveSteer"),RootComponent);
+ // Seat the carrier behind the fork heels so it cannot enter the pallet's rear board.
+ Part(TEXT("Carriage"),Carriage,FVector(-10,0,0));
+ Part(TEXT("ForkL"),Carriage);
+ Part(TEXT("ForkR"),Carriage);
+ LiftStage=Part(TEXT("LiftStage"),RootComponent);
+ Part(TEXT("LiftRam"),LiftStage);
+ Part(TEXT("LiftPulley"),LiftStage);
+ LiftChains=Part(TEXT("LiftChains"),RootComponent,FVector(0,0,3.5+15.1*Scale));
+ LiftChains->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+ Wheels.Add(Part(TEXT("DriveWheel"),RootComponent,FVector(-74*Scale,0,20.5*Scale)));
+ Wheels.Add(Part(TEXT("LoadWheelL"),RootComponent,FVector(-7*Scale,49.7-6.15*Scale,10.5*Scale)));
+ Wheels.Add(Part(TEXT("LoadWheelR"),RootComponent,FVector(-7*Scale,-49.7+6.15*Scale,10.5*Scale)));
  Beacon = CreateDefaultSubobject<UPointLightComponent>(TEXT("Beacon"));
  Beacon->SetupAttachment(RootComponent);
  Beacon->SetRelativeLocation(FVector(-25,0,213));
@@ -59,7 +75,7 @@ AWarehouseForklift::AWarehouseForklift()
  Beacon->SetAttenuationRadius(250);
  Display = CreateDefaultSubobject<UTextRenderComponent>(TEXT("Status"));
  Display->SetupAttachment(RootComponent);
- Display->SetRelativeLocation(FVector(-33.4,0,144.5));
+ Display->SetRelativeLocation(FVector(-86*Scale,0,158.5*Scale));
  Display->SetRelativeRotation(FRotator(0,180,0));
  Display->SetHorizontalAlignment(EHTA_Center);
  Display->SetWorldSize(.8f);
@@ -208,10 +224,11 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
  if (bSupportingPallet) Params.AddIgnoredActor(TargetPallet);
  for (auto* Part : Parts)
  {
+  if (Part->GetCollisionEnabled()==ECollisionEnabled::NoCollision) continue;
   FVector PartDelta=Delta;
   if (LiftOnly && Part->GetOwner()==this)
   {
-   if (Part==LiftStage) PartDelta*=.5f;
+   if (Part==LiftStage || Part->IsAttachedTo(LiftStage)) PartDelta*=.5f;
    else if (!Part->IsAttachedTo(Carriage)) continue;
   }
   TArray<FHitResult> Hits;
@@ -240,7 +257,8 @@ bool AWarehouseForklift::MoveVehicle(FVector Delta)
  ConsumeEnergy(.035f*(VehicleMassKg+(bSupportingPallet ? GetLoadMassKg() : 0.f))*9.81f*FMath::Abs(Distance)/100.f/(.75f*3600.f));
  for (int32 Index=0; Index<Wheels.Num(); ++Index)
  {
-  const float Radius=Index<2 ? 10.f : 2.5f;
+  if (!IsValid(Wheels[Index]) || !Wheels[Index]->GetStaticMesh()) continue;
+  const float Radius=FMath::Max(1.f,float(Wheels[Index]->GetStaticMesh()->GetBoundingBox().GetSize().Z*.5*Wheels[Index]->GetRelativeScale3D().Z));
   Wheels[Index]->AddLocalRotation(FRotator(-FMath::RadiansToDegrees(Distance/Radius),0,0));
  }
  return true;
@@ -256,6 +274,11 @@ bool AWarehouseForklift::MoveLift(float Height)
  FVector StageLocation=LiftStage->GetRelativeLocation();
  StageLocation.Z=Height*.5f;
  LiftStage->SetRelativeLocation(StageLocation);
+ // Chain lower endpoint follows the carriage; upper endpoint follows the 2:1 stage.
+ constexpr float ChainBase=3.5f+15.1f*(215.f/282.55f);
+ const float RestLength=LiftChains->GetStaticMesh()->GetBoundingBox().GetSize().Z;
+ LiftChains->SetRelativeLocation(FVector(0,0,ChainBase+Height));
+ LiftChains->SetRelativeScale3D(FVector(1,1,FMath::Max(.01f,(RestLength-.5f*Height)/RestLength)));
  return true;
 }
 bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt)

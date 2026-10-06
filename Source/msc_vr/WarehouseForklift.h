@@ -20,6 +20,8 @@ class MSC_VR_API AWarehouseForklift : public AActor
  GENERATED_BODY()
 public:
  AWarehouseForklift();
+ UFUNCTION(BlueprintCallable, Category="Editor") static void RebuildEditedMesh(UStaticMesh* Mesh);
+ UFUNCTION(BlueprintCallable, Category="Editor") static void ConfigureForkCollision(UStaticMesh* Mesh);
  UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="Elevator") TObjectPtr<AWarehouseElevator> Elevator;
  UFUNCTION(BlueprintPure, Category="Elevator") float GetTransferMassKg() const { return VehicleMassKg+(bSupportingPallet ? GetLoadMassKg() : 0.f); }
  UFUNCTION(BlueprintPure, Category="Elevator") bool IsLiftAtTravelHeight() const { return LiftOffset<=20.f; }
@@ -116,7 +118,8 @@ private:
  int32 RouteIndex = 0;
  UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> Carriage;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> LiftStage;
- UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UStaticMeshComponent>> Wheels;
+ UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> LiftChains;
+ UPROPERTY(VisibleAnywhere, Transient) TArray<TObjectPtr<UStaticMeshComponent>> Wheels;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UPointLightComponent> Beacon;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UTextRenderComponent> Display;
  FVector StartLocation = FVector::ZeroVector;

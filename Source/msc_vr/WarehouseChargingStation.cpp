@@ -7,8 +7,8 @@
 
 AWarehouseChargingStation::AWarehouseChargingStation()
 {
- // Keep the contact gap when restoring the original-length chassis.
- const double RearExtension=131.*94./102.-47.2;
+ // Contact face sits 1cm behind the refined chassis rear, relative to DockPose.
+ const double RearExtension=128.*(215./282.55)-51.;
  RootComponent=CreateDefaultSubobject<USceneComponent>(TEXT("DockPose"));
  static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube"));
  static ConstructorHelpers::FObjectFinder<UMaterialInterface> Steel(TEXT("/Game/Warehouse/AGV/Materials/M_Graphite_powder-coated_steel"));

@@ -25,7 +25,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 지게차 E 시작·운반·사람 감지·충돌 | `Source/msc_vr/WarehouseForklift.h/.cpp`, `msc_vrCharacter.cpp` | `Scripts/verify_forklift_training.py`, 맵 생성 스크립트의 지게차 배치 |
 | 질량·과적·충격 손상·랙 붕괴 | `Source/msc_vr/WarehouseDamageSystem.h/.cpp`, `Scripts/configure_warehouse_strength.py`, `Scripts/verify_warehouse_strength.py`, `Scripts/verify_warehouse_strength_pie.py`, `WAREHOUSE.md`의 하중·손상 절 | `WarehouseForklift.cpp`의 접촉/고장 처리, `prepare_warehouse_assets.py`의 볼록 충돌 복사본 |
 | VNSL14 사양·하중·속도·배터리·충전 | `VNSL14_SPEC.md`, `Source/msc_vr/WarehouseForklift.h/.cpp`, `WarehouseChargingStation.h/.cpp` | `WarehousePallet.h/.cpp`, `Scripts/apply_orange_agv.py`, `Scripts/verify_forklift_training.py` |
-| 주황 AGV 모델·바퀴·기계 리그·PBR 재질 | `Scripts/prepare_original_body.py` (몸통 원본), `Scripts/apply_visual_fixes.py` (몸통만 맵 적용), `Scripts/prepare_orange_agv.py` (나머지 부품), `Source/msc_vr/WarehouseForklift.cpp`, `WAREHOUSE.md`의 Orange AGV 절 | `SourceAssets/OrangeAGV/orange_agv.fbx`, `Content/Warehouse/AGV/Meshes/`, `Content/Warehouse/AGV/Materials/`; 맵 적용은 `Scripts/apply_orange_agv.py` |
+| 주황 AGV 모델·바퀴·기계 리그·PBR 재질 | `REFINED_AGV.md`, `Scripts/prepare_refined_agv.py`, `Scripts/apply_refined_agv.py`, `Source/msc_vr/WarehouseForklift.cpp` | `SourceAssets/OrangeAGV/orange_agv_refined.fbx`, `Content/Warehouse/AGV/Meshes/`, `Content/Warehouse/AGV/Materials/`, `Scripts/verify_refined_agv.py`, `Scripts/verify_refined_agv_pie.py`; 기존 prepare/apply Orange AGV 스크립트는 과거 모델 복원용 |
 | 팔레트 구멍·포크 정렬·삽입 조건 | `Source/msc_vr/WarehousePallet.h/.cpp`, `WarehouseForklift.cpp` | `Scripts/verify_forklift_training.py` |
 | 공통 목재 팔레트 모델·재질 | `WarehousePallet.cpp`, `Scripts/apply_real_world_scale.py`, `Scripts/prepare_warehouse_assets.py` | 원본 `Content/Scene_Warehouse/Assets/MS/3D/Ind_War_Storage_Pallet_Wood_Worn_01/`; 공통 충돌 복사본 `Content/Warehouse/Physics/SM_Ind_War_Storage_Pallet_Wood_Worn_01.uasset` |
 | 정적 삼각형·동적 볼록 충돌 에셋 | `Scripts/prepare_warehouse_assets.py`, `Source/msc_vr/WarehouseCargo.cpp` | `Content/Warehouse/Collision/`, `Content/Warehouse/Physics/` (로컬 재생성물) |
@@ -54,6 +54,7 @@ msc_vr/
   msc_vr.uproject
   PROJECT_STRUCTURE.md
   README.md
+  REFINED_AGV.md
   VNSL14_SPEC.md
   WAREHOUSE.md
   Config/
@@ -66,6 +67,7 @@ msc_vr/
     apply_exterior_fab_assets.py
     apply_orange_agv.py
     apply_real_world_scale.py
+    apply_refined_agv.py
     apply_visual_fixes.py
     build_first_person_warehouse.py
     build_warehouse_exterior.py
@@ -82,6 +84,7 @@ msc_vr/
     prepare_carry_material.py
     prepare_orange_agv.py
     prepare_original_body.py
+    prepare_refined_agv.py
     prepare_warehouse_assets.py
     update_structure_summary.ps1
     verify_cargo_rules.py
@@ -94,6 +97,8 @@ msc_vr/
     verify_mezzanine_pie.py
     verify_observer_view_pie.py
     verify_real_world_scale.py
+    verify_refined_agv.py
+    verify_refined_agv_pie.py
     verify_two_hand_carry.py
     verify_warehouse_exterior.py
     verify_warehouse_interaction_pie.py
