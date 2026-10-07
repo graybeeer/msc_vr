@@ -99,6 +99,8 @@ void UAgvLidarLocalizerComponent::InitializePose()
 	ScanPoints.Reset();
 	bPartialScan = true;
 	TravelSinceMatchCm = 0.f;
+	LastCorrectionCm = 1000.f;
+	LastCorrectionDeg = 180.f;
 	AcceptedMatches = RejectedMatches = 0;
 	bLost = false;
 	bInitialized = true;
@@ -117,6 +119,8 @@ void UAgvLidarLocalizerComponent::OffsetEstimate(FVector2D OffsetCm, float YawDe
 	ToMap(OdomPosition, OdomYaw, Position, Yaw);
 	CorrectionYaw += FMath::DegreesToRadians((double)YawDeg);
 	CorrectionOffset = Position + OffsetCm - AgvMath::Rotate(CorrectionYaw, OdomPosition);
+	LastCorrectionCm = 1000.f;
+	LastCorrectionDeg = 180.f;
 }
 
 void UAgvLidarLocalizerComponent::ToMap(const FVector2D& Position, double Yaw, FVector2D& OutPosition, double& OutYaw) const
@@ -418,8 +422,14 @@ void UAgvLidarLocalizerComponent::MatchScan()
 	LastInlierRatio = (float)Inliers / Points.Num();
 	if (LastInlierRatio >= MinInlierRatio)
 	{
+		FVector2D Before, After;
+		double BeforeYaw, AfterYaw;
+		ToMap(OdomPosition, OdomYaw, Before, BeforeYaw);
 		CorrectionOffset += (FVector2D(Tx, Ty) - CorrectionOffset) * CorrectionGain;
 		CorrectionYaw += AgvMath::Wrap(Th - CorrectionYaw) * CorrectionGain;
+		ToMap(OdomPosition, OdomYaw, After, AfterYaw);
+		LastCorrectionCm = (float)FVector2D::Distance(Before, After);
+		LastCorrectionDeg = (float)FMath::RadiansToDegrees(FMath::Abs(AgvMath::Wrap(AfterYaw - BeforeYaw)));
 		TravelSinceMatchCm = 0.f;
 		++AcceptedMatches;
 	}

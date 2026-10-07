@@ -83,9 +83,30 @@ public:
 	/** Rated load (pallet + cargo), agreed 2026-10-06 with no counterweight (see FORKLIFT_NAVIGATION.md). */
 	static constexpr double RatedLoadKg = 250.0;
 
+	/**
+	 * Parked (no path, no command, not moving) for SleepAfterSeconds with the estimate settled: the LiDARs stop tracing (the frame cost of the
+	 * vehicle drops to almost nothing; while parked their scans are not used: no field, no motion to localize). On the
+	 * next order the scans are dropped and the vehicle is held until every safety scanner has swept a full revolution.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Performance")
+	bool bSleepSensorsWhenParked = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Performance", meta=(ClampMin="0"))
+	float SleepAfterSeconds = 0.5f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Performance")
+	bool bSensorsAsleep = false;
+
 private:
 	/** Steer and roll the wheel meshes to the drive's actual state. */
 	void UpdateWheelMeshes();
+
+	/** Puts the LiDARs to sleep while parked and holds the vehicle on waking until fresh safety scans exist. */
+	void UpdateSensorSleep(float Dt);
+
+	float ParkedSeconds = 0.f;
+	/** While waking: each safety scanner's revolution count that must be passed before the vehicle may move. */
+	TArray<int32> WakeRevolutions;
 
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UStaticMeshComponent> Chassis;

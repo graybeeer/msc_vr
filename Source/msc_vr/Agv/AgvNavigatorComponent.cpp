@@ -3,6 +3,9 @@
 #include "AgvLocalizerComponent.h"
 #include "AgvRouteGraph.h"
 #include "AgvRouteNode.h"
+#include "Components/PrimitiveComponent.h"
+#include "Engine/OverlapResult.h"
+#include "Engine/World.h"
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
 #include "GameFramework/Actor.h"
@@ -130,31 +133,155 @@ bool UAgvNavigatorComponent::StartPath()
 	double Yaw;
 	if (bChooseLegDirection && Localizer && Localizer->GetPose(Position, Yaw))
 	{
-		for (int32 Index = 0; Index < Path.Legs.Num(); ++Index)
-		{
-			FAgvLeg& Leg = Path.Legs[Index];
-			const double Start = Leg.Segments[0].StartHeading;
-			const double End = Leg.Sample(Leg.Length).Heading;
-			const bool bLast = Index == Path.Legs.Num() - 1;
-			// Vehicle yaw on the leg is the motion heading, plus half a turn when local -X leads.
-			auto Turning = [&](bool bReverse)
-			{
-				const double Flip = bReverse ? UE_DOUBLE_PI : 0.0;
-				double Total = FMath::Abs(AgvMath::Wrap(Start + Flip - Yaw));
-				if (bLast && Path.bHasFinalYaw)
-				{
-					Total += FMath::Abs(AgvMath::Wrap(Path.FinalYaw - (End + Flip)));
-				}
-				return Total;
-			};
-			Leg.bReverse = Turning(bDriveReversed) - Turning(!bDriveReversed) > UE_DOUBLE_HALF_PI ? !bDriveReversed : bDriveReversed;
-			Yaw = End + (Leg.bReverse ? UE_DOUBLE_PI : 0.0);
-		}
+		ChooseLegDirections(Position, Yaw);
 	}
 	LegIndex = 0;
 	MaxTrueCrossTrackErrorCm = TrueCrossTrackErrorCm = CrossTrackErrorCm = 0.f;
 	bDeviationWarning = false;
 	BeginLeg();
+	return true;
+}
+
+double UAgvNavigatorComponent::TravelMaxSpeed() const
+{
+	return Drive && Drive->GetPayloadKg() > LoadedThresholdKg ? FMath::Min(MaxSpeedCm, LoadedMaxSpeedCm) : (double)MaxSpeedCm;
+}
+
+void UAgvNavigatorComponent::ChooseLegDirections(FVector2D Position, double Yaw)
+{
+	// Shortest time over both directions of every leg (dynamic programming over the leg sequence): Best[d] is the time
+	// to finish the legs so far with the last one driven in direction d (1 = local -X leads). A turn on the spot that
+	// has no room is not allowed; if nothing is allowed, the room check is dropped (the safety fields still guard).
+	const int32 Count = Path.Legs.Num();
+	if (Count == 0)
+	{
+		return;
+	}
+	const double Rate = FMath::DegreesToRadians(FMath::Max(1.0, (double)MaxYawRateDeg));
+	const double CheckMin = FMath::DegreesToRadians((double)PivotCheckMinDeg);
+	const double Accel = FMath::Max(1.0, (double)AccelCm);
+	const double Infinity = TNumericLimits<double>::Max();
+	auto TurnCost = [&](const FVector2D& At, double From, double To, bool bCheckRoom)
+	{
+		const double Angle = FMath::Abs(AgvMath::Wrap(To - From));
+		if (Angle <= CheckMin)
+		{
+			return Angle / Rate;
+		}
+		return bCheckRoom && !CanPivot(At, From, To) ? Infinity : Angle / Rate + PivotOverheadSeconds;
+	};
+	auto Solve = [&](bool bCheckRoom, TArray<uint8>& OutChoice)
+	{
+		TArray<TStaticArray<double, 2>> Best;
+		TArray<TStaticArray<uint8, 2>> From;
+		Best.SetNum(Count);
+		From.SetNum(Count);
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			const FAgvLeg& Leg = Path.Legs[Index];
+			const double Start = Leg.Segments[0].StartHeading;
+			const double End = Leg.Sample(Leg.Length).Heading;
+			for (int32 Dir = 0; Dir < 2; ++Dir)
+			{
+				const double Speed = Dir ? TravelMaxSpeed() : FMath::Min((double)ForksFirstSpeedCm, TravelMaxSpeed());
+				double Travel = Leg.Length / Speed + Speed / Accel;
+				const double LegYaw = Start + (Dir ? UE_DOUBLE_PI : 0.0);
+				if (Index == Count - 1 && Path.bHasFinalYaw)
+				{
+					const FVector2D EndPoint = Leg.Sample(Leg.Length).Position;
+					const double Final = TurnCost(EndPoint, End + (Dir ? UE_DOUBLE_PI : 0.0), Path.FinalYaw, bCheckRoom);
+					Travel = Final == Infinity ? Infinity : Travel + Final;
+				}
+				Best[Index][Dir] = Infinity;
+				From[Index][Dir] = 0;
+				for (int32 Prev = 0; Prev < (Index == 0 ? 1 : 2); ++Prev)
+				{
+					const double PrevYaw = Index == 0 ? Yaw : Path.Legs[Index - 1].Sample(Path.Legs[Index - 1].Length).Heading + (Prev ? UE_DOUBLE_PI : 0.0);
+					const double Before = Index == 0 ? 0.0 : Best[Index - 1][Prev];
+					if (Before == Infinity || Travel == Infinity)
+					{
+						continue;
+					}
+					const double Turn = TurnCost(Leg.Segments[0].Start, PrevYaw, LegYaw, bCheckRoom);
+					// Ties keep bDriveReversed.
+					const double Total = Turn == Infinity ? Infinity : Before + Turn + Travel - (Dir == (bDriveReversed ? 1 : 0) ? 1e-3 : 0.0);
+					if (Total < Best[Index][Dir])
+					{
+						Best[Index][Dir] = Total;
+						From[Index][Dir] = (uint8)Prev;
+					}
+				}
+			}
+		}
+		uint8 Dir = Best[Count - 1][1] < Best[Count - 1][0] ? 1 : 0;
+		if (Best[Count - 1][Dir] == Infinity)
+		{
+			return false;
+		}
+		OutChoice.SetNum(Count);
+		for (int32 Index = Count - 1; Index >= 0; --Index)
+		{
+			OutChoice[Index] = Dir;
+			Dir = From[Index][Dir];
+		}
+		return true;
+	};
+	TArray<uint8> Choice;
+	if (!Solve(PivotFootprint.Num() > 0, Choice) && !Solve(false, Choice))
+	{
+		return;
+	}
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		Path.Legs[Index].bReverse = Choice[Index] != 0;
+	}
+}
+
+bool UAgvNavigatorComponent::CanPivot(const FVector2D& Position, double FromYaw, double ToYaw) const
+{
+	const UWorld* World = GetWorld();
+	if (!World || PivotFootprint.IsEmpty() || !Drive)
+	{
+		return true;
+	}
+	// The footprint turns about the reference point; check it every few degrees along the turn (the shortest way, as
+	// StepPivot turns). Only solid things count (as for the LiDAR: overlap-only triggers are not obstacles); people are
+	// not in the query (they move; the rotation field guards them).
+	const double Sweep = AgvMath::Wrap(ToYaw - FromYaw);
+	const int32 Steps = FMath::Max(1, FMath::CeilToInt32(FMath::Abs(Sweep) / FMath::DegreesToRadians(5.0)));
+	const double Z = GetOwner()->GetActorLocation().Z + 0.5 * (PivotCheckHeightCm.X + PivotCheckHeightCm.Y);
+	const double HalfHeight = 0.5 * (PivotCheckHeightCm.Y - PivotCheckHeightCm.X);
+	FCollisionObjectQueryParams Objects;
+	Objects.AddObjectTypesToQuery(ECC_WorldStatic);
+	Objects.AddObjectTypesToQuery(ECC_WorldDynamic);
+	Objects.AddObjectTypesToQuery(ECC_PhysicsBody);
+	FCollisionQueryParams Query(SCENE_QUERY_STAT(AgvPivotRoom), false, GetOwner());
+	TArray<FOverlapResult> Overlaps;
+	for (int32 I = 0; I <= Steps; ++I)
+	{
+		const double Yaw = FromYaw + Sweep * I / Steps;
+		const FVector2D Origin = Position - AgvMath::Rotate(Yaw, FVector2D(Drive->ReferenceOffsetCm, 0.0));
+		const FQuat Rotation(FVector::UpVector, Yaw);
+		for (const FBox2D& Box : PivotFootprint)
+		{
+			const FVector2D Center = Origin + AgvMath::Rotate(Yaw, Box.GetCenter());
+			const FVector2D Half = Box.GetExtent() + FVector2D(PivotClearanceCm, PivotClearanceCm);
+			Overlaps.Reset();
+			World->OverlapMultiByObjectType(Overlaps, FVector(Center, Z), Rotation, Objects,
+				FCollisionShape::MakeBox(FVector(Half, HalfHeight)), Query);
+			for (const FOverlapResult& Overlap : Overlaps)
+			{
+				const UPrimitiveComponent* Component = Overlap.GetComponent();
+				for (const ECollisionChannel Channel : { ECC_WorldStatic, ECC_WorldDynamic, ECC_Pawn, ECC_PhysicsBody })
+				{
+					if (Component && Component->GetCollisionResponseToChannel(Channel) == ECR_Block)
+					{
+						return false;
+					}
+				}
+			}
+		}
+	}
 	return true;
 }
 
@@ -195,7 +322,7 @@ void UAgvNavigatorComponent::BeginFollow()
 	for (int32 Index = Count - 2; Index >= 0; --Index)
 	{
 		const double Curvature = FMath::Abs(Leg.Sample(Index * ProfileStepCm).Curvature);
-		const double Limit = Curvature > UE_DOUBLE_SMALL_NUMBER ? FMath::Min((double)MaxSpeedCm, FMath::Sqrt(MaxLateralAccelCm / Curvature)) : (double)MaxSpeedCm;
+		const double Limit = Curvature > UE_DOUBLE_SMALL_NUMBER ? FMath::Min(TravelMaxSpeed(), FMath::Sqrt(MaxLateralAccelCm / Curvature)) : TravelMaxSpeed();
 		const double Braking = FMath::Sqrt(FMath::Square(SpeedProfile[Index + 1]) + 2.0 * DecelCm * ProfileStepCm);
 		SpeedProfile[Index] = FMath::Min(Limit, Braking);
 	}
@@ -326,7 +453,8 @@ void UAgvNavigatorComponent::StepFollow(const FVector2D& Position, double Yaw, f
 
 	// Slow down while pointing away from the path, then ramp up no faster than the acceleration limit.
 	// The safety system's cap (obstacle in a field) also holds the ramp, so the restart is smooth.
-	const double Allowed = FMath::Min(ProfileSpeed(LegS) * FMath::Clamp(FMath::Cos(Heading), 0.2, 1.0), (double)Drive->SafetySpeedLimitCmS);
+	// TravelMaxSpeed: a load picked up after the leg was planned still slows the vehicle.
+	const double Allowed = FMath::Min3(ProfileSpeed(LegS) * FMath::Clamp(FMath::Cos(Heading), 0.2, 1.0), (double)Drive->SafetySpeedLimitCmS, TravelMaxSpeed());
 	CommandSpeed = FMath::Min(Allowed, CommandSpeed + AccelCm * Dt);
 
 	// Path curvature (read slightly ahead) plus a critically damped correction: both errors decay over

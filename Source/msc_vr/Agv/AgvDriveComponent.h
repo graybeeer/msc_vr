@@ -22,6 +22,8 @@ public:
 	virtual void Step(float Dt) {}
 	/** Stops at once without deceleration; for resets and teleports only. */
 	virtual void Halt();
+	/** Load carried (kg); models without payload report 0. */
+	virtual double GetPayloadKg() const { return 0.0; }
 
 	/**
 	 * Wheel speed cap from the safety system (0 = safety stop), applied below navigation like a safety circuit.

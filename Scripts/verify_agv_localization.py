@@ -112,7 +112,9 @@ for name, use_lidar in (('odometry only', False), ('lidar', True)):
           % (name, arrived, worst, mean, errors[-1][0]))
     results['slip ' + name] = (worst, errors[-1][0], arrived)
 # Wheel spin between scans briefly fools the odometry; LiDAR bounds it, recovers, and the vehicle still arrives.
-assert results['slip lidar'][2] and results['slip lidar'][0] < 25.0 and results['slip lidar'][1] < 5.0, results['slip lidar']
+# Since 2026-10-07 (1.8 m/s empty / 1.4 m/s loaded, top LiDAR 5 Hz) the spin between scans grows: about 46-64 cm
+# at worst (10 Hz: 22-31 cm), recovered to a few cm on arrival.
+assert results['slip lidar'][2] and results['slip lidar'][0] < 80.0 and results['slip lidar'][1] < 5.0, results['slip lidar']
 assert results['slip odometry only'][0] > 5 * results['slip lidar'][0]
 
 # 4. Wrong initial pose (20 cm, 3 deg): the LiDAR pulls the estimate back while standing.

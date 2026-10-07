@@ -132,7 +132,7 @@ for payload in (0, 300):
 #    (about 27 cm clear): no slowdown for mapped structure. The same swing with an unmapped person-sized object in it
 #    must still warn / stop (the protective field never uses the map).
 def pivot_states(blocker=None):
-    place(400, 0, 180)
+    place(400, 0, 181)  # 1 deg off so the half turn goes the way that swings the forks past the pillar
     nav.set_editor_property('choose_leg_direction', False)  # turn round here rather than back up
     actor = obstacle(*blocker) if blocker else None
     assert nav.go_to_node('P0')

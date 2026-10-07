@@ -159,6 +159,13 @@ void UAgvSafetyComponent::BuildSweep()
 		{
 			FieldSet = Remaining > 0.0 ? TEXT("ROTATE LEFT") : TEXT("ROTATE RIGHT");
 		}
+		else
+		{
+			// Nothing left to turn (or the turn's first cycle, before its angle is known): no motion to guard. Keeping
+			// the travel set here let its stationary field (not cut at the leg end any more) reach the pallet the
+			// vehicle had just stopped in front of, and stop it.
+			FieldSet = TEXT("STANDSTILL");
+		}
 	}
 	else if (FMath::Abs(Speed) > 2.0 || FMath::Abs(Command) > 0.5)
 	{

@@ -61,6 +61,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Limits", meta=(ClampMin="1"))
 	float MaxSpeedCm = 130.f;
 
+	/** Travel speed limit while carrying a load (payload above LoadedThresholdKg). VNSL14: 1.0 m/s loaded. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Limits", meta=(ClampMin="1"))
+	float LoadedMaxSpeedCm = 100.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Limits", meta=(ClampMin="0"))
+	float LoadedThresholdKg = 5.f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Limits", meta=(ClampMin="1"))
 	float AccelCm = 50.f;
 
@@ -79,12 +86,37 @@ public:
 	bool bDriveReversed = true;
 
 	/**
-	 * Drive a leg the other way round (bDriveReversed flipped: forks first, slower) when that saves more than a quarter
-	 * turn on the spot, counting the turn onto the leg and, on the last leg, the turn to the final yaw. A long vehicle
-	 * turning round in a narrow lane sweeps more than the lane has; real AGVs back up instead.
+	 * Pick each leg's direction (local -X or +X leading) for the shortest estimated time: travel at MaxSpeedCm with -X
+	 * (the body) leading or ForksFirstSpeedCm with the forks leading, plus the turns on the spot. A turn larger than
+	 * PivotCheckMinDeg is only planned where the swept footprint (PivotFootprint + PivotClearanceCm) clears the world:
+	 * a long vehicle cannot turn round in a narrow lane, so there it backs up instead (as real AGVs do). Off:
+	 * every leg is driven with bDriveReversed.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Limits")
 	bool bChooseLegDirection = true;
+
+	/** Travel speed with the forks (local +X) leading, for the direction choice (the safety system enforces it). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Limits", meta=(ClampMin="1"))
+	float ForksFirstSpeedCm = 30.f;
+
+	/** Time a turn on the spot costs beyond the rotation itself (steering round, settling), for the direction choice. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Limits", meta=(ClampMin="0"))
+	float PivotOverheadSeconds = 2.f;
+
+	/** Vehicle outline in the actor frame (cm) swept to check room for a turn on the spot. Empty: no check. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Limits")
+	TArray<FBox2D> PivotFootprint;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Limits", meta=(ClampMin="0"))
+	float PivotClearanceCm = 10.f;
+
+	/** Turns up to this angle (alignments) are not checked for room. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Limits", meta=(ClampMin="0"))
+	float PivotCheckMinDeg = 10.f;
+
+	/** Heights above the floor (actor origin) the room check covers. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Limits")
+	FVector2D PivotCheckHeightCm = FVector2D(10.0, 220.0);
 
 	// Path shape.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Path", meta=(ClampMin="0"))
@@ -163,12 +195,17 @@ public:
 private:
 	bool ResolveParts();
 	bool StartPath();
+	void ChooseLegDirections(FVector2D Position, double Yaw);
+	/** Whether turning on the spot about the reference point at Position from FromYaw to ToYaw (shortest way) has room. */
+	bool CanPivot(const FVector2D& Position, double FromYaw, double ToYaw) const;
 	void BeginLeg();
 	void BeginFollow();
 	void StepPivot(double Yaw);
 	void StepFollow(const FVector2D& Position, double Yaw, float Dt);
 	void Finish(EAgvNavState NewState, const FString& Message);
 	double ProfileSpeed(double S) const;
+	/** MaxSpeedCm, or LoadedMaxSpeedCm while carrying a load. */
+	double TravelMaxSpeed() const;
 	void DrawPath() const;
 
 	UPROPERTY(Transient)

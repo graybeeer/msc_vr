@@ -53,6 +53,7 @@ public:
 
 	virtual void Step(float Dt) override;
 	virtual void Halt() override;
+	virtual double GetPayloadKg() const override { return PayloadMassKg; }
 
 	/** Load carried by the vehicle; CenterOfMassCm in the actor's local frame, SizeCm its footprint for the yaw inertia. */
 	UFUNCTION(BlueprintCallable, Category="AGV|Dynamics")

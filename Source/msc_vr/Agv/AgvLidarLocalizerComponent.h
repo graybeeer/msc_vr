@@ -130,6 +130,13 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
 	float TravelSinceMatchCm = 0.f;
 
+	/** How far the last accepted match moved the estimate (cm, deg); large until the first match after a (re)set. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
+	float LastCorrectionCm = 1000.f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
+	float LastCorrectionDeg = 180.f;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
 	int32 MapOccupiedCells = 0;
 

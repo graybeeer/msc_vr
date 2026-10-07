@@ -87,6 +87,9 @@ AAgvTestVehicle::AAgvTestVehicle()
 	// Sensor resolutions below are halved/quartered from the first build to keep the ray casting real-time in the
 	// warehouse (all five sensors 14 -> about 5 ms per frame); localization and detection are re-checked with them.
 	TopLidar->HorizontalResolutionDeg = 0.8f;
+	// 5 revolutions per second (16-channel pucks offer 5-20 Hz): half the rays of 10 Hz, same localization accuracy
+	// in the warehouse tour (scans are de-skewed with odometry).
+	TopLidar->RotationHz = 5.f;
 
 	// Two low safety scanners at the body-end corners (optical belt about 21 cm above the floor), each facing diagonally
 	// outward with 270 deg: together they cover the main travel direction (-X) and both sides of the body. The refined
@@ -140,8 +143,24 @@ AAgvTestVehicle::AAgvTestVehicle()
 	Safety->Scanners = { ScannerL, ScannerR, ForkSensorL, ForkSensorR };
 	// Body end (-97.4) to the fork tips (115), across the support wheels (+-49.7), as measured on the teammate's model.
 	Safety->Footprint = FBox2D(FVector2D(-97.4, -49.7), FVector2D(115.0, 49.7));
-	// VNSL14: 0.3 m/s with the forks leading.
-	Safety->ForksFirstMaxSpeedCm = 30.f;
+	// Speeds chosen by the user (2026-10-07) above the VNSL14 sheet (1.3 / 0.3 m/s): 1.8 m/s body first, 0.6 m/s forks
+	// first (checked with the rated load: no tipping, people stopped for; FORKLIFT_NAVIGATION.md). The wheel limit is
+	// above the travel speed so a curve at full speed is not cut by it.
+	Navigator->MaxSpeedCm = 180.f;
+	Navigator->ForksFirstSpeedCm = 60.f;
+	// Carrying a load (after lifting; the vehicle does not travel while lifting): 1.4 m/s body first, the VNSL14
+	// loaded / empty ratio (1.0 / 1.3) applied to 1.8 m/s. Forks first stays 0.6 m/s (checked at the rated load).
+	Navigator->LoadedMaxSpeedCm = 140.f;
+	Safety->ForksFirstMaxSpeedCm = 60.f;
+	Drive->MaxWheelSpeedCm = 200.f;
+	// The warning field must reach past the protective field at the speed it slows to plus the distance to slow there
+	// from full speed: (180^2 - 30^2) / (2 x 50) = 315 cm + 100 cm, with margin.
+	Safety->WarningFieldLengthCm = 480.f;
+	// Room check for turns on the spot: body and the two forks (outer edges 16-34 cm from the centre line).
+	Navigator->PivotFootprint = {
+		FBox2D(FVector2D(-97.4, -49.7), FVector2D(0.0, 49.7)),
+		FBox2D(FVector2D(0.0, -34.0), FVector2D(115.0, -16.0)),
+		FBox2D(FVector2D(0.0, 16.0), FVector2D(115.0, 34.0)) };
 }
 
 void AAgvTestVehicle::Tick(float DeltaSeconds)
@@ -153,15 +172,61 @@ void AAgvTestVehicle::Tick(float DeltaSeconds)
 void AAgvTestVehicle::StepSimulation(float Dt)
 {
 	Navigator->Step(Dt);
+	UpdateSensorSleep(Dt);
 	Drive->Step(Dt);
 	UpdateWheelMeshes();
-	TopLidar->Step(Dt);
-	ScannerL->Step(Dt);
-	ScannerR->Step(Dt);
-	ForkSensorL->Step(Dt);
-	ForkSensorR->Step(Dt);
+	if (!bSensorsAsleep)
+	{
+		TopLidar->Step(Dt);
+		ScannerL->Step(Dt);
+		ScannerR->Step(Dt);
+		ForkSensorL->Step(Dt);
+		ForkSensorR->Step(Dt);
+	}
 	Safety->Step(Dt);
+	if (!WakeRevolutions.IsEmpty())
+	{
+		bool bFresh = true;
+		for (int32 Index = 0; Index < Safety->Scanners.Num() && Index < WakeRevolutions.Num(); ++Index)
+		{
+			bFresh &= !Safety->Scanners[Index] || Safety->Scanners[Index]->GetRevolutionCount() > WakeRevolutions[Index];
+		}
+		if (bFresh)
+		{
+			WakeRevolutions.Reset();
+		}
+		else
+		{
+			Drive->SetSafetySpeedLimit(0.f);
+		}
+	}
 	Localizer->Step(Dt);
+}
+
+void AAgvTestVehicle::UpdateSensorSleep(float Dt)
+{
+	const bool bParked = bSleepSensorsWhenParked && !Navigator->IsNavigating() && FMath::Abs(Drive->SpeedCmS) < 1.f
+		&& FMath::Abs(Drive->YawRateDegS) < 0.5f && FMath::Abs(Drive->GetCommandSpeedCmS()) < 0.5 && FMath::Abs(Drive->GetCommandYawRateDegS()) < 0.5;
+	ParkedSeconds = bParked ? ParkedSeconds + Dt : 0.f;
+	// Not before the estimate has settled (the LiDAR still pulls it in after a wrong start pose, for example).
+	const bool bSettled = !Localizer->bUseLidar || (Localizer->LastCorrectionCm < 0.5f && Localizer->LastCorrectionDeg < 0.05f);
+	if (!bSensorsAsleep && bParked && bSettled && ParkedSeconds >= SleepAfterSeconds)
+	{
+		bSensorsAsleep = true;
+	}
+	else if (bSensorsAsleep && !bParked)
+	{
+		// Waking: the scan in progress began before the sleep. Drop it and hold the vehicle until each safety scanner
+		// has completed a revolution started after this (two counts on: the current partial one, then a full one).
+		bSensorsAsleep = false;
+		Safety->ResetScans();
+		WakeRevolutions.Reset();
+		for (const UAgvLidarComponent* Scanner : Safety->Scanners)
+		{
+			WakeRevolutions.Add(Scanner ? Scanner->GetRevolutionCount() + 1 : 0);
+		}
+		Drive->SetSafetySpeedLimit(0.f);
+	}
 }
 
 void AAgvTestVehicle::UpdateWheelMeshes()
