@@ -29,12 +29,26 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "UObject/ConstructorHelpers.h"
 
+namespace
+{
+ UStaticMeshComponent* CarryBody(AActor* Actor)
+ {
+  if (auto* Cargo=Cast<AWarehouseCargo>(Actor)) return Cargo->GetCargoBody();
+  if (auto* Pallet=Cast<AWarehousePallet>(Actor)) return Pallet->GetPalletBody();
+  return nullptr;
+ }
+}
+
 Amsc_vrCharacter::Amsc_vrCharacter()
 {
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> CarryMaterial(TEXT("/Game/Warehouse/Materials/M_CarryTransparent"));
 	CarryTransparentMaterial=CarryMaterial.Object;
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(55.f, 96.0f);
+ GetCharacterMovement()->InitialPushForceFactor=50.f;
+ GetCharacterMovement()->PushForceFactor=250.f;
+ GetCharacterMovement()->bPushForceScaledToMass=false;
+ GetCharacterMovement()->bScalePushForceToVelocity=false;
 	
 	// Create the first person mesh that will be viewed only by this character's owner
 	FirstPersonMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("First Person Mesh"));
@@ -138,7 +152,7 @@ void Amsc_vrCharacter::ToggleCarry()
 		FHitResult Hit;
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(PlaceAim),true,this);
 		Params.AddIgnoredActor(HeldCargo);
-		if (GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+FirstPersonCameraComponent->GetForwardVector()*250.f,ECC_Visibility,Params))
+		if (Cast<AWarehouseCargo>(HeldCargo) && GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+FirstPersonCameraComponent->GetForwardVector()*250.f,ECC_Visibility,Params))
 		{
 			AWarehousePallet* TargetPallet=Cast<AWarehousePallet>(Hit.GetActor());
 			for (TActorIterator<AWarehousePallet> It(GetWorld()); It; ++It)
@@ -174,6 +188,7 @@ void Amsc_vrCharacter::ToggleCarry()
 		Station->RequestManualCharge();
 		return;
 	}
+	if (auto* Pallet=Cast<AWarehousePallet>(Hit.GetActor())) { TryPickupPallet(Pallet); return; }
 	AWarehouseCargo* Best = Cast<AWarehouseCargo>(Hit.GetActor());
 	if (!Best)
 	{
@@ -201,18 +216,26 @@ bool Amsc_vrCharacter::InitializeCarryMesh()
 	return true;
 }
 
-bool Amsc_vrCharacter::TryPickupCargo(AWarehouseCargo* Cargo)
+bool Amsc_vrCharacter::TryPickupCargo(AWarehouseCargo* Cargo) { return TryPickupObject(Cargo); }
+bool Amsc_vrCharacter::TryPickupPallet(AWarehousePallet* Pallet)
+{
+ if (!IsValid(Pallet) || Pallet->PayloadMassKg>0) return false;
+ if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->GetSupportedMass(Pallet)>.01f) return false;
+ return TryPickupObject(Pallet);
+}
+bool Amsc_vrCharacter::TryPickupObject(AActor* Cargo)
 {
  if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->HasFailed(Cargo)) return false;
-	if (IsValid(HeldCargo) || !IsValid(Cargo) || Cargo->GetAttachParentActor() || !Cargo->GetCargoBody()->GetStaticMesh() || !InitializeCarryMesh()) return false;
+	if (IsValid(HeldCargo) || !IsValid(Cargo) || Cargo->GetAttachParentActor() || !CarryBody(Cargo)->GetStaticMesh() || !InitializeCarryMesh()) return false;
 	FVector Center, Extent;
 	Cargo->GetActorBounds(false,Center,Extent);
 	if (FVector::Dist(Center,FirstPersonCameraComponent->GetComponentLocation())>300.f) return false;
-	UStaticMeshComponent* Body=Cargo->GetCargoBody();
+	UStaticMeshComponent* Body=CarryBody(Cargo);
 	const bool WasSimulating=Body->IsSimulatingPhysics();
 	Body->SetSimulatePhysics(false);
 	Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	Cargo->WakeStackAbove();
+	if (auto* Box=Cast<AWarehouseCargo>(Cargo)) Box->WakeStackAbove();
+ else for (TActorIterator<AWarehouseCargo> It(GetWorld());It;++It) It->GetCargoBody()->WakeAllRigidBodies();
 	if (!Cargo->AttachToComponent(GetRootComponent(),FAttachmentTransformRules::KeepWorldTransform))
 	{
 		Body->SetCollisionProfileName(TEXT("PhysicsActor"));
@@ -241,6 +264,7 @@ bool Amsc_vrCharacter::TryPickupCargo(AWarehouseCargo* Cargo)
 		}
 	}
 	PickupTransform=Cargo->GetActorTransform();
+	LastCarryPose=PickupTransform;
 	PickupTime=0.f;
 	CarryPhase=0.f;
 	NormalWalkSpeed=GetCharacterMovement()->MaxWalkSpeed;
@@ -261,17 +285,47 @@ void Amsc_vrCharacter::DropCargo()
 	PlacementPallet=nullptr;
 	if (IsValid(HeldCargo))
 	{
-		AWarehouseCargo* Cargo=HeldCargo;
-		HeldCargo=nullptr;
+		AActor* Cargo=HeldCargo;
+        auto* CarryComponent=CarryBody(Cargo);
+        const auto Bounds=CarryComponent->GetStaticMesh()->GetBounds();
+        const FVector Scale=Cargo->GetActorScale3D();
+        const FVector Extent=Bounds.BoxExtent*Scale.GetAbs();
+        const FVector Center=Cargo->GetActorTransform().TransformPosition(Bounds.Origin);
+        const FVector Forward=FRotator(0,FirstPersonCameraComponent->GetComponentRotation().Yaw,0).Vector();
+        FCollisionQueryParams ReleaseParams(SCENE_QUERY_STAT(SafeCargoRelease),false);
+        ReleaseParams.AddIgnoredActor(Cargo);
+        FTransform SafePose=Cargo->GetActorTransform(); bool Found=false;
+        for (float Z : {0.f,20.f,40.f})
+        {
+         for (float D : {0.f,20.f,40.f,60.f,80.f,100.f,120.f,140.f,160.f})
+         {
+          const FVector Candidate=Center+Forward*D+FVector(0,0,Z);
+          if (GetWorld()->OverlapBlockingTestByProfile(Candidate,SafePose.GetRotation(),TEXT("PhysicsActor"),FCollisionShape::MakeBox(Extent+FVector(.5f)),ReleaseParams)) continue;
+          FCollisionQueryParams PathParams=ReleaseParams; PathParams.AddIgnoredActor(this);
+          FHitResult PathHit;
+          if (GetWorld()->SweepSingleByProfile(PathHit,Center,Candidate,SafePose.GetRotation(),TEXT("PhysicsActor"),FCollisionShape::MakeBox((Extent-FVector(.2f)).ComponentMax(FVector(.1f))),PathParams)) continue;
+          SafePose.SetLocation(Candidate-SafePose.GetRotation().RotateVector(Bounds.Origin*Scale)); Found=true; break;
+         }
+         if (Found) break;
+        }
+        if (!Found)
+        {
+         if (GEngine) GEngine->AddOnScreenDebugMessage(41,2.f,FColor::Yellow,TEXT("No clear drop space. Move away from the wall or stack."));
+         return;
+        }
+        HeldCargo=nullptr;
 		Cargo->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-		auto* Body=Cargo->GetCargoBody();
+        Cargo->SetActorTransform(SafePose,false,nullptr,ETeleportType::TeleportPhysics);
+		auto* Body=CarryBody(Cargo);
 		Body->bDisallowNanite=HeldDisallowedNanite;
 		for (int32 Index=0; Index<HeldOriginalMaterials.Num(); ++Index)
 			Body->SetMaterial(Index,HeldOriginalMaterials[Index]);
 		Body->FirstPersonPrimitiveType=EFirstPersonPrimitiveType::None;
 		Body->MarkRenderStateDirty();
 		Body->SetCollisionProfileName(TEXT("PhysicsActor"));
+        Body->SetEnableGravity(true); Body->SetUseCCD(true);
 		Body->SetSimulatePhysics(true);
+        Body->SetWorldTransform(SafePose,false,nullptr,ETeleportType::TeleportPhysics);
 		Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
 		Body->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
 		Body->WakeAllRigidBodies();
@@ -306,7 +360,7 @@ void Amsc_vrCharacter::SetObserverPresentation(bool Observing)
 	GetMesh()->SetOwnerNoSee(!Observing);
 	if (IsValid(HeldCargo))
 	{
-		auto* Body=HeldCargo->GetCargoBody();
+		auto* Body=CarryBody(HeldCargo);
 		Body->FirstPersonPrimitiveType=Observing ? EFirstPersonPrimitiveType::None : EFirstPersonPrimitiveType::FirstPerson;
 		Body->MarkRenderStateDirty();
 	}
@@ -340,7 +394,7 @@ bool Amsc_vrCharacter::FindPlacement(AWarehousePallet* Pallet, const FVector& Ai
 		FVector::Dist(Aim,FirstPersonCameraComponent->GetComponentLocation())>260.f) return false;
 	if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->HasFailed(Pallet)) return false;
 	if (FMath::Abs(Pallet->GetActorRotation().Pitch)>2 || FMath::Abs(Pallet->GetActorRotation().Roll)>2) return false;
-	const auto Bounds=HeldCargo->GetCargoBody()->GetStaticMesh()->GetBounds();
+	const auto Bounds=CarryBody(HeldCargo)->GetStaticMesh()->GetBounds();
 	const FVector Scale=HeldCargo->GetActorScale3D();
 	const FVector Extent=Bounds.BoxExtent*Scale.GetAbs();
 	const FVector PalletScale=Pallet->GetActorScale3D().GetAbs();
@@ -383,7 +437,7 @@ bool Amsc_vrCharacter::FindPlacement(AWarehousePallet* Pallet, const FVector& Ai
 
 bool Amsc_vrCharacter::TryPlaceOnPallet(AWarehousePallet* Pallet, FVector Aim)
 {
-	if (PlacementTime>=0 || !FindPlacement(Pallet,Aim,PlacementTarget)) return false;
+	if (PlacementTime>=0 || !Cast<AWarehouseCargo>(HeldCargo) || !FindPlacement(Pallet,Aim,PlacementTarget)) return false;
 	PlacementPallet=Pallet;
 	PlacementPalletPose=Pallet->GetActorTransform();
 	PlacementStart=HeldCargo->GetActorTransform();
@@ -411,7 +465,7 @@ void Amsc_vrCharacter::UpdateCarryPose(float DeltaSeconds)
 	// Anchor the load at the waist, independent of head motion and camera pitch.
 	const FVector CarryOrigin=GetActorLocation();
 	const FQuat Facing=FRotator(0,FirstPersonCameraComponent->GetComponentRotation().Yaw,0).Quaternion();
-	const auto Bounds=HeldCargo->GetCargoBody()->GetStaticMesh()->GetBounds();
+	const auto Bounds=CarryBody(HeldCargo)->GetStaticMesh()->GetBounds();
 	const FVector Scale=HeldCargo->GetActorScale3D();
 	const FVector Extent=Bounds.BoxExtent*Scale.GetAbs();
 	CarryPhase+=GetVelocity().Size2D()*DeltaSeconds*.025f;
@@ -446,7 +500,19 @@ void Amsc_vrCharacter::UpdateCarryPose(float DeltaSeconds)
 		HeldCargo->SetActorTransform(Pose);
 		if (PlacementTime>=.45f) { DropCargo(); return; }
 	}
-	else HeldCargo->SetActorLocationAndRotation(FMath::Lerp(PickupTransform.GetLocation(),Pivot,T),FQuat::Slerp(PickupTransform.GetRotation(),Facing,T));
+	else
+ {
+  const FQuat Rotation=FQuat::Slerp(PickupTransform.GetRotation(),Facing,T);
+  FVector NextPivot=FMath::Lerp(PickupTransform.GetLocation(),Pivot,T);
+  const FVector PreviousCenter=LastCarryPose.TransformPosition(Bounds.Origin);
+  const FVector NextCenter=NextPivot+Rotation.RotateVector(Bounds.Origin*Scale);
+  FCollisionQueryParams Params(SCENE_QUERY_STAT(CarryMotion),false,this); Params.AddIgnoredActor(HeldCargo);
+  FHitResult Hit;
+  if (GetWorld()->SweepSingleByProfile(Hit,PreviousCenter,NextCenter,Rotation,TEXT("PhysicsActor"),FCollisionShape::MakeBox((Extent-FVector(.2f)).ComponentMax(FVector(.1f))),Params))
+   NextPivot=FMath::Lerp(PreviousCenter,NextCenter,FMath::Max(0.f,Hit.Time-.01f))-Rotation.RotateVector(Bounds.Origin*Scale);
+  HeldCargo->SetActorLocationAndRotation(NextPivot,Rotation,false,nullptr,ETeleportType::TeleportPhysics);
+ }
+ LastCarryPose=HeldCargo->GetActorTransform();
 	CarryFacing=HeldCargo->GetActorQuat();
 	const FVector ActualCenter=HeldCargo->GetActorTransform().TransformPosition(Bounds.Origin);
 	for (int I=0; I<2; ++I)

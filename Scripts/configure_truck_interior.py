@@ -87,7 +87,7 @@ for row,x in enumerate((-150,-80,-10,60)):
                 assert recipe.valid
                 a=actors.spawn_actor_from_class(unreal.WarehouseCargo,pose.transform_location(unreal.Vector(x+dx,y,bottom)),truck.get_actor_rotation())
                 a.set_actor_label(f'TRK_Cargo_{i:03}');a.set_folder_path('Warehouse/Exterior/TruckCargo');a.set_editor_property('is_spatially_loaded',False)
-                a.set_cargo_mesh(unreal.load_asset('/Game/Warehouse/Cargo/BoxesPalletsPack/Meshes/Cargo_Box_V'+str(i%4+1)+'_001'))
+                a.set_cargo_mesh(unreal.load_asset('/Game/Warehouse/Cargo/BoxesPalletsPack/Meshes/SM_Carton_Intact_'+str(i%2+1)))
                 assert a.apply_cargo_recipe(recipe)
                 c=a.get_component_by_class(unreal.StaticMeshComponent);c.set_editor_property('override_materials',[])
                 c.set_simulate_physics(False)

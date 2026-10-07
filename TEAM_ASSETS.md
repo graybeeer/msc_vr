@@ -14,7 +14,7 @@ Git으로 프로젝트를 받아도 대용량 외부 에셋은 내려오지 않�
 | □ | [Vehicle Variety Pack — Switchboard Studios](https://www.fab.com/listings/dc1ada50-2523-44b1-b0e2-a72d14076fb4) | 외부 박스 트럭과 열린 적재함의 원본 | **프로젝트에 추가** | `Content/VehicleVarietyPack/` |
 | □ | [European Beech — Quixel Megascans](https://www.fab.com/listings/d11cc01d-9422-41b7-950f-416c9ce79caf) | 창고 주변 나무 | **프로젝트에 추가** | `Content/EuropeanBeech/` + 함께 설치되는 `Content/MSPresets/` |
 | □ | [Free Shrubs Pack (Ultra Realistic Wind) — Greenleaf Vision](https://www.fab.com/listings/7ca465ab-fb9c-4d6b-bddb-82c20f604657) | 울타리 주변 관목 | **프로젝트에 추가** | `Content/GV_FreeShrubsPack/` |
-| □ | [Boxes & Pallets Pack — IINickE](https://www.fab.com/listings/a7c9776e-0a8e-424b-8f7c-f4d746097f0f) | 창고·트럭 안의 택배 상자 4종 | **FBX ZIP 다운로드 → 아래 3절의 임포트** | 원본 `SourceAssets/Cargo/BoxesPalletsPack/`, 결과 `Content/Warehouse/Cargo/BoxesPalletsPack/` |
+| □ | [Boxes & Pallets Pack — IINickE](https://www.fab.com/listings/a7c9776e-0a8e-424b-8f7c-f4d746097f0f) | 창고·트럭 안의 온전한 택배 상자 2종 | **FBX ZIP 다운로드 → 아래 3절의 임포트** | 원본 `SourceAssets/Cargo/BoxesPalletsPack/`, 결과 `Content/Warehouse/Cargo/BoxesPalletsPack/` |
 
 **주의할 구분:** 마지막 상자 팩은 Unreal용 완성 패키지가 아니라 FBX 자료입니다. ZIP을 받기만 하면 설치가 끝난 것이 아닙니다. 상자 팩에 들어 있는 팔레트는 현재 사용하지 않으며, 공통 팔레트는 첫 번째 Warehouse 팩의 모델입니다.
 
@@ -90,7 +90,7 @@ Windows 기준으로 아래 순서로 런처의 검색 경로를 등록합니다
 & 'C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe' "$PWD\msc_vr.uproject" "-ExecutePythonScript=$PWD\Scripts\prepare_warehouse_assets.py" -unattended -nop4 -nosplash -nullrhi
 ```
 
-완료 문구: `WAREHOUSE_COLLISION_ASSETS_READY`
+완료 문구: `WAREHOUSE_COLLISION_ASSETS_READY`. 이 단계에서 `SM_Carton_Intact_1/2`와 110×110×15cm 공통 물리 팔레트 `Content/Warehouse/Physics/SM_Pallet_110.uasset`도 생성합니다. 원본 V3·V4는 임포트되지만 게임에 배치하지 않습니다. 파생 에셋은 Git 제외이므로 팀원마다 재생성해야 합니다.
 
 ### ③ 하중·파손용 물리 복사본 준비 — 맵의 손상 프로필도 저장
 
@@ -125,7 +125,7 @@ Windows 기준으로 아래 순서로 런처의 검색 경로를 등록합니다
 
 - [ ] 필수 팩 5개의 다운로드·추가를 완료했다.
 - [ ] `Content/Scene_Warehouse`, `VehicleVarietyPack`, `EuropeanBeech`, `GV_FreeShrubsPack`, `MSPresets`가 있다.
-- [ ] 상자 FBX를 임포트했고 `Cargo_Box_V1_001`~`Cargo_Box_V4_001`이 있다.
+- [ ] 상자 FBX 임포트와 충돌 준비를 끝냈고 `SM_Carton_Intact_1/2`, `SM_Pallet_110`이 있다.
 - [ ] `Content/Warehouse/Collision/`와 `Content/Warehouse/Physics/`가 생성됐다.
 - [ ] `Content/Warehouse/Exterior/TruckInterior/SM_Truck_Open.uasset`이 있다.
 - [ ] C++ 빌드를 완료하고 `msc_vr.uproject`를 UE 5.8에서 열었다.

@@ -84,7 +84,7 @@ bool AWarehouseElevator::CabinClear() const
  if (IsValid(ReservedVehicle))
  {
   Params.AddIgnoredActor(ReservedVehicle);
-  TArray<AActor*> Loads; ReservedVehicle->GetAttachedActors(Loads,true,true); Params.AddIgnoredActors(Loads);
+  Params.AddIgnoredActors(ReservedVehicle->GetPhysicalLoads());
  }
  return !GetWorld()->OverlapAnyTestByObjectType(
   GetActorTransform().TransformPosition(FVector(0,0,PlatformHeight+136)),GetActorQuat(),FCollisionObjectQueryParams(FCollisionObjectQueryParams::AllObjects),
@@ -93,7 +93,7 @@ bool AWarehouseElevator::CabinClear() const
 bool AWarehouseElevator::FitsInside(AWarehouseForklift* Vehicle) const
 {
  if (!IsValid(Vehicle)) return false;
- TArray<AActor*> Bodies{Vehicle}; TArray<AActor*> Loads; Vehicle->GetAttachedActors(Loads,true,true); Bodies.Append(Loads);
+ TArray<AActor*> Bodies{Vehicle}; Bodies.Append(Vehicle->GetPhysicalLoads());
  for (AActor* Body : Bodies)
  {
   TArray<UStaticMeshComponent*> Parts; Body->GetComponents(Parts);
@@ -176,7 +176,7 @@ bool AWarehouseElevator::MovePlatform(int32 Floor,float Dt)
  if (IsValid(ReservedVehicle))
  {
   Params.AddIgnoredActor(ReservedVehicle);
-  TArray<AActor*> Loads; ReservedVehicle->GetAttachedActors(Loads,true,true); Params.AddIgnoredActors(Loads);
+  Params.AddIgnoredActors(ReservedVehicle->GetPhysicalLoads());
  }
  TArray<FHitResult> Hits;
  const FVector Start=Platform->GetComponentLocation(),Delta(0,0,Next-PlatformHeight);

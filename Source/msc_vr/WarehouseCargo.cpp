@@ -1,4 +1,5 @@
 #include "WarehouseCargo.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "PhysicsEngine/BodySetup.h"
@@ -126,6 +127,7 @@ FText AWarehouseCargo::GetCargoDescription() const
 void AWarehouseCargo::BeginPlay()
 {
  Super::BeginPlay();
+ ConfigureCarryPhysics(Body,GrossMassKg);
  SetGrossMassKg(GrossMassKg);
  // Placed cargo used to remain kinematic until its first pickup/drop.
  if (!GetAttachParentActor())
@@ -134,6 +136,23 @@ void AWarehouseCargo::BeginPlay()
   Body->SetUseCCD(true);
   Body->SetSimulatePhysics(true);
  }
+}
+void AWarehouseCargo::ConfigureCarryPhysics(UStaticMeshComponent* Component, float MassKg)
+{
+ Component->SetCollisionProfileName(TEXT("PhysicsActor"));
+ Component->SetEnableGravity(true); Component->SetUseCCD(true);
+ Component->SetLinearDamping(.2f); Component->SetAngularDamping(.7f);
+ Component->SetMassOverrideInKg(NAME_None,FMath::Max(.1f,MassKg));
+ Component->BodyInstance.SetOverrideIterationCounts(true);
+ Component->BodyInstance.SetPositionSolverIterationCount(16);
+ Component->BodyInstance.SetVelocitySolverIterationCount(8);
+ Component->BodyInstance.SetProjectionSolverIterationCount(4);
+ Component->BodyInstance.SetMaxDepenetrationVelocity(100.f);
+ auto* Material=NewObject<UPhysicalMaterial>(Component);
+ Material->Friction=.65f; Material->Restitution=0.f;
+ Material->bOverrideRestitutionCombineMode=true;
+ Material->RestitutionCombineMode=EFrictionCombineMode::Min;
+ Component->SetPhysMaterialOverride(Material);
 }
 void AWarehouseCargo::WakeStackAbove()
 {

@@ -15,7 +15,7 @@ def configure_cargo_variety():
     actors=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
     cargo=sorted((a for a in actors.get_all_level_actors() if isinstance(a,unreal.WarehouseCargo)),key=lambda a:a.get_actor_label())
     assert cargo,'No cargo in level'
-    meshes=[unreal.load_asset('/Game/Warehouse/Cargo/BoxesPalletsPack/Meshes/Cargo_Box_V'+str(i)+'_001') for i in range(1,5)]
+    meshes=[unreal.load_asset('/Game/Warehouse/Cargo/BoxesPalletsPack/Meshes/SM_Carton_Intact_'+str(i)) for i in (1,2)]
     assert all(meshes),'Install the local Fab Boxes & Pallets Pack with Scripts/import_boxes_pallets_pack.py; see WAREHOUSE.md'
     named={a.get_actor_label():a for a in actors.get_all_level_actors()}
     groups={}
@@ -42,6 +42,9 @@ def configure_cargo_variety():
             if group.startswith('WH_Stock_'):
                 _,_,_,row,col=group.split('_')
                 center=unreal.Vector(support_center.x+(int(row)-.5)*43,support_center.y+(int(col)-.5)*34,center.z)
+                if group=='WH_Stock_5_0_0':
+                    # This small footprint needs the actual frame/board intersection.
+                    center=unreal.Vector(support_center.x,support_center.y-50,center.z)
             else:
                 center=unreal.Vector(support_center.x,support_center.y,center.z)
         maximum=(60,40,38) if group.startswith('WH_Cargo_') else (30,20,25) if group.startswith('WH_LightStock_') else (40,30,28)
