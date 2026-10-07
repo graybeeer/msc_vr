@@ -86,6 +86,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="1"))
 	float InlierDistanceCm = 10.f;
 
+	/** Final width of the robust weight: points farther than this from the map have no pull (see MatchScan). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="1"))
+	float RobustScaleCm = 8.f;
+
 	/** A match is accepted when at least this share of the points lies on the map. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="0", ClampMax="1"))
 	float MinInlierRatio = 0.5f;
@@ -94,7 +98,7 @@ public:
 	int32 MinMatchPoints = 100;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="1"))
-	int32 MatchIterations = 15;
+	int32 MatchIterations = 20;
 
 	/** Share of each accepted match applied at once (smooths noise; 1 = jump to the match). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="0.05", ClampMax="1"))
@@ -117,6 +121,10 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
 	int32 RejectedMatches = 0;
+
+	/** Matches that failed from the current estimate and were found again by the heading search (see MatchScan). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
+	int32 RecoveredMatches = 0;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
 	int32 LastMatchPoints = 0;

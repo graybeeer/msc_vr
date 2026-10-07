@@ -101,7 +101,7 @@ void UAgvLidarLocalizerComponent::InitializePose()
 	TravelSinceMatchCm = 0.f;
 	LastCorrectionCm = 1000.f;
 	LastCorrectionDeg = 180.f;
-	AcceptedMatches = RejectedMatches = 0;
+	AcceptedMatches = RejectedMatches = RecoveredMatches = 0;
 	bLost = false;
 	bInitialized = true;
 	StatusText = bUseLidar ? TEXT("LIDAR") : TEXT("ODOMETRY ONLY");
@@ -237,7 +237,9 @@ void UAgvLidarLocalizerComponent::BuildMap()
 	Map->CellCm = MapCellCm;
 	Map->CapCm = MatchDistanceCapCm;
 
-	// Static, blocking geometry in the height band, excluding vehicles. The floor sits below the band.
+	// Permanent structure only: static, blocking geometry in the height band (racks, columns, walls). Cargo, pallets,
+	// people and vehicles are movable and change all the time, so they are never landmarks; their points are rejected
+	// by the match (robust weights below). The floor sits below the band.
 	const double Floor = GetOwner()->GetActorLocation().Z;
 	const double Low = Floor + MapMinZCm, High = Floor + MapMaxZCm;
 	TArray<UPrimitiveComponent*> Obstacles;
@@ -364,62 +366,96 @@ void UAgvLidarLocalizerComponent::MatchScan()
 	}
 
 	// Gauss-Newton on the distance field: find the correction that puts the scan onto mapped surfaces.
-	// Points beyond the cap have no gradient, so unmapped objects are ignored; Huber weights tame the rest.
-	double Tx = CorrectionOffset.X, Ty = CorrectionOffset.Y, Th = CorrectionYaw;
+	// Robust (redescending) weights: a point counts fully when it lies on a mapped surface and not at all once it is
+	// RobustScaleCm or more off it, so unmapped things near the structure (cargo on a rack shelf, a person beside a
+	// column, another vehicle) do not drag the estimate towards the nearest mapped surface. A plain capped/Huber
+	// weight let every such point pull with a constant force: cargo on the racks biased the estimate by ~10 cm.
+	// The scale starts wide (the cap: large errors, e.g. a wrong start pose or wheel spin on a slippery floor, still
+	// converge) and halves each iteration down to RobustScaleCm (slower shrinking lets points near the structure, cargo
+	// on a shelf, pull for longer: 13 cm error in the warehouse tour at 0.7).
 	const double Step = Map->CellCm;
-	const double Huber = InlierDistanceCm;
-	for (int32 Iteration = 0; Iteration < MatchIterations; ++Iteration)
+	auto Refine = [&](double& Tx, double& Ty, double& Th)
 	{
-		double H[3][3] = {}, G[3] = {};
+		double Scale = Map->CapCm;
+		for (int32 Iteration = 0; Iteration < MatchIterations; ++Iteration, Scale = FMath::Max((double)RobustScaleCm, Scale * 0.5))
+		{
+			double H[3][3] = {}, G[3] = {};
+			const double C = FMath::Cos(Th), S = FMath::Sin(Th);
+			for (const FVector2D& P : Points)
+			{
+				const FVector2D Q(C * P.X - S * P.Y + Tx, S * P.X + C * P.Y + Ty);
+				const double R = Map->Sample(Q);
+				if (R >= Scale)
+				{
+					continue;
+				}
+				const double GX = (Map->Sample(Q + FVector2D(Step, 0)) - Map->Sample(Q - FVector2D(Step, 0))) / (2.0 * Step);
+				const double GY = (Map->Sample(Q + FVector2D(0, Step)) - Map->Sample(Q - FVector2D(0, Step))) / (2.0 * Step);
+				const double J[3] = { GX, GY, GX * (-S * P.X - C * P.Y) + GY * (C * P.X - S * P.Y) };
+				const double W = FMath::Square(1.0 - FMath::Square(R / Scale)); // Tukey biweight
+				for (int32 I = 0; I < 3; ++I)
+				{
+					G[I] += W * J[I] * R;
+					for (int32 K = 0; K < 3; ++K)
+					{
+						H[I][K] += W * J[I] * J[K];
+					}
+				}
+			}
+			// Light damping keeps a poorly constrained direction (a long featureless wall) from running away.
+			for (int32 I = 0; I < 3; ++I)
+			{
+				H[I][I] += 1e-3 * (1.0 + H[I][I]);
+				G[I] = -G[I];
+			}
+			double Delta[3];
+			if (!AgvMath::Solve3(H, G, Delta))
+			{
+				break;
+			}
+			Tx += Delta[0];
+			Ty += Delta[1];
+			Th += Delta[2];
+			if (Scale <= RobustScaleCm && FMath::Abs(Delta[0]) + FMath::Abs(Delta[1]) < 0.01 && FMath::Abs(Delta[2]) < 1e-5)
+			{
+				break;
+			}
+		}
+		int32 Inliers = 0;
 		const double C = FMath::Cos(Th), S = FMath::Sin(Th);
 		for (const FVector2D& P : Points)
 		{
-			const FVector2D Q(C * P.X - S * P.Y + Tx, S * P.X + C * P.Y + Ty);
-			const double R = Map->Sample(Q);
-			if (R >= Map->CapCm - 1e-3)
-			{
-				continue;
-			}
-			const double GX = (Map->Sample(Q + FVector2D(Step, 0)) - Map->Sample(Q - FVector2D(Step, 0))) / (2.0 * Step);
-			const double GY = (Map->Sample(Q + FVector2D(0, Step)) - Map->Sample(Q - FVector2D(0, Step))) / (2.0 * Step);
-			const double J[3] = { GX, GY, GX * (-S * P.X - C * P.Y) + GY * (C * P.X - S * P.Y) };
-			const double W = R <= Huber ? 1.0 : Huber / R;
-			for (int32 I = 0; I < 3; ++I)
-			{
-				G[I] += W * J[I] * R;
-				for (int32 K = 0; K < 3; ++K)
-				{
-					H[I][K] += W * J[I] * J[K];
-				}
-			}
+			Inliers += Map->Sample(FVector2D(C * P.X - S * P.Y + Tx, S * P.X + C * P.Y + Ty)) <= InlierDistanceCm;
 		}
-		// Light damping keeps a poorly constrained direction (a long featureless wall) from running away.
-		for (int32 I = 0; I < 3; ++I)
-		{
-			H[I][I] += 1e-3 * (1.0 + H[I][I]);
-			G[I] = -G[I];
-		}
-		double Delta[3];
-		if (!AgvMath::Solve3(H, G, Delta))
-		{
-			break;
-		}
-		Tx += Delta[0];
-		Ty += Delta[1];
-		Th += Delta[2];
-		if (FMath::Abs(Delta[0]) + FMath::Abs(Delta[1]) < 0.01 && FMath::Abs(Delta[2]) < 1e-5)
-		{
-			break;
-		}
-	}
-
-	int32 Inliers = 0;
-	const double C = FMath::Cos(Th), S = FMath::Sin(Th);
-	for (const FVector2D& P : Points)
+		return (double)Inliers / Points.Num();
+	};
+	double Tx = CorrectionOffset.X, Ty = CorrectionOffset.Y, Th = CorrectionYaw;
+	double Ratio = Refine(Tx, Ty, Th);
+	if (Ratio < MinInlierRatio)
 	{
-		Inliers += Map->Sample(FVector2D(C * P.X - S * P.Y + Tx, S * P.X + C * P.Y + Ty)) <= InlierDistanceCm;
+		// Recovery: the heading is the usual culprit (wheel spin while turning on the spot fools the odometry's yaw, and a
+		// few degrees put distant walls far outside the robust window). Re-run the match from headings around the
+		// current estimate, keeping its position, and take the best fit. Only on a failed match, so it costs nothing
+		// in normal running.
+		FVector2D Position;
+		double Yaw;
+		ToMap(OdomPosition, OdomYaw, Position, Yaw);
+		for (const double OffsetDeg : { 2.0, -2.0, 4.0, -4.0, 7.0, -7.0, 10.0, -10.0, 15.0, -15.0 })
+		{
+			double SeedTh = CorrectionYaw + FMath::DegreesToRadians(OffsetDeg);
+			FVector2D Seed = Position - AgvMath::Rotate(SeedTh, OdomPosition);
+			const double SeedRatio = Refine(Seed.X, Seed.Y, SeedTh);
+			if (SeedRatio > Ratio)
+			{
+				Ratio = SeedRatio;
+				Tx = Seed.X;
+				Ty = Seed.Y;
+				Th = SeedTh;
+			}
+		}
+		RecoveredMatches += Ratio >= MinInlierRatio;
 	}
-	LastInlierRatio = (float)Inliers / Points.Num();
+	LastInlierRatio = (float)Ratio;
 	if (LastInlierRatio >= MinInlierRatio)
 	{
 		FVector2D Before, After;
