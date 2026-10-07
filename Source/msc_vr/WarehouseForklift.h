@@ -80,6 +80,7 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Specification") float MinimumTurningRadiusCm = 117.3f;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") float CurrentSpeedCm = 0;
  UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="Training") TObjectPtr<AWarehousePallet> TargetPallet;
+ TArray<AActor*> GetPhysicalLoads() const;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") bool bPowered = false;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") EWarehouseCycle State = EWarehouseCycle::Idle;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") FString Status = TEXT("E : START");
@@ -101,7 +102,9 @@ private:
  bool MovePrecise(FVector Destination,float Speed,float Dt);
  bool SeePallet(FTransform& Pose) const;
  bool DestinationClear() const;
- void HoldCargo(bool Attach);
+ void TrackCargo();
+ bool PalletOnForks() const;
+ float LostSupportSeconds = 0;
  FTransform PalletApproach(const FTransform& PalletPose,float Distance) const;
  EWarehouseAIState ResumeAI = EWarehouseAIState::Ready;
  EWarehouseAIState WaitResumeAI = EWarehouseAIState::Ready;

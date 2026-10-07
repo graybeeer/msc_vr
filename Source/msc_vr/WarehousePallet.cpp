@@ -1,4 +1,5 @@
 #include "WarehousePallet.h"
+#include "WarehouseCargo.h"
 #include "WarehouseDamageSystem.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -14,13 +15,40 @@ AWarehousePallet::AWarehousePallet()
  Body->SetupAttachment(RootComponent);
  Body->SetCollisionProfileName(TEXT("BlockAllDynamic"));
  Body->SetStaticMesh(Pallet.Object);
- if (Pallet.Succeeded())
+ if (auto* Prepared=LoadObject<UStaticMesh>(nullptr,TEXT("/Game/Warehouse/Physics/SM_Pallet_110")))
+ {
+  Body->SetStaticMesh(Prepared);
+ }
+ else if (Pallet.Succeeded())
  {
   const FBox Bounds=Pallet.Object->GetBoundingBox();
   const FVector Scale=FVector(110,110,15)/Bounds.GetSize();
   Body->SetRelativeScale3D(Scale);
   Body->SetRelativeLocation(FVector(-Bounds.GetCenter().X,-Bounds.GetCenter().Y,-Bounds.Min.Z)*Scale);
  }
+}
+void AWarehousePallet::BeginPlay()
+{
+ Super::BeginPlay();
+ // The physical mesh must also be the actor root, so navigation reads its actual pose.
+ USceneComponent* PreviousRoot=RootComponent;
+ Body->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+ SetRootComponent(Body);
+ if (PreviousRoot!=Body) PreviousRoot->AttachToComponent(Body,FAttachmentTransformRules::KeepWorldTransform);
+ AWarehouseCargo::ConfigureCarryPhysics(Body,PalletMassKg);
+ if (!GetAttachParentActor()) Body->SetSimulatePhysics(true);
+}
+void AWarehousePallet::TransformCollision(UStaticMesh* Mesh,FTransform Transform)
+{
+#if WITH_EDITOR
+ if (!Mesh || !Mesh->GetBodySetup()) return;
+ for (auto& Hull : Mesh->GetBodySetup()->AggGeom.ConvexElems)
+ {
+  for (auto& Vertex : Hull.VertexData) Vertex=Transform.TransformPosition(Vertex);
+  Hull.UpdateElemBox();
+ }
+ Mesh->GetBodySetup()->InvalidatePhysicsData(); Mesh->GetBodySetup()->CreatePhysicsMeshes(); Mesh->MarkPackageDirty();
+#endif
 }
 
 void AWarehousePallet::FitCollisionBounds(UStaticMesh* Mesh)

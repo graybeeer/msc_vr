@@ -339,6 +339,8 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
  TArray<AActor*> Attached;
  GetPawn()->GetAttachedActors(Attached);
  for (AActor* Actor : Attached) if (auto* Cargo=Cast<AWarehouseCargo>(Actor)) return Cargo->GetCargoDescription();
+ for (AActor* Actor : Attached) if (auto* Pallet=Cast<AWarehousePallet>(Actor))
+  return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\nE : 안전한 곳에 내려놓기"),Pallet->PalletMassKg));
  const FVector Eye=PlayerCameraManager->GetCameraLocation();
  FHitResult Hit;
  FCollisionQueryParams Params(SCENE_QUERY_STAT(CargoReadout),true,GetPawn());
@@ -346,6 +348,9 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
  if (GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+PlayerCameraManager->GetCameraRotation().Vector()*(bObserverView ? 18000.f : 400.f),ECC_Visibility,Params))
  {
   if (auto* Cargo=Cast<AWarehouseCargo>(Hit.GetActor())) return Cargo->GetCargoDescription();
+  if (!bObserverView && Hit.Distance<=250.f)
+   if (auto* Pallet=Cast<AWarehousePallet>(Hit.GetActor()))
+    return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\nE : 빈 팔레트 들기"),Pallet->PalletMassKg));
   if (!bObserverView && Hit.Distance<=250.f)
    if (auto* Vehicle=Cast<AWarehouseForklift>(Hit.GetActor()))
     return FText::FromString(FString::Printf(TEXT("E : %s\n%s\n배터리 %.0f%% · 적재 %.0f / %.0f kg"),

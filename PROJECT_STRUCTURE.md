@@ -4,14 +4,14 @@
 
 Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. 센서 인식 이상, 충돌, 포크와 팔레트/적재물 결합 실패 같은 상황을 재현하고, 창고 운영 조건별 효율을 비교하는 것이 목표다. 향후 물리 거동은 질량·관성·마찰·접촉·하중을 실제 장비에 맞춰 검증해야 한다.
 
-**현재 구현:** 3층 복층 창고(0·4·8m)와 AGV 승강기 인터록·층별 경로·관찰 층 선택, Fab 창고와 트럭용 외부 환경, E키 양손 화물 운반과 반투명 표시, 지게차 작업 큐·자체 점검·자율 팔레트 운반이 있다. VNSL14 공개 사양의 치수·속도·하중·승강 제한과 배터리 소비, 경로 계획을 이용한 충전소 이동·도킹·충전·출차를 구현한다. 포크 삽입 검사, 사람(Pawn) 안전 구역과 부품별 충돌 스윕을 사용한다. 질량·지지 하중 전달·충격 에너지 기반 손상과 랙 부품 붕괴가 있다. 재료 응력 해석, 차량 마찰·전복·적재물 미끄러짐, 실제 LiDAR, 제약 없는 자유 공간 경로 계획은 아직 없다. 운행 차로 앵커 기반 곡선 경로 검색을 사용한다. 팔레트는 검사 후 부착하며 실제 차량 물리가 완성된 것으로 해석하지 않는다. 사양과 배터리 가정은 `VNSL14_SPEC.md`를 확인한다.
+**현재 구현:** 3층 복층 창고(0·4·8m)와 AGV 승강기 인터록·층별 경로·관찰 층 선택, Fab 창고와 트럭용 외부 환경, E키 양손 화물 운반과 반투명 표시, 지게차 작업 큐·자체 점검·자율 팔레트 운반이 있다. VNSL14 공개 사양의 치수·속도·하중·승강 제한과 배터리 소비, 경로 계획을 이용한 충전소 이동·도킹·충전·출차를 구현한다. 포크 삽입 검사, 사람(Pawn) 안전 구역과 부품별 충돌 스윕을 사용한다. 질량·지지 하중 전달·충격 에너지 기반 손상과 랙 부품 붕괴가 있다. 재료 응력 해석, 차량 타이어 마찰·전복, 실제 LiDAR, 제약 없는 자유 공간 경로 계획은 아직 없다. 운행 차로 앵커 기반 곡선 경로 검색을 사용한다. 팔레트와 상자는 동적 물리를 유지하고 포크와의 접촉으로 운반한다. 차체 구동은 경로에 따른 기구학적 이동이며 실제 차량의 타이어·현가·전복 물리가 완성된 것으로 해석하지 않는다. 사양과 배터리 가정은 `VNSL14_SPEC.md`를 확인한다.
 
 ## 작업별 첫 탐색 경로
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
 | 창고 작업자·역할 이름표·배치 | `Source/msc_vr/WarehouseWorker.h/.cpp`, `Scripts/configure_warehouse_workers.py`, `Scripts/verify_warehouse_workers.py` | `WAREHOUSE.md`의 역할별 작업자, 기본 플레이어 전신 메시 |
-| 3층 복층·승강기·층간 운반 | `Scripts/configure_mezzanine.py`, `Source/msc_vr/WarehouseElevator.h/.cpp`, `WarehouseForkliftAI.cpp` | `MEZZANINE.md`, `Scripts/verify_mezzanine.py`, `Scripts/verify_mezzanine_pie.py`; 관찰 층 선택은 PlayerController |
+| 3층 복층·승강기·층간 운반 | `Scripts/configure_mezzanine.py`, `Source/msc_vr/WarehouseElevator.h/.cpp`, `WarehouseForkliftAI.cpp` | `MEZZANINE.md`, `Scripts/verify_mezzanine.py`, `Scripts/verify_mezzanine_pie.py`, `Scripts/verify_dynamic_forklift_transfer_pie.py`; 관찰 층 선택은 PlayerController |
 | 창고 배치·랙·화물·조명 | `WAREHOUSE.md`, `Scripts/build_first_person_warehouse.py`, `Content/FirstPerson/Lvl_FirstPerson.umap` | `Content/__ExternalActors__/FirstPerson/Lvl_FirstPerson/` (엔진이 생성한 액터 데이터) |
 | 지게차 기준 실측 크기·팔레트/중량/경량 랙·통로·팔레트·트럭 | `Scripts/apply_real_world_scale.py`, `Scripts/verify_real_world_scale.py`, `WAREHOUSE.md`의 실제 크기 기준 | `VNSL14_SPEC.md`, 창고/외부 에셋 배치 스크립트 |
 | 트럭 후면 개방·적재함 내부·택배 적재 | `Scripts/configure_truck_interior.py`, `Scripts/verify_truck_interior_pie.py`, `WAREHOUSE.md`의 트럭 내부 절 | 맵의 `TRK_` 액터, `Content/Warehouse/Exterior/TruckInterior/` (Fab 파생 메시, Git 제외); 큰 지게차 안내는 `msc_vrPlayerController.cpp` |
@@ -19,7 +19,8 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 밝기·자동 노출 | `Config/DefaultEngine.ini`의 AutoExposure, 맵 생성 스크립트의 작업등 | 인게임 카메라·후처리 설정 |
 | 배치·충돌 검증 | `Scripts/verify_first_person_warehouse.py`, `Scripts/verify_forklift_training.py` | 실제 에디터의 충돌 뷰/플레이 테스트 |
 | 화물 품목·밀도/부피별 무게·상자 크기·향후 트럭 입고 규칙 | `CARGO_RULES.md`, `Source/msc_vr/WarehouseCargo.h/.cpp`, `Scripts/configure_cargo_variety.py`, `Scripts/verify_cargo_rules.py` | `Scripts/import_boxes_pallets_pack.py`, `Content/Warehouse/Cargo/BoxesPalletsPack/` (Git 제외), `SourceAssets/Cargo/BoxesPalletsPack/` (Git 제외), `Scripts/download_cargo_assets.ps1`, `Scripts/import_cargo_assets.py`, `Content/Warehouse/Cargo/PolyHaven/`, `SourceAssets/Cargo/PolyHaven/`, `Scripts/verify_cargo_variety_pie.py`; 화면 표시는 PlayerController, 하중은 DamageSystem |
-| 상자·크레이트 집기 | `Source/msc_vr/msc_vrCharacter.h/.cpp`, `Source/msc_vr/WarehouseCargo.h/.cpp` | `Scripts/configure_carryable_cargo.py`, `Scripts/build_first_person_warehouse.py`의 화물 배치 |
+| 상자·크레이트·빈 팔레트 집기 | `Source/msc_vr/msc_vrCharacter.h/.cpp`, `Source/msc_vr/WarehouseCargo.h/.cpp`, `WarehousePallet.h/.cpp` | `Scripts/verify_cargo_pallet_physics_pie.py`, `Scripts/configure_carryable_cargo.py`, `Scripts/build_first_person_warehouse.py`의 화물 배치 |
+| 온전한 상자·낙하 안정성·팔레트 동적 물리 | `Scripts/prepare_intact_cargo_physics.py`, `Scripts/apply_intact_cargo_physics.py`, `Scripts/verify_cargo_pallet_physics_pie.py` | `WarehouseCargo.cpp`의 `ConfigureCarryPhysics`, `msc_vrCharacter.cpp`의 `DropCargo`, `WarehousePallet.cpp`; 로컬 파생 메시 `SM_Carton_Intact_1/2`, `SM_Pallet_110` |
 | 양손 운반 자세·걷기 연결 | `Source/msc_vr/WarehouseCarryAnimInstance.h/.cpp`, `msc_vrCharacter.cpp`의 `UpdateCarryPose` | `Scripts/verify_two_hand_carry.py`, `Content/FirstPerson/Anims/` |
 | 운반 물체 반투명·시야 확보 | `msc_vrCharacter.cpp`의 `TryPickupCargo`/`DropCargo`, `msc_vrCharacter.h`의 `CarryOpacity` | `Scripts/prepare_carry_material.py`, `Content/Warehouse/Materials/M_CarryTransparent.uasset`, `Scripts/verify_two_hand_carry.py` |
 | 자율 작업·자체 점검·경로·팔레트 인식·작업 큐/보고 | `AUTONOMY.md`, `Source/msc_vr/WarehouseForkliftAI.cpp`, `WarehouseAutonomyTypes.h`, `Scripts/configure_forklift_autonomy.py` | `Scripts/verify_forklift_autonomy.py`, `Scripts/verify_forklift_autonomy_pie.py`, `WarehouseForklift.h/.cpp` |
@@ -28,7 +29,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | VNSL14 사양·하중·속도·배터리·충전 | `VNSL14_SPEC.md`, `Source/msc_vr/WarehouseForklift.h/.cpp`, `WarehouseChargingStation.h/.cpp` | `WarehousePallet.h/.cpp`, `Scripts/apply_orange_agv.py`, `Scripts/verify_forklift_training.py` |
 | 주황 AGV 모델·바퀴·기계 리그·PBR 재질 | `REFINED_AGV.md`, `Scripts/prepare_refined_agv.py`, `Scripts/apply_refined_agv.py`, `Source/msc_vr/WarehouseForklift.cpp` | `SourceAssets/OrangeAGV/orange_agv_refined.fbx`, `Content/Warehouse/AGV/Meshes/`, `Content/Warehouse/AGV/Materials/`, `Scripts/verify_refined_agv.py`, `Scripts/verify_refined_agv_pie.py`; 기존 prepare/apply Orange AGV 스크립트는 과거 모델 복원용 |
 | 팔레트 구멍·포크 정렬·삽입 조건 | `Source/msc_vr/WarehousePallet.h/.cpp`, `WarehouseForklift.cpp` | `Scripts/verify_forklift_training.py` |
-| 공통 목재 팔레트 모델·재질 | `WarehousePallet.cpp`, `Scripts/apply_real_world_scale.py`, `Scripts/prepare_warehouse_assets.py` | 원본 `Content/Scene_Warehouse/Assets/MS/3D/Ind_War_Storage_Pallet_Wood_Worn_01/`; 공통 충돌 복사본 `Content/Warehouse/Physics/SM_Ind_War_Storage_Pallet_Wood_Worn_01.uasset` |
+| 공통 목재 팔레트 모델·재질 | `WarehousePallet.cpp`, `Scripts/apply_real_world_scale.py`, `Scripts/prepare_warehouse_assets.py` | 원본 `Content/Scene_Warehouse/Assets/MS/3D/Ind_War_Storage_Pallet_Wood_Worn_01/`; 공통 실측 물리 복사본 `Content/Warehouse/Physics/SM_Pallet_110.uasset` (준비 스크립트로 재생성) |
 | 정적 삼각형·동적 볼록 충돌 에셋 | `Scripts/prepare_warehouse_assets.py`, `Source/msc_vr/WarehouseCargo.cpp` | `Content/Warehouse/Collision/`, `Content/Warehouse/Physics/` (로컬 재생성물) |
 | 향후 차량 물리·LiDAR·경로 계획 | `WAREHOUSE.md`의 구현 한계, `WarehouseForklift.cpp`의 현재 절차 | `Config/DefaultEngine.ini`, 관련 레벨/블루프린트 |
 | 달리기·앉기·팔레트에 내려놓기·쌓인 상자 중력 | `Source/msc_vr/msc_vrCharacter.h/.cpp`, `WarehouseCargo.h/.cpp`, `Scripts/verify_warehouse_interaction_pie.py` | `WAREHOUSE.md`의 플레이어 조작, 기존 운반/파손 검사 |
@@ -67,10 +68,12 @@ msc_vr/
     DefaultInput.ini
   Scripts/
     apply_exterior_fab_assets.py
+    apply_intact_cargo_physics.py
     apply_orange_agv.py
     apply_real_world_scale.py
     apply_refined_agv.py
     apply_visual_fixes.py
+    build_agv_motion_test.py
     build_first_person_warehouse.py
     build_warehouse_exterior.py
     configure_cargo_variety.py
@@ -81,17 +84,31 @@ msc_vr/
     configure_truck_interior.py
     configure_warehouse_strength.py
     configure_warehouse_workers.py
+    convert_agv_original5_cm.py
+    convert_agv_refined_cm.py
     download_cargo_assets.ps1
+    import_agv_original5.py
+    import_agv_refined.py
     import_boxes_pallets_pack.py
     import_cargo_assets.py
+    place_agv_in_warehouse.py
     prepare_carry_material.py
+    prepare_intact_cargo_physics.py
     prepare_orange_agv.py
     prepare_original_body.py
     prepare_refined_agv.py
     prepare_warehouse_assets.py
     update_structure_summary.ps1
+    verify_agv_dynamics.py
+    verify_agv_hazards.py
+    verify_agv_localization.py
+    verify_agv_navigation.py
+    verify_agv_safety.py
+    verify_agv_warehouse.py
+    verify_cargo_pallet_physics_pie.py
     verify_cargo_rules.py
     verify_cargo_variety_pie.py
+    verify_dynamic_forklift_transfer_pie.py
     verify_first_person_warehouse.py
     verify_forklift_autonomy.py
     verify_forklift_autonomy_pie.py
@@ -142,6 +159,7 @@ msc_vr/
       WarehousePallet.h
       WarehouseWorker.cpp
       WarehouseWorker.h
+      Agv/
       Variant_Horror/
         UI/
       Variant_Shooter/
@@ -151,6 +169,7 @@ msc_vr/
   Content/
     __ExternalActors__/
     __ExternalObjects__/
+    AgvTest/
     Characters/
       Mannequins/
     Collections/

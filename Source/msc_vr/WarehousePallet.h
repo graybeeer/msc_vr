@@ -10,6 +10,9 @@ class MSC_VR_API AWarehousePallet : public AActor
  GENERATED_BODY()
 public:
  AWarehousePallet();
+ virtual void BeginPlay() override;
+ class UStaticMeshComponent* GetPalletBody() const { return Body; }
+ UFUNCTION(BlueprintCallable, Category="Editor") static void TransformCollision(class UStaticMesh* Mesh, FTransform Transform);
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Load", meta=(ClampMin="0")) float PayloadMassKg = 0;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Load", meta=(ClampMin="1")) float PalletMassKg = 25;
  UFUNCTION(BlueprintCallable, Category="Training")

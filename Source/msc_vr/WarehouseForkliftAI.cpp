@@ -253,34 +253,14 @@ bool AWarehouseForklift::DestinationClear() const
  FHitResult Surface;
  return GetWorld()->LineTraceSingleByChannel(Surface,Pose.GetLocation()+FVector(0,0,1),Pose.GetLocation()-FVector(0,0,4),ECC_Visibility,Params) && Surface.ImpactNormal.Z>.98f;
 }
-void AWarehouseForklift::HoldCargo(bool Attach)
+void AWarehouseForklift::TrackCargo()
 {
- if (Attach)
- {
-  CarriedCargo.Reset();
-  if (auto* Strength=AWarehouseDamageSystem::Find(this))
-   for (AActor* Actor : Strength->GetSupportedActors(TargetPallet))
-    if (auto* Cargo=Cast<AWarehouseCargo>(Actor))
-    {
-     Cargo->GetCargoBody()->SetSimulatePhysics(false);
-     if (Cargo->AttachToActor(TargetPallet,FAttachmentTransformRules::KeepWorldTransform)) CarriedCargo.Add(Cargo);
-    }
- }
- else
- {
-  for (AActor* Actor : CarriedCargo) if (auto* Cargo=Cast<AWarehouseCargo>(Actor))
-  {
-   auto* Body=Cargo->GetCargoBody();
-   const FTransform ReleasedPose=Body->GetComponentTransform();
-   Cargo->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-   Body->SetSimulatePhysics(true);
-   // The load has come to rest. Do not restore velocities cached before pickup.
-   Body->SetWorldTransform(ReleasedPose,false,nullptr,ETeleportType::TeleportPhysics);
-   Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
-   Body->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);
-  }
- }
+ CarriedCargo.Reset();
+ if (auto* Strength=AWarehouseDamageSystem::Find(this))
+  for (AActor* Actor : Strength->GetSupportedActors(TargetPallet))
+   if (Cast<AWarehouseCargo>(Actor)) CarriedCargo.Add(Actor);
 }
+
 float AWarehouseForklift::FloorBase(float WorldZ) const
 {
  if (IsValid(Elevator))
@@ -330,6 +310,20 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->HasFailed(TargetPallet)) { FaultAI(TEXT("PALLET DAMAGED")); return; }
   if (GetLoadMassKg()>FMath::Min(1400.f,RatedLoadKg)) { FaultAI(TEXT("OVERLOAD - REMOVE LOAD")); return; }
  }
+ if (bSupportingPallet)
+ {
+  bool Lost=!PalletOnForks();
+  for (AActor* Cargo : CarriedCargo)
+  {
+   if (!IsValid(Cargo)) { Lost=true; continue; }
+   FVector Center,Extent; Cargo->GetActorBounds(false,Center,Extent);
+   const FVector Local=TargetPallet->GetActorTransform().InverseTransformPosition(Center);
+   if (FMath::Abs(Local.X)>65 || FMath::Abs(Local.Y)>65 || Local.Z<10) Lost=true;
+  }
+  LostSupportSeconds=Lost ? LostSupportSeconds+Dt : 0.f;
+  if (LostSupportSeconds>.5f) { FaultAI(TEXT("LOAD SLIPPED / SUPPORT LOST")); return; }
+ }
+ else LostSupportSeconds=0.f;
  auto Next=[&](EWarehouseAIState Value,const TCHAR* Message) { TransitionAI(Value,Message); };
  auto Route=[&](const FTransform& Goal,EWarehouseAIState Done,const TCHAR* Message,float Speed)
  {
@@ -419,14 +413,14 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   if (!bSupportingPallet)
   {
    if (!LiftTo(SourceHeight+PalletContactLiftCm)) break;
-   HoldCargo(true);
-   bSupportingPallet=TargetPallet->AttachToComponent(Carriage,FAttachmentTransformRules::KeepWorldTransform);
-   if (!bSupportingPallet) { HoldCargo(false); FaultAI(TEXT("SUPPORT FAILED")); break; }
+   TrackCargo();
+   bSupportingPallet=true;
   }
   if (LiftTo(SourceHeight+10.5f)) Next(EWarehouseAIState::VerifyLoad,TEXT("VERIFY LOAD PRESENT / MASS"));
   break;
  case EWarehouseAIState::VerifyLoad:
-  if (!bSupportingPallet || TargetPallet->GetAttachParentActor()!=this || GetLoadMassKg()<=0)
+  if (AIElapsed<.3f) break; // Let the physical contact settle before reading the load sensor.
+  if (!bSupportingPallet || !PalletOnForks() || GetLoadMassKg()<=0)
   { FaultAI(TEXT("LOAD VERIFICATION FAILED")); break; }
   RetractLocation=GetActorLocation()-GetActorForwardVector()*130;
   Next(EWarehouseAIState::DepartPickup,TEXT("WITHDRAW LOADED PALLET"));
@@ -448,23 +442,31 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   Route(PalletApproach(ActiveJob.Destination,220),EWarehouseAIState::AlignUnload,TEXT("ALIGN UNLOADING POSITION"),LoadedTravelSpeedCm);
   break;
  case EWarehouseAIState::AlignUnload:
+ {
   if (!DestinationClear()) { FaultAI(TEXT("DESTINATION OCCUPIED / UNSUPPORTED")); break; }
-  if (LiftTo(DropHeight+10.5f) && MovePrecise(PalletApproach(ActiveJob.Destination,60).GetLocation(),10,Dt))
+  // Follow the sensed load position; contact can shift it along the tines.
+  // Correct by driving the vehicle, without repositioning the physical pallet.
+  const FVector Error=ActiveJob.Destination.GetLocation()-TargetPallet->GetActorLocation();
+  const FVector Goal=GetActorLocation()+GetActorForwardVector()*FVector::DotProduct(Error,GetActorForwardVector());
+  if (LiftTo(DropHeight+10.5f) && MovePrecise(Goal,10,Dt))
    Next(EWarehouseAIState::LowerLoad,TEXT("LOWER LOAD ONTO SUPPORT"));
   break;
+ }
  case EWarehouseAIState::LowerLoad:
   if (!bPalletReleased)
   {
    if (!DestinationClear()) { FaultAI(TEXT("DESTINATION OCCUPIED / UNSUPPORTED")); break; }
    if (!LiftTo(DropHeight+PalletContactLiftCm)) break;
-   TargetPallet->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform); bSupportingPallet=false;
-   HoldCargo(false); bPalletReleased=true;
+   bSupportingPallet=false; bPalletReleased=true;
   }
   if (LiftTo(DropHeight))
   { RetractLocation=GetActorLocation()-GetActorForwardVector()*130; Next(EWarehouseAIState::WithdrawFork,TEXT("FORK WITHDRAW")); }
   break;
  case EWarehouseAIState::WithdrawFork:
-  if (MovePrecise(RetractLocation,15,Dt)) Next(EWarehouseAIState::VerifyUnload,TEXT("VERIFY UNLOAD COMPLETE"));
+  if (MovePrecise(RetractLocation,15,Dt))
+  {
+   Next(EWarehouseAIState::VerifyUnload,TEXT("VERIFY UNLOAD COMPLETE"));
+  }
   break;
  case EWarehouseAIState::VerifyUnload:
   if (AIElapsed<.5f) break;

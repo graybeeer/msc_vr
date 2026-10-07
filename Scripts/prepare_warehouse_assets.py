@@ -1,5 +1,6 @@
 """Rebuild ignored collision assets from the installed Fab pack; does not modify the map."""
 import unreal
+import runpy,os
 
 mesh_editor = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
 collision_cache = {}
@@ -64,4 +65,5 @@ if __name__ == '__main__':
     for path in EXTERIOR_MESHES.values():
         assert unreal.EditorAssetLibrary.does_asset_exist(path), 'Install Fab pack: ' + path
         collision_mesh(unreal.load_asset(path))
+    runpy.run_path(os.path.join(os.path.dirname(__file__),'prepare_intact_cargo_physics.py'),run_name='__main__')
     print('WAREHOUSE_COLLISION_ASSETS_READY')

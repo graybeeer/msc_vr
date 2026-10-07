@@ -35,6 +35,7 @@ public:
  AWarehouseCargo();
  UFUNCTION(BlueprintCallable, Category="Cargo") void SetCargoMesh(UStaticMesh* Mesh);
  UFUNCTION(BlueprintCallable, Category="Cargo") static void ConfigureMeshCollision(UStaticMesh* Mesh, bool Complex);
+ static void ConfigureCarryPhysics(UStaticMeshComponent* Component, float MassKg);
  UStaticMeshComponent* GetCargoBody() const { return Body; }
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Cargo") FName CargoId;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Cargo") FText CargoKind = FText::FromString(TEXT("일반 상품"));

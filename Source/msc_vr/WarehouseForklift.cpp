@@ -144,6 +144,23 @@ float AWarehouseForklift::GetLoadMassKg() const
  if (auto* Strength=AWarehouseDamageSystem::Find(this)) Payload=FMath::Max(Payload,Strength->GetSupportedMass(TargetPallet));
  return Payload+FMath::Max(0.f,TargetPallet->PalletMassKg);
 }
+TArray<AActor*> AWarehouseForklift::GetPhysicalLoads() const
+{
+ TArray<AActor*> Loads;
+ if (!bSupportingPallet || !IsValid(TargetPallet)) return Loads;
+ Loads.Add(TargetPallet);
+ for (AActor* Cargo : CarriedCargo) if (IsValid(Cargo)) Loads.Add(Cargo);
+ return Loads;
+}
+bool AWarehouseForklift::PalletOnForks() const
+{
+ if (!IsValid(TargetPallet)) return false;
+ const FVector Local=Carriage->GetComponentTransform().InverseTransformPosition(TargetPallet->GetActorLocation());
+ return Local.X>=35 && Local.X<=85 && FMath::Abs(Local.Y)<=25 &&
+  FMath::Abs(Local.Z+PalletContactLiftCm)<=5 &&
+  FVector::DotProduct(GetActorUpVector(),TargetPallet->GetActorUpVector())>.94f &&
+  FVector::DotProduct(GetActorForwardVector(),TargetPallet->GetActorForwardVector())>.94f;
+}
 void AWarehouseForklift::ConsumeEnergy(float Wh)
 {
  Wh=FMath::Max(0.f,Wh)*FMath::Clamp(BatteryTimeScale,1.f,3600.f);
@@ -209,13 +226,15 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
  }
  TArray<UStaticMeshComponent*> Parts;
  GetComponents(Parts);
- if (bSupportingPallet && IsValid(TargetPallet))
+ // A dynamic load settles against the floor independently of the actuator.
+ // Sweeping it as a rigid extension of the lift falsely blocks normal lowering.
+ if (!LiftOnly && bSupportingPallet && IsValid(TargetPallet))
  {
   TArray<UStaticMeshComponent*> LoadParts;
   TargetPallet->GetComponents(LoadParts);
   Parts.Append(LoadParts);
  }
- for (AActor* Load : CarriedCargo) if (bSupportingPallet && IsValid(Load))
+ for (AActor* Load : CarriedCargo) if (!LiftOnly && bSupportingPallet && IsValid(Load))
  {
   TArray<UStaticMeshComponent*> LoadParts; Load->GetComponents(LoadParts); Parts.Append(LoadParts);
  }
@@ -367,8 +386,7 @@ void AWarehouseForklift::AdvanceSimulation(float DeltaSeconds)
    // Both tines must be fully inserted before the underside contact is accepted.
    if (!TargetPallet->CanEngage(GetActorTransform())) { StopFor(TEXT("FORK INSERTION FAILED")); break; }
    if (LiftOffset<PalletContactLiftCm) { MoveLift(FMath::Min(PalletContactLiftCm,LiftOffset+15*Dt)); break; }
-   bSupportingPallet=TargetPallet->AttachToComponent(Carriage,FAttachmentTransformRules::KeepWorldTransform);
-   if (!bSupportingPallet) { StopFor(TEXT("SUPPORT FAILED")); break; }
+   TrackCargo(); bSupportingPallet=true;
   }
   if (MoveLift(FMath::Min(TaskForkHeightCm-9.5f,LiftOffset+11.5f*Dt)) && LiftOffset>=TaskForkHeightCm-9.5f) { State=EWarehouseCycle::TravelLower; SetStatus(TEXT("LOWERING TO TRAVEL HEIGHT")); }
   break;
@@ -384,7 +402,7 @@ void AWarehouseForklift::AdvanceSimulation(float DeltaSeconds)
   if (bSupportingPallet)
   {
    if (!MoveLift(FMath::Max(PalletContactLiftCm,LiftOffset-16*Dt))) break;
-   if (LiftOffset<=PalletContactLiftCm) { TargetPallet->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform); bSupportingPallet=false; }
+   if (LiftOffset<=PalletContactLiftCm) { bSupportingPallet=false; }
   }
   else if (MoveLift(FMath::Max(0.f,LiftOffset-15*Dt)) && LiftOffset<=0)
   { State=EWarehouseCycle::Withdraw; WithdrawStart=GetActorLocation(); SetStatus(TEXT("WITHDRAWING")); }

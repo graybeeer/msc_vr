@@ -60,7 +60,7 @@ protected:
 	TObjectPtr<UInputMappingContext> CarryMappingContext;
 
 	UPROPERTY(Transient)
-	TObjectPtr<AWarehouseCargo> HeldCargo;
+	TObjectPtr<AActor> HeldCargo;
 
 	UPROPERTY(EditDefaultsOnly, Category="Carry", meta=(ClampMin="0.05", ClampMax="1.0"))
 	float CarryOpacity = .3f;
@@ -80,6 +80,8 @@ protected:
 	FVector CarryElbows[2] = {FVector::ZeroVector,FVector::ZeroVector};
 	FQuat CarryFacing = FQuat::Identity;
 	FTransform PickupTransform;
+	FTransform LastCarryPose;
+	bool TryPickupObject(AActor* Object);
 	float PickupTime = 0.f;
 	bool InitializeCarryMesh();
 	UPROPERTY(Transient) TObjectPtr<AWarehousePallet> PlacementPallet;
@@ -98,6 +100,7 @@ public:
 	void SetObserverPresentation(bool Observing);
 	UFUNCTION(BlueprintCallable, Category="Carry")
 	bool TryPickupCargo(AWarehouseCargo* Cargo);
+	UFUNCTION(BlueprintCallable, Category="Carry") bool TryPickupPallet(AWarehousePallet* Pallet);
 	UFUNCTION(BlueprintCallable, Category="Carry")
 	void DropCargo();
 	UFUNCTION(BlueprintCallable, Category="Carry")
