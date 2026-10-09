@@ -207,6 +207,8 @@ for index, name in enumerate(('Ind_War_Storage_Barrel_Plastic_Blue_01','Ind_Fac_
     mesh=unreal.load_asset(PACK+name+'/SM_'+name)
     assert mesh, name
     prop=place(f'Utility_{index}',mesh,(-1700+index*300,1770,ground))
+    if index in (0,1,3):
+        prop.tags=list(prop.tags)+[unreal.Name('WarehousePortable')]
     center, extent=prop.get_actor_bounds(False)
     loc=prop.get_actor_location()
     prop.set_actor_location(unreal.Vector(loc.x,loc.y,loc.z+ground-(center.z-extent.z)),False,False)

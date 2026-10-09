@@ -6,10 +6,14 @@
 #include "Materials/MaterialInterface.h"
 #include "Engine/World.h"
 #include "CollisionQueryParams.h"
+#include "WarehousePhysics.h"
+#include "PhysicsEngine/PhysicsConstraintComponent.h"
 
 AWarehouseElevator::AWarehouseElevator()
 {
  PrimaryActorTick.bCanEverTick=true;
+ PrimaryActorTick.TickGroup=TG_PrePhysics;
+ Tags.Add(TEXT("WarehousePhysicalRig"));
  RootComponent=CreateDefaultSubobject<USceneComponent>(TEXT("ShaftRoot"));
  static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube"));
  static ConstructorHelpers::FObjectFinder<UMaterialInterface> Steel(TEXT("/Game/Warehouse/AGV/Materials/M_Graphite_powder-coated_steel"));
@@ -41,6 +45,55 @@ AWarehouseElevator::AWarehouseElevator()
  Display->SetRelativeRotation(FRotator(0,180,0)); Display->SetHorizontalAlignment(EHTA_Center);
  Display->SetWorldSize(12); Display->SetText(FText::FromString(Status));
 }
+void AWarehouseElevator::BeginPlay()
+{
+ Super::BeginPlay();
+ TArray<UStaticMeshComponent*> Parts; GetComponents(Parts);
+ UStaticMeshComponent* Anchor=nullptr;
+ for (auto* Part : Parts)
+ {
+  if (Part->GetName().StartsWith(TEXT("Column_")) && !Anchor) Anchor=Part;
+  if (Part->IsCollisionEnabled()) WarehousePhysics::ConfigureContact(Part,EWarehouseSurface::Steel);
+ }
+ if (!Anchor) return;
+ GuideAnchor=Anchor;
+ auto Guide=[&](UStaticMeshComponent* Body,const FTransform& Frame)
+ {
+  auto* Joint=NewObject<UPhysicsConstraintComponent>(this);
+  AddInstanceComponent(Joint); Joint->RegisterComponent(); Joint->SetWorldTransform(Frame);
+  Joint->SetDisableCollision(true); Joint->SetProjectionEnabled(false);
+  Joint->ConstraintInstance.DisableMassConditioning();
+  Joint->ConstraintInstance.DisableParentDominates();
+  Joint->SetLinearXLimit(LCM_Locked,0); Joint->SetLinearYLimit(LCM_Locked,0); Joint->SetLinearZLimit(LCM_Locked,0);
+  Joint->SetAngularTwistLimit(ACM_Locked,0); Joint->SetAngularSwing1Limit(ACM_Locked,0); Joint->SetAngularSwing2Limit(ACM_Locked,0);
+  Joint->SetConstrainedComponents(Anchor,NAME_None,Body,NAME_None);
+  Joint->SetLinearDriveAccelerationMode(false);
+  return Joint;
+ };
+ WarehousePhysics::ConfigureContact(Platform,EWarehouseSurface::Steel,500.f);
+ Platform->SetSimulatePhysics(true);
+ PlatformJoint=Guide(Platform,FTransform(GetActorQuat(),GetActorTransform().TransformPosition(FVector(0,0,395))));
+ PlatformJoint->SetConstraintReferencePosition(EConstraintFrame::Frame2,FVector::ZeroVector);
+ PlatformJoint->SetLinearZLimit(LCM_Limited,400);
+ PlatformJoint->SetLinearPositionDrive(false,false,true); PlatformJoint->SetLinearVelocityDrive(false,false,true);
+ PlatformJoint->SetLinearDriveParams(300000.f,50000.f,4000000.f); // 40kN, includes platform and payload weight.
+ PlatformJoint->SetLinearPositionTarget(FVector(0,0,400));
+ SetDeckLock(true);
+ for (int32 I=0;I<Gates.Num();++I)
+ {
+  auto* Gate=Gates[I].Get();
+  WarehousePhysics::ConfigureContact(Gate,EWarehouseSurface::Steel,80.f);
+  const float Side=I%2 ? 1.f : -1.f;
+  const FVector Middle=Gate->GetComponentLocation()+GetActorRightVector()*Side*62.5f;
+  Gate->SetSimulatePhysics(true);
+  auto* Joint=Guide(Gate,FTransform(GetActorQuat(),Middle));
+  Joint->SetConstraintReferencePosition(EConstraintFrame::Frame2,FVector::ZeroVector);
+  Joint->SetLinearYLimit(LCM_Limited,62.5f);
+  Joint->SetLinearPositionDrive(false,true,false); Joint->SetLinearVelocityDrive(false,true,false);
+  Joint->SetLinearDriveParams(12000.f,2500.f,60000.f); // finite 600N door drive.
+  Joint->SetLinearPositionTarget(FVector(0,Side*62.5f,0)); DoorJoints.Add(Joint);
+ }
+}
 int32 AWarehouseElevator::FloorAtHeight(float WorldZ) const
 {
  const float H=WorldZ-GetActorLocation().Z;
@@ -65,9 +118,18 @@ FString AWarehouseElevator::CheckInterlocks() const
  if (IsValid(ReservedVehicle) && ReservedVehicle->GetTransferMassKg()>FMath::Min(2000.f,RatedMassKg)) return TEXT("ELEVATOR OVERLOAD (VEHICLE + LOAD)");
  return FString();
 }
+void AWarehouseElevator::SetDeckLock(bool Locked)
+{
+ if (!PlatformJoint || !GuideAnchor) return;
+ const FVector AnchorWorld=GetActorTransform().TransformPosition(FVector(0,0,Locked ? CurrentFloor*400.f-5.f : 395.f));
+ PlatformJoint->SetConstraintReferencePosition(EConstraintFrame::Frame1,GuideAnchor->GetComponentTransform().InverseTransformPositionNoScale(AnchorWorld));
+ PlatformJoint->SetLinearZLimit(Locked ? LCM_Locked : LCM_Limited,Locked ? 0.f : 400.f);
+ if (Locked) PlatformJoint->SetLinearPositionTarget(FVector::ZeroVector);
+}
 void AWarehouseElevator::SetState(EWarehouseElevatorState Next,const TCHAR* Message)
 {
  State=Next; Status=Message;
+ if (Next==EWarehouseElevatorState::OpeningEntry || Next==EWarehouseElevatorState::OpeningExit) SetDeckLock(true);
  Display->SetText(FText::FromString(FString::Printf(TEXT("L%d -> L%d / 2000 KG\n%s"),CurrentFloor+1,DestinationFloor+1,Message)));
  UE_LOG(LogTemp,Log,TEXT("ELEVATOR_STATE %s / L%d -> L%d"),Message,CurrentFloor+1,DestinationFloor+1);
 }
@@ -125,19 +187,19 @@ bool AWarehouseElevator::RequestTransfer(AWarehouseForklift* Vehicle,int32 FromF
 bool AWarehouseElevator::CanEnter(AWarehouseForklift* Vehicle) const
 {
  return ReservedVehicle==Vehicle && IsValid(Vehicle) && State==EWarehouseElevatorState::AwaitBoarding &&
-  CurrentFloor==EntryFloor && DoorOpening>=125 && FMath::Abs(PlatformHeight-EntryFloor*400)<.01f && CheckInterlocks().IsEmpty() && CabinClear();
+  CurrentFloor==EntryFloor && ActualDoorOpening()>=124 && FMath::Abs(PlatformHeight-EntryFloor*400)<1.f && CheckInterlocks().IsEmpty() && CabinClear();
 }
 bool AWarehouseElevator::CanExit(AWarehouseForklift* Vehicle) const
 {
  return ReservedVehicle==Vehicle && IsValid(Vehicle) && State==EWarehouseElevatorState::AwaitExit &&
-  CurrentFloor==DestinationFloor && DoorOpening>=125 && FMath::Abs(PlatformHeight-DestinationFloor*400)<.01f && CheckInterlocks().IsEmpty();
+  CurrentFloor==DestinationFloor && ActualDoorOpening()>=124 && FMath::Abs(PlatformHeight-DestinationFloor*400)<1.f && CheckInterlocks().IsEmpty();
 }
 bool AWarehouseElevator::ConfirmBoarded(AWarehouseForklift* Vehicle)
 {
  if (!CanEnter(Vehicle) || !FitsInside(Vehicle) || !PortalClear() ||
      FVector::Dist(Vehicle->GetActorLocation(),BoardingPose(EntryFloor).GetLocation())>1 ||
      FVector::DotProduct(Vehicle->GetActorForwardVector(),GetActorForwardVector())<.9999 ||
-     Vehicle->GetActorUpVector().Z<.999f || FMath::Abs(Vehicle->CurrentSpeedCm)>.01f || !Vehicle->IsLiftAtTravelHeight()) return false;
+     Vehicle->GetActorUpVector().Z<.995f || FMath::Abs(Vehicle->CurrentSpeedCm)>1.f || !Vehicle->IsLiftAtTravelHeight()) return false;
  bBoarded=true;
  SetState(EWarehouseElevatorState::ClosingLoaded,TEXT("BOARDING CONFIRMED - CLOSE / LOCK")); return true;
 }
@@ -146,6 +208,13 @@ bool AWarehouseElevator::ConfirmExited(AWarehouseForklift* Vehicle)
  if (!CanExit(Vehicle) || !Vehicle->GetActorLocation().Equals(WaitingPose(DestinationFloor).GetLocation(),1.f) || !PortalClear()) return false;
  bBoarded=false; ReservedVehicle=nullptr; ++CompletedTransfers;
  SetState(EWarehouseElevatorState::ClosingEmpty,TEXT("EXIT CONFIRMED - RELEASE RESERVATION")); return true;
+}
+float AWarehouseElevator::ActualDoorOpening() const
+{
+ float Opening=125.f;
+ for (int32 I=CurrentFloor*2;I<CurrentFloor*2+2;++I)
+  Opening=FMath::Min(Opening,float(FMath::Abs(GetActorTransform().InverseTransformPosition(Gates[I]->GetComponentLocation()).Y)-60.f));
+ return Opening;
 }
 bool AWarehouseElevator::SetDoors(bool Open,float Dt)
 {
@@ -164,13 +233,18 @@ bool AWarehouseElevator::SetDoors(bool Open,float Dt)
  for (int32 I=0; I<Gates.Num(); ++I)
  {
   const int32 Floor=I/2; const float Side=I%2 ? 1.f : -1.f;
-  Gates[I]->SetRelativeLocation(FVector(-205,Side*(60+(Floor==CurrentFloor ? DoorOpening : 0)),Floor*400+135));
+  const float Opening=Floor==CurrentFloor ? DoorOpening : 0.f;
+  if (DoorJoints.IsValidIndex(I)) DoorJoints[I]->SetLinearPositionTarget(FVector(0,Side*(62.5f-Opening),0));
+  // Updating a Chaos drive target does not wake a settled native body.
+  const float ActualY=GetActorTransform().InverseTransformPosition(Gates[I]->GetComponentLocation()).Y;
+  if (FMath::Abs(ActualY-Side*(60.f+Opening))>.1f) Gates[I]->WakeAllRigidBodies();
  }
- return Open ? DoorOpening>=125.f : DoorOpening<=0.f;
+ const float Actual=ActualDoorOpening();
+ return Open ? Actual>=124.f : FMath::Abs(Actual)<.5f;
 }
 bool AWarehouseElevator::MovePlatform(int32 Floor,float Dt)
 {
- if (DoorOpening>0 || !CabinClear() || (bBoarded && !FitsInside(ReservedVehicle))) return false;
+ if (FMath::Abs(ActualDoorOpening())>.5f || !CabinClear() || (bBoarded && !FitsInside(ReservedVehicle))) return false;
  const float Next=FMath::FInterpConstantTo(PlatformHeight,Floor*400.f,Dt,FMath::Clamp(TravelSpeedCm,1.f,50.f));
  FCollisionQueryParams Params(SCENE_QUERY_STAT(LiftPlatformSweep),false,this);
  if (IsValid(ReservedVehicle))
@@ -184,15 +258,20 @@ bool AWarehouseElevator::MovePlatform(int32 Floor,float Dt)
  for (const auto& Hit : Hits)
   if (Hit.bBlockingHit && FVector::DotProduct(Delta,Hit.Normal)<-.001f)
   { Status=TEXT("PLATFORM PATH OBSTRUCTED"); return false; }
- if (bBoarded) ReservedVehicle->SetActorLocation(ReservedVehicle->GetActorLocation()+FVector(0,0,Next-PlatformHeight));
- PlatformHeight=Next; Platform->SetRelativeLocation(FVector(0,0,PlatformHeight-5));
- if (FMath::Abs(PlatformHeight-Floor*400.f)>.01f) return false;
+ SetDeckLock(false);
+ PlatformTarget=FMath::FInterpConstantTo(PlatformTarget,Floor*400.f,Dt,FMath::Clamp(TravelSpeedCm,1.f,50.f));
+ const float Mass=500.f+(bBoarded && IsValid(ReservedVehicle) ? ReservedVehicle->GetTransferMassKg() : 0.f);
+ if (PlatformJoint) PlatformJoint->SetLinearPositionTarget(FVector(0,0,400-PlatformTarget-Mass*980.f/300000.f));
+ Platform->WakeAllRigidBodies(); // Powered stroke; resting floor locks may sleep.
+ // Passengers ride deck contact. No actor translation or velocity reset.
+ if (FMath::Abs(PlatformHeight-Floor*400.f)>1.f || FMath::Abs(Platform->GetPhysicsLinearVelocity().Z)>2.f) return false;
  CurrentFloor=Floor; return true;
 }
 void AWarehouseElevator::Tick(float Dt) { Super::Tick(Dt); AdvanceElevator(Dt); }
 void AWarehouseElevator::AdvanceElevator(float Seconds)
 {
- const float Dt=FMath::Clamp(Seconds,0.f,.05f);
+ if (PlatformJoint) PlatformHeight=GetActorTransform().InverseTransformPosition(Platform->GetComponentLocation()).Z+5.f;
+ const float Dt=FMath::Clamp(Seconds,0.f,.133333f);
  const FString Fault=CheckInterlocks();
  if (!Fault.IsEmpty()) { Status=Fault; Display->SetText(FText::FromString(Fault)); return; }
  if (IsValid(ReservedVehicle) && (!ReservedVehicle->bPowered || ReservedVehicle->AIState==EWarehouseAIState::SelfCheck || !ReservedVehicle->CheckSystems().IsEmpty())) return;

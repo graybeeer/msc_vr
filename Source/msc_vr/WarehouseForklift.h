@@ -10,6 +10,7 @@ class UTextRenderComponent;
 class UStaticMeshComponent;
 class AWarehouseChargingStation;
 class AWarehouseElevator;
+class UPhysicsConstraintComponent;
 
 UENUM(BlueprintType)
 enum class EWarehouseCycle : uint8 { Idle, Approach, Lift, TravelLower, Reverse, Lower, Withdraw, Complete, ToCharger, Docking, Charging, Returning };
@@ -20,8 +21,19 @@ class MSC_VR_API AWarehouseForklift : public AActor
  GENERATED_BODY()
 public:
  AWarehouseForklift();
+ virtual void BeginPlay() override;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Autonomy") bool bAutoStart=false;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Training") FString VehicleName=TEXT("무인 지게차");
+ UFUNCTION(BlueprintCallable, Category="Remote") bool BeginRemoteControl(AActor* Operator);
+ UFUNCTION(BlueprintCallable, Category="Remote") void EndRemoteControl(AActor* Operator);
+ UFUNCTION(BlueprintCallable, Category="Remote") void SetRemoteInput(float Forward,float Steering,float Lift);
+ UFUNCTION(BlueprintPure, Category="Remote") bool IsRemoteControlled() const { return IsValid(RemoteOperator); }
+ UFUNCTION(BlueprintPure, Category="Remote") AActor* GetRemoteOperator() const { return RemoteOperator; }
+ UFUNCTION(BlueprintPure, Category="Remote") float GetForkHeightCm() const { return LiftOffset+9.5f; }
  UFUNCTION(BlueprintCallable, Category="Editor") static void RebuildEditedMesh(UStaticMesh* Mesh);
  UFUNCTION(BlueprintCallable, Category="Editor") static void ConfigureForkCollision(UStaticMesh* Mesh);
+ UFUNCTION(BlueprintCallable, Category="Editor") static void ConfigureWheelCollision(UStaticMesh* Mesh);
+ UFUNCTION(BlueprintPure, Category="Physics") float GetPhysicalMassKg() const;
  UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="Elevator") TObjectPtr<AWarehouseElevator> Elevator;
  UFUNCTION(BlueprintPure, Category="Elevator") float GetTransferMassKg() const { return VehicleMassKg+(bSupportingPallet ? GetLoadMassKg() : 0.f); }
  UFUNCTION(BlueprintPure, Category="Elevator") bool IsLiftAtTravelHeight() const { return LiftOffset<=20.f; }
@@ -85,6 +97,31 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") EWarehouseCycle State = EWarehouseCycle::Idle;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") FString Status = TEXT("E : START");
 private:
+ // Commands are actuator targets. Telemetry and fork pose always come from Chaos.
+ UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> ChassisBody;
+ UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> CarriageBody;
+ UPROPERTY(Transient) TObjectPtr<UPhysicsConstraintComponent> CarriageJoint;
+ UPROPERTY(Transient) TObjectPtr<UPhysicsConstraintComponent> StageJoint;
+ UPROPERTY(Transient) TArray<TObjectPtr<UPhysicsConstraintComponent>> WheelJoints;
+ float DesiredDriveSpeed=0, DesiredCurvature=0, DriveSpeedTarget=0;
+ float DesiredLift=0, LiftMotorTarget=0;
+ float SteeringAngle=0;
+ float DriveSpinIntegral=0;
+ bool bPhysicsReady=false;
+ void InitializePhysicalRig();
+ void UpdatePhysicalRig(float Dt);
+ bool CommandDrive(float Speed,float Curvature,float Dt);
+ void BrakeDrive();
+ UPROPERTY(Transient) TObjectPtr<AActor> RemoteOperator;
+ float RemoteForward=0,RemoteSteering=0,RemoteLift=0;
+ double LastRemoteInputTime=0;
+ float RemoteCheckSeconds=0;
+ bool bReplanAfterRemote=false;
+ bool bRemoteLoadFault=false;
+ void AdvanceRemote(float Dt);
+ bool RemotePoseClear(const FTransform& Pose) const;
+ bool PalletClaimedByOther(AWarehousePallet* Pallet) const;
+ bool UpdateLoadSupport(float Dt);
  bool BeginFloorTransfer(float TargetZ, EWarehouseAIState Resume);
  float FloorBase(float WorldZ) const;
  EWarehouseAIState AfterElevator = EWarehouseAIState::Ready;

@@ -37,6 +37,8 @@ void AWarehouseForklift::ConfigureForkCollision(UStaticMesh* Mesh)
 AWarehouseForklift::AWarehouseForklift()
 {
  PrimaryActorTick.bCanEverTick = true;
+ PrimaryActorTick.TickGroup=TG_PrePhysics;
+ Tags.Add(TEXT("WarehousePhysicalVehicle"));
  RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
  Carriage = CreateDefaultSubobject<USceneComponent>(TEXT("CarriagePivot"));
  Carriage->SetupAttachment(RootComponent);
@@ -90,6 +92,11 @@ void AWarehouseForklift::SetStatus(const FString& Message)
 }
 void AWarehouseForklift::StopFor(const FString& Reason)
 {
+ if (IsRemoteControlled())
+ {
+  RemoteForward=RemoteSteering=RemoteLift=0; BrakeDrive();
+  SetStatus(TEXT("REMOTE STOP: ")+Reason); return;
+ }
  if (bAutonomousMode)
  {
   if (Reason.Contains(TEXT("OBSTACLE")) || Reason.Contains(TEXT("PERSON")))
@@ -101,7 +108,7 @@ void AWarehouseForklift::StopFor(const FString& Reason)
   return;
  }
  bPowered=false;
- CurrentSpeedCm=0;
+ BrakeDrive();
  if (IsValid(ChargingStation)) ChargingStation->ShowCharge(BatteryPercent,false);
  SetStatus(Reason + TEXT("\nE : RETRY / RESUME"));
 }
@@ -117,6 +124,20 @@ void AWarehouseForklift::SetMechanicalFailure()
 }
 void AWarehouseForklift::TogglePower()
 {
+ if (IsRemoteControlled()) return;
+ if (bReplanAfterRemote)
+ {
+  if (bSupportingPallet && (ActiveJob.JobId.IsEmpty() || TargetPallet!=ActiveJob.Pallet))
+  { SetStatus(TEXT("MANUAL LOAD - UNLOAD BEFORE AUTO / G: REMOTE")); return; }
+  if (!ActiveJob.JobId.IsEmpty())
+  {
+   TargetPallet=ActiveJob.Pallet;
+   ResumeAI=bSupportingPallet ? EWarehouseAIState::PlanDelivery : EWarehouseAIState::PlanPickup;
+   PlannedRoute.Reset(); bRouteStarted=false; bPalletReleased=false;
+  }
+  else ResumeAI=EWarehouseAIState::Ready;
+  AIState=EWarehouseAIState::Paused; bReplanAfterRemote=false;
+ }
  if (bAutonomousMode) { ToggleAutonomy(); return; }
  if (bMechanicalFailure) { SetMechanicalFailure(); return; }
  if (bPowered) { StopFor(TEXT("PAUSED")); return; }
@@ -170,6 +191,7 @@ void AWarehouseForklift::ConsumeEnergy(float Wh)
 }
 void AWarehouseForklift::EndPlay(const EEndPlayReason::Type Reason)
 {
+ if (IsRemoteControlled()) EndRemoteControl(RemoteOperator);
  if (IsValid(ChargingStation)) ChargingStation->Release(this);
  Super::EndPlay(Reason);
 }
@@ -177,6 +199,7 @@ void AWarehouseForklift::RequestCharging(bool ToFull)
 {
  bChargePending=true;
  bChargeToFull=ToFull;
+ if (IsRemoteControlled()) { RefreshDisplay(); return; }
  if (bAutonomousMode)
  {
   if (AIState==EWarehouseAIState::Off) ToggleAutonomy();
@@ -200,26 +223,34 @@ bool AWarehouseForklift::BeginChargeTrip()
  ResumeState=State;
  State=ChargingStation->IsDocked(this) ? EWarehouseCycle::Charging : EWarehouseCycle::ToCharger;
  bPowered=true;
- CurrentSpeedCm=0;
+ BrakeDrive();
  SetStatus(TEXT("TO CHARGER"));
  return true;
 }
 void AWarehouseForklift::Tick(float DeltaSeconds)
 {
  Super::Tick(DeltaSeconds);
+ if (bPhysicsReady)
+ {
+  CurrentSpeedCm=FVector::DotProduct(ChassisBody->GetPhysicsLinearVelocity(),GetActorForwardVector());
+  LiftOffset=GetActorTransform().InverseTransformPosition(Carriage->GetComponentLocation()).Z;
+ }
+ BrakeDrive();
  AdvanceSimulation(DeltaSeconds);
+ UpdatePhysicalRig(FMath::Clamp(DeltaSeconds,0.f,.133333f));
 }
 bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
 {
  // Safety envelope includes both the chassis and exposed forks. Pawn includes players and human NPCs.
  FHitResult PersonHit;
- FCollisionObjectQueryParams People(ECC_Pawn);
+ FCollisionObjectQueryParams People(ECC_Pawn); People.AddObjectTypesToQuery(ECC_PhysicsBody);
  FCollisionQueryParams SafetyParams(SCENE_QUERY_STAT(PersonSafety),false,this);
  const FVector SafetyCenter=GetActorLocation()+GetActorForwardVector()*30+FVector(0,0,110);
  const float LookAhead=FMath::Max(100.f,CurrentSpeedCm*CurrentSpeedCm/100.f+FMath::Abs(CurrentSpeedCm)*.2f+20.f);
  const FVector SafetyEnd=SafetyCenter+(LiftOnly ? FVector::ZeroVector : Delta+Delta.GetSafeNormal()*LookAhead);
- if (GetWorld()->SweepSingleByObjectType(PersonHit,SafetyCenter,SafetyEnd,GetActorQuat(),People,
-     FCollisionShape::MakeBox(FVector(110,75,110)),SafetyParams))
+ TArray<FHitResult> PeopleHits;
+ GetWorld()->SweepMultiByObjectType(PeopleHits,SafetyCenter,SafetyEnd,GetActorQuat(),People,FCollisionShape::MakeBox(FVector(110,75,110)),SafetyParams);
+ if (PeopleHits.ContainsByPredicate([](const FHitResult& Hit) { return Hit.GetActor() && (Hit.GetActor()->ActorHasTag(TEXT("WarehousePhysicalHuman")) || Hit.GetComponent()->GetCollisionObjectType()==ECC_Pawn); }))
  {
   StopFor(TEXT("PERSON IN SAFETY ZONE"));
   return false;
@@ -244,11 +275,14 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
  for (auto* Part : Parts)
  {
   if (Part->GetCollisionEnabled()==ECollisionEnabled::NoCollision) continue;
+  // A welded member shares its parent's complete Chaos shape set. Sweeping
+  // that set again from the child's origin invents an offset obstacle.
+  if (Part->BodyInstance.WeldParent) continue;
   FVector PartDelta=Delta;
   if (LiftOnly && Part->GetOwner()==this)
   {
    if (Part==LiftStage || Part->IsAttachedTo(LiftStage)) PartDelta*=.5f;
-   else if (!Part->IsAttachedTo(Carriage)) continue;
+   else if (Part!=CarriageBody && !Part->IsAttachedTo(CarriageBody)) continue;
   }
   TArray<FHitResult> Hits;
   GetWorld()->ComponentSweepMulti(Hits,Part,Part->GetComponentLocation(),Part->GetComponentLocation()+PartDelta,Part->GetComponentQuat(),Params);
@@ -257,8 +291,7 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
    if (Hit.bBlockingHit && (FVector::DotProduct(Delta,Hit.Normal)<-.001f || (Hit.bStartPenetrating && Hit.PenetrationDepth>.2f)))
    {
     UE_LOG(LogTemp,Verbose,TEXT("Forklift contact %s -> %s, lift %.3f, support %.3f, penetration %.3f, normal %s"),*Part->GetName(),*GetNameSafe(Hit.GetActor()),LiftOffset,PalletContactLiftCm,Hit.PenetrationDepth,*Hit.Normal.ToString());
-    AWarehouseDamageSystem::ReportContact(this,Hit,LiftOnly ? Delta.GetSafeNormal()*11.5f : GetActorForwardVector()*CurrentSpeedCm,VehicleMassKg+(bSupportingPallet ? GetLoadMassKg() : 0.f));
-    if (bMechanicalFailure) return false;
+    // Prediction only commands a brake. Damage is generated by actual Chaos contact impulses.
     StopFor(TEXT("OBSTACLE / CONTACT"));
     return false;
    }
@@ -268,58 +301,40 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
 }
 bool AWarehouseForklift::MoveVehicle(FVector Delta)
 {
- if (!ClearToMove(Delta,false)) return false;
- WaitSeconds=0;
- SetActorLocation(GetActorLocation()+Delta);
- const float Distance=FVector::DotProduct(Delta,GetActorForwardVector());
- // Rolling resistance and drivetrain efficiency are tunable-model assumptions, not factory measurements.
- ConsumeEnergy(.035f*(VehicleMassKg+(bSupportingPallet ? GetLoadMassKg() : 0.f))*9.81f*FMath::Abs(Distance)/100.f/(.75f*3600.f));
- for (int32 Index=0; Index<Wheels.Num(); ++Index)
- {
-  if (!IsValid(Wheels[Index]) || !Wheels[Index]->GetStaticMesh()) continue;
-  const float Radius=FMath::Max(1.f,float(Wheels[Index]->GetStaticMesh()->GetBoundingBox().GetSize().Z*.5*Wheels[Index]->GetRelativeScale3D().Z));
-  Wheels[Index]->AddLocalRotation(FRotator(-FMath::RadiansToDegrees(Distance/Radius),0,0));
- }
- return true;
+ return CommandDrive(FVector::DotProduct(Delta,GetActorForwardVector())/FMath::Max(.008f,GetWorld()->GetDeltaSeconds()),0,GetWorld()->GetDeltaSeconds());
 }
 bool AWarehouseForklift::MoveLift(float Height)
 {
  if (Height<0 || Height>FMath::Clamp(MaxForkHeightCm,10.f,160.f)-9.5f+.001f) { StopFor(TEXT("LIFT HEIGHT LIMIT")); return false; }
  if (!ClearToMove(FVector(0,0,Height-LiftOffset),true)) return false;
- ConsumeEnergy(((bSupportingPallet ? GetLoadMassKg() : 0.f)+80.f)*9.81f*FMath::Max(0.f,Height-LiftOffset)/100.f/(.75f*3600.f));
- LiftOffset=Height;
- Carriage->SetRelativeLocation(FVector(0,0,Height));
- // A 2:1 lift chain gives twice the carriage travel for the ram/stage extension.
- FVector StageLocation=LiftStage->GetRelativeLocation();
- StageLocation.Z=Height*.5f;
- LiftStage->SetRelativeLocation(StageLocation);
- // Chain lower endpoint follows the carriage; upper endpoint follows the 2:1 stage.
- constexpr float ChainBase=3.5f+15.1f*(215.f/282.55f);
- const float RestLength=LiftChains->GetStaticMesh()->GetBoundingBox().GetSize().Z;
- LiftChains->SetRelativeLocation(FVector(0,0,ChainBase+Height));
- LiftChains->SetRelativeScale3D(FVector(1,1,FMath::Max(.01f,(RestLength-.5f*Height)/RestLength)));
+ DesiredLift=Height;
  return true;
 }
 bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt)
 {
  const FVector Offset=Destination-GetActorLocation();
- if (FMath::Abs(FVector::DotProduct(Offset,GetActorRightVector()))>1 || FMath::Abs(Offset.Z)>1)
+ if (FMath::Abs(FVector::DotProduct(Offset,GetActorRightVector()))>5 || FMath::Abs(Offset.Z)>3)
  { StopFor(TEXT("ROUTE MISALIGNED")); return false; }
  const float Distance=FVector::DotProduct(Offset,GetActorForwardVector());
- if (FMath::Abs(Distance)<.01f) { CurrentSpeedCm=0; return true; }
+ if (FMath::Abs(Distance)<.5f) { BrakeDrive(); return FMath::Abs(CurrentSpeedCm)<1.f; }
  Speed=FMath::Min(Speed,Distance>0 ? FMath::Min(30.f,ForkLeadingSpeedCm) : (bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(130.f,EmptyTravelSpeedCm)));
  const float TargetSpeed=FMath::Sign(Distance)*FMath::Min(Speed,FMath::Sqrt(100.f*FMath::Abs(Distance)));
- CurrentSpeedCm=FMath::FInterpConstantTo(CurrentSpeedCm,TargetSpeed,Dt,50.f);
- const float Step=FMath::Sign(Distance)*FMath::Min(FMath::Abs(Distance),FMath::Abs(CurrentSpeedCm)*Dt);
- MoveVehicle(GetActorForwardVector()*Step);
+ const float Lateral=FVector::DotProduct(Offset,GetActorRightVector());
+ const float Curvature=FMath::Clamp(2.f*Lateral/FMath::Max(1600.f,Offset.SizeSquared2D()),-1.f/117.3f,1.f/117.3f);
+ CommandDrive(FMath::Sign(Distance)*FMath::Min(FMath::Abs(TargetSpeed),FMath::Abs(Distance)*2.f),Curvature,Dt);
  return false;
 }
 void AWarehouseForklift::AdvanceSimulation(float DeltaSeconds)
 {
  if (FMath::Abs(BatteryPercent-LastDisplayedBattery)>=.1f) RefreshDisplay();
- if (bAutonomousMode) { AdvanceAutonomy(FMath::Clamp(DeltaSeconds,0.f,.05f)); return; }
+ if (RemoteOperator)
+ {
+  if (!IsValid(RemoteOperator)) { RemoteOperator=nullptr; bPowered=false; BrakeDrive(); }
+  else { AdvanceRemote(FMath::Clamp(DeltaSeconds,0.f,.133333f)); return; }
+ }
+ if (bAutonomousMode) { AdvanceAutonomy(FMath::Clamp(DeltaSeconds,0.f,.133333f)); return; }
  if (bMechanicalFailure || !bPowered) return;
- const float Dt=FMath::Clamp(DeltaSeconds,0.f,.05f);
+ const float Dt=FMath::Clamp(DeltaSeconds,0.f,.133333f);
  if (Dt<=0) return;
  if (State==EWarehouseCycle::Charging)
  {
@@ -369,12 +384,12 @@ void AWarehouseForklift::AdvanceSimulation(float DeltaSeconds)
   if (FMath::Abs(FVector::DotProduct(Offset,GetActorRightVector()))>5 ||
       FVector::DotProduct(Forward,TargetPallet->GetActorForwardVector())<FMath::Cos(FMath::DegreesToRadians(2.f)))
   { StopFor(TEXT("ALIGN PALLET")); break; }
-  const float Remaining=FVector::DotProduct(Offset,Forward)-60;
+  const float Remaining=FVector::DotProduct(Offset,Forward)-65;
   if (Remaining < -1) { StopFor(TEXT("TARGET TOO CLOSE")); break; }
-  if (Remaining>.01f) { MoveToLine(TargetPallet->GetActorLocation()-Forward*60,ForkLeadingSpeedCm,Dt); break; }
-  CurrentSpeedCm=0;
-  if (!TargetPallet->CanEngage(GetActorTransform())) { StopFor(TEXT("FORK INSERTION FAILED")); break; }
-  PalletContactLiftCm=TargetPallet->GetSupportLiftOffset(GetActorTransform());
+  if (Remaining>.5f) { MoveToLine(TargetPallet->GetActorLocation()-Forward*65,ForkLeadingSpeedCm,Dt); break; }
+  BrakeDrive();
+  if (!TargetPallet->CanEngage(Carriage->GetComponentTransform())) { StopFor(TEXT("FORK INSERTION FAILED")); break; }
+  PalletContactLiftCm=TargetPallet->GetSupportLiftOffset(Carriage->GetComponentTransform());
   if (PalletContactLiftCm<0) { StopFor(TEXT("NO PALLET SUPPORT")); break; }
   State=EWarehouseCycle::Lift;
   SetStatus(TEXT("LIFTING"));
@@ -384,14 +399,13 @@ void AWarehouseForklift::AdvanceSimulation(float DeltaSeconds)
   if (!bSupportingPallet)
   {
    // Both tines must be fully inserted before the underside contact is accepted.
-   if (!TargetPallet->CanEngage(GetActorTransform())) { StopFor(TEXT("FORK INSERTION FAILED")); break; }
-   if (LiftOffset<PalletContactLiftCm) { MoveLift(FMath::Min(PalletContactLiftCm,LiftOffset+15*Dt)); break; }
+   if (!TargetPallet->CanEngage(Carriage->GetComponentTransform())) { StopFor(TEXT("FORK INSERTION FAILED")); break; }
    TrackCargo(); bSupportingPallet=true;
   }
-  if (MoveLift(FMath::Min(TaskForkHeightCm-9.5f,LiftOffset+11.5f*Dt)) && LiftOffset>=TaskForkHeightCm-9.5f) { State=EWarehouseCycle::TravelLower; SetStatus(TEXT("LOWERING TO TRAVEL HEIGHT")); }
+  if (MoveLift(TaskForkHeightCm-9.5f) && FMath::Abs(LiftOffset-(TaskForkHeightCm-9.5f))<.4f) { State=EWarehouseCycle::TravelLower; SetStatus(TEXT("LOWERING TO TRAVEL HEIGHT")); }
   break;
  case EWarehouseCycle::TravelLower:
-  if (MoveLift(FMath::Max(FMath::Min(TaskForkHeightCm,20.f)-9.5f,LiftOffset-16.f*Dt)) && LiftOffset<=10.5f) { State=EWarehouseCycle::Reverse; SetStatus(TEXT("REVERSING")); }
+  if (MoveLift(FMath::Min(TaskForkHeightCm,20.f)-9.5f) && LiftOffset<=10.9f) { State=EWarehouseCycle::Reverse; SetStatus(TEXT("REVERSING")); }
   break;
  case EWarehouseCycle::Reverse:
  {
@@ -401,10 +415,10 @@ void AWarehouseForklift::AdvanceSimulation(float DeltaSeconds)
  case EWarehouseCycle::Lower:
   if (bSupportingPallet)
   {
-   if (!MoveLift(FMath::Max(PalletContactLiftCm,LiftOffset-16*Dt))) break;
-   if (LiftOffset<=PalletContactLiftCm) { bSupportingPallet=false; }
+   if (!MoveLift(PalletContactLiftCm)) break;
+   if (LiftOffset<=PalletContactLiftCm+.4f) { bSupportingPallet=false; }
   }
-  else if (MoveLift(FMath::Max(0.f,LiftOffset-15*Dt)) && LiftOffset<=0)
+  else if (MoveLift(0.f) && FMath::Abs(LiftOffset)<.4f)
   { State=EWarehouseCycle::Withdraw; WithdrawStart=GetActorLocation(); SetStatus(TEXT("WITHDRAWING")); }
   break;
  case EWarehouseCycle::Withdraw:

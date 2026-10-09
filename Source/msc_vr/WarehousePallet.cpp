@@ -1,5 +1,6 @@
 #include "WarehousePallet.h"
 #include "WarehouseCargo.h"
+#include "WarehousePhysics.h"
 #include "WarehouseDamageSystem.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -13,7 +14,7 @@ AWarehousePallet::AWarehousePallet()
  static ConstructorHelpers::FObjectFinder<UStaticMesh> Pallet(TEXT("/Game/Warehouse/Physics/SM_Ind_War_Storage_Pallet_Wood_Worn_01"));
  Body=CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PalletMesh"));
  Body->SetupAttachment(RootComponent);
- Body->SetCollisionProfileName(TEXT("BlockAllDynamic"));
+ Body->SetCollisionProfileName(TEXT("PhysicsActor"));
  Body->SetStaticMesh(Pallet.Object);
  if (auto* Prepared=LoadObject<UStaticMesh>(nullptr,TEXT("/Game/Warehouse/Physics/SM_Pallet_110")))
  {
@@ -35,7 +36,7 @@ void AWarehousePallet::BeginPlay()
  Body->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
  SetRootComponent(Body);
  if (PreviousRoot!=Body) PreviousRoot->AttachToComponent(Body,FAttachmentTransformRules::KeepWorldTransform);
- AWarehouseCargo::ConfigureCarryPhysics(Body,PalletMassKg);
+ WarehousePhysics::ConfigureContact(Body,EWarehouseSurface::Wood,FMath::Max(1.f,PalletMassKg)+FMath::Max(0.f,PayloadMassKg));
  if (!GetAttachParentActor()) Body->SetSimulatePhysics(true);
 }
 void AWarehousePallet::TransformCollision(UStaticMesh* Mesh,FTransform Transform)

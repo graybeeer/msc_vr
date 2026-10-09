@@ -44,17 +44,28 @@ public:
  virtual void Tick(float DeltaSeconds) override;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Strength") TArray<FWarehouseStrength> Objects;
  UFUNCTION(BlueprintCallable, Category="Strength") void InitializeStrength();
+ // Call after a runtime physics activation (for example a humanoid ragdoll). No mass/profile changes.
+ UFUNCTION(BlueprintCallable, Category="Strength") void RegisterPhysicalContacts(AActor* Actor);
  UFUNCTION(BlueprintCallable, Category="Strength") void AdvanceStrength(float Seconds);
  UFUNCTION(BlueprintCallable, Category="Strength") void ApplyImpact(AActor* Object, float EnergyJ);
  UFUNCTION(BlueprintPure, Category="Strength") float GetSupportedMass(AActor* Object) const;
  UFUNCTION(BlueprintPure, Category="Strength") bool HasFailed(AActor* Object) const;
+ // Actual native collision bounds, including every skeletal body and each welded body once.
+ // Returns an invalid box when the actor has no live collidable physics representation.
+ UFUNCTION(BlueprintPure, Category="Physics") static FBox GetPhysicalBounds(AActor* Actor);
  UFUNCTION(BlueprintCallable, Category="Strength") TArray<AActor*> GetSupportedActors(AActor* Object);
  static AWarehouseDamageSystem* Find(const AActor* Context);
- static void ReportContact(AActor* Mover, const FHitResult& Hit, FVector VelocityCm, float MassKg);
 private:
+ struct FBodyMotion
+ {
+  FVector Linear=FVector::ZeroVector;
+  FVector Angular=FVector::ZeroVector; // radians/s
+  FVector Center=FVector::ZeroVector;
+  FVector At(FVector Point) const { return Linear+FVector::CrossProduct(Angular,Point-Center); }
+ };
  TMap<TWeakObjectPtr<AActor>, int32> Lookup;
  TMap<uint64, double> LastContact;
- TMap<TWeakObjectPtr<UPrimitiveComponent>, FVector> PrePhysicsVelocity;
+ TMap<TWeakObjectPtr<UPrimitiveComponent>, FBodyMotion> PrePhysicsMotion;
  TArray<TArray<int32>> Supports;
  TArray<FBox> Bounds;
  UPROPERTY(Transient) TArray<TObjectPtr<UTextRenderComponent>> Labels;
@@ -62,10 +73,12 @@ private:
  float SinceScan = 0;
  int32 IndexOf(const AActor* Actor) const;
  float PhysicalMass(int32 Index) const;
+ static FBodyMotion ReadMotion(UPrimitiveComponent* Part);
+ void RegisterContact(UPrimitiveComponent* Part);
  void UpdateLoads();
  void Fail(int32 Index);
  void Release(int32 Index);
  void ShowDamage(int32 Index);
- void Contact(AActor* A, AActor* B, float EnergyJ);
+ void Contact(AActor* A, AActor* B, float EnergyJ, UPrimitiveComponent* PartA=nullptr, UPrimitiveComponent* PartB=nullptr);
  UFUNCTION() void OnHit(UPrimitiveComponent* Part, AActor* Other, UPrimitiveComponent* OtherPart, FVector Impulse, const FHitResult& Hit);
 };

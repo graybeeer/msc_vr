@@ -53,13 +53,15 @@ def configure_mezzanine():
     # A flush lift needs a real pit: split the original ground slab instead of letting
     # the moving platform clip through an unbroken collision floor when descending.
     old_floor=named['Floor'];c,e=old_floor.get_actor_bounds(False)
-    fit(old_floor,(4000,3425,e.z*2),(0,-287.5,-e.z))
-    for label,cx,cy,sx,sy in [('GroundRearWest',-570,1712.5,2860,575),
-                             ('GroundRearEast',1570,1712.5,860,575),
-                             ('GroundRear',1000,1887.5,280,225)]:
+    # The native 350 x 240 cm deck is rotated 90 degrees: world 240 x 350 cm.
+    # Leave 1 cm at both travel-axis ends instead of an exact slab/deck edge contact.
+    fit(old_floor,(4000,3424,e.z*2),(0,-288,-e.z))
+    for label,cx,cy,sx,sy in [('GroundRearWest',-570.5,1712,2859,576),
+                             ('GroundRearEast',1570.5,1712,859,576),
+                             ('GroundRear',1000,1888,282,224)]:
         a=block(label,(cx,cy,-e.z),(sx,sy,e.z*2),floor_mat)
         a.tags=list(a.tags)+[unreal.Name('ObserverArea')]
-    block('LiftPitBase',(1000,1600,-30),(280,350,20),steel)
+    block('LiftPitBase',(1000,1600,-30),(282,352,20),steel)
     # Raise the shell by measured bounds, preserving exterior docks and truck dimensions.
     for label in ('WH_Wall_N','WH_Wall_E','WH_Wall_W','WH_Wall_S_Left','WH_Wall_S_Right'):
         a=named[label];c,e=a.get_actor_bounds(False);fit(a,(e.x*2,e.y*2,1200),(c.x,c.y,600))
@@ -98,8 +100,8 @@ def configure_mezzanine():
     for floor in (1,2):
         z=floor*400
         # U-shaped galleries around a 10 x 26 m atrium. The lift shaft has a real opening.
-        for name,cx,cy,sx,sy in [('Left',-1150,0,1300,3600),('Right',1150,-187.5,1300,3225),
-                               ('RearWest',680,1612.5,360,375),('RearEast',1470,1612.5,660,375),
+        for name,cx,cy,sx,sy in [('Left',-1150,0,1300,3600),('Right',1150,-188,1300,3224),
+                               ('RearWest',679.5,1612,359,376),('RearEast',1470.5,1612,659,376),
                                ('North',0,1550,1000,500),('South',0,-1550,1000,500)]:
             block(f'L{floor+1}_Deck_{name}',(cx,cy,z-10),(sx,sy,20),floor_mat,floor)
         for x in (-1775,-500,500,1775):

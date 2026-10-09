@@ -4,6 +4,8 @@
 #include "AgvDriveComponent.h"
 #include "AgvDynamicDriveComponent.generated.h"
 
+class UPrimitiveComponent;
+
 /** A wheel nobody drives: fixed (rolls along the chassis X axis, resists sliding sideways) or a free-swivel caster. */
 USTRUCT(BlueprintType)
 struct FAgvPassiveWheel
@@ -37,11 +39,10 @@ struct FAgvPassiveWheel
 };
 
 /**
- * Force-driven tricycle AGV. The vehicle is a rigid body (chassis + payload mass, centre of mass, yaw inertia);
- * it moves only through tyre forces. The drive motor produces torque under torque / power limits, a wheel speed
- * controller (the AGV's own controller, which does not know the payload) sets that torque, and each wheel's grip
- * is limited by friction x its share of the weight, which shifts with the centre of mass and with acceleration.
- * Integrates at a fixed substep, so results do not depend on the frame rate.
+ * Chaos rigid-body tricycle. Actual gravity, roll/pitch, impacts and motion belong to the engine.
+ * An explicit contact tyre approximation applies bounded motor and lateral forces at real ground hits,
+ * with equal opposite forces on dynamic supporting bodies. Welded tyre colliders supply normal contact only;
+ * their native shear friction is zero to avoid counting tyre grip twice. No actor pose or velocity is assigned.
  */
 UCLASS(ClassGroup=(Agv), meta=(BlueprintSpawnableComponent))
 class MSC_VR_API UAgvDynamicDriveComponent : public UAgvTricycleDriveComponent
@@ -51,11 +52,17 @@ class MSC_VR_API UAgvDynamicDriveComponent : public UAgvTricycleDriveComponent
 public:
 	UAgvDynamicDriveComponent();
 
+	/** Apply one controller update; requires real world physics ticks to advance motion. */
+	UFUNCTION(BlueprintCallable, Category="AGV|Dynamics")
 	virtual void Step(float Dt) override;
+	UFUNCTION(BlueprintCallable, Category="AGV|Dynamics")
 	virtual void Halt() override;
 	virtual double GetPayloadKg() const override { return PayloadMassKg; }
 
-	/** Load carried by the vehicle; CenterOfMassCm in the actor's local frame, SizeCm its footprint for the yaw inertia. */
+	void SetPhysicsBody(UPrimitiveComponent* InBody);
+	UFUNCTION(BlueprintPure, Category="AGV|Dynamics") UPrimitiveComponent* GetPhysicsBody() const { return PhysicsBody; }
+
+	/** Physical load metadata for navigation/grip estimates. The load must exist as its own body; never adds its mass to the chassis. */
 	UFUNCTION(BlueprintCallable, Category="AGV|Dynamics")
 	void SetPayload(float MassKg, FVector CenterOfMassCm, FVector2D SizeCm = FVector2D(110.0, 110.0));
 
@@ -111,8 +118,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Dynamics")
 	TArray<FAgvPassiveWheel> PassiveWheels;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Dynamics", meta=(ClampMin="0.0005", ClampMax="0.01"))
-	float SubstepSeconds = 0.002f;
+	/** Prototype rating; independent of the main WarehouseForklift's 1,400 kg rating. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Dynamics", meta=(ClampMin="0"))
+	float RatedPayloadKg = 250.f;
 
 	// Payload (set through SetPayload).
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Dynamics")
@@ -128,7 +136,7 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Dynamics|Status")
 	float DriveWheelLoadN = 0.f;
 
-	/** Rim speed minus ground speed along the drive wheel; non-zero = wheel spin or skid. */
+	/** Wheel-speed command minus measured contact-point speed; the welded tyre has no independently simulated rotor. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Dynamics|Status")
 	float DriveWheelSlipCmS = 0.f;
 
@@ -139,7 +147,7 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Dynamics|Status")
 	float StabilityMargin = 0.f;
 
-	/** Latched when a wheel lifts; the motion after that is not simulated (no tipping dynamics yet). */
+	/** Latched when the real body tips or its estimated support margin is negative. Chaos keeps simulating it. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Dynamics|Status")
 	bool bTipOver = false;
 
@@ -155,15 +163,15 @@ private:
 		FVector CenterOfMass = FVector::ZeroVector; // metres, actor-local
 	};
 	FMassProperties MassProperties() const;
-	void Substep(double H, const FMassProperties& Body, FVector2D& CenterOfMass, double& Yaw);
 	void SolveWheelLoads(const FMassProperties& Body, const TArray<FVector2D>& Contacts, const TArray<double>& Stiffness, TArray<double>& OutLoads);
+	void ReadPhysicsTelemetry();
+	void ApplyContactForces(float Dt, const FMassProperties& Body);
 
-	// Rigid-body state in SI units: centre-of-mass velocity (world), yaw rate, drive wheel spin.
-	FVector2D Velocity = FVector2D::ZeroVector;
-	double YawRate = 0.0;
-	double WheelSpin = 0.0;
+	UPROPERTY(Transient) TObjectPtr<UPrimitiveComponent> PhysicsBody;
 	double SpeedIntegral = 0.0;
 	/** Body-frame acceleration of the centre of mass, filtered; shifts the wheel loads. */
 	FVector2D BodyAcceleration = FVector2D::ZeroVector;
-	double TimeDebt = 0.0;
+	FVector WorldAccelerationM = FVector::ZeroVector;
+	FVector LastPhysicsVelocity = FVector::ZeroVector;
+	bool bHaveVelocitySample = false;
 };

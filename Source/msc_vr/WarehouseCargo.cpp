@@ -1,5 +1,5 @@
 #include "WarehouseCargo.h"
-#include "PhysicalMaterials/PhysicalMaterial.h"
+#include "WarehousePhysics.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "PhysicsEngine/BodySetup.h"
@@ -77,11 +77,10 @@ bool AWarehouseCargo::ApplyCargoRecipe(const FWarehouseCargoRecipe& Recipe)
 {
  if (!Recipe.bValid || Recipe.RuleVersion != 1 || Recipe.SizeCm.ContainsNaN() || Recipe.SizeCm.GetMin() <= 0 ||
      !FMath::IsFinite(Recipe.GrossMassKg) || Recipe.GrossMassKg < .1f || !Body->GetStaticMesh() || GetAttachParentActor()) return false;
+ if (HasActorBegunPlay() && Body->IsSimulatingPhysics()) return false;
  const FVector MeshSize = Body->GetStaticMesh()->GetBoundingBox().GetSize();
  if (MeshSize.GetMin() <= UE_SMALL_NUMBER) return false;
  const FBox Before = Body->Bounds.GetBox();
- const bool Simulating = Body->IsSimulatingPhysics();
- Body->SetSimulatePhysics(false);
  SetActorScale3D(Recipe.SizeCm / MeshSize);
  Body->UpdateBounds();
  const FBox After = Body->Bounds.GetBox();
@@ -89,8 +88,6 @@ bool AWarehouseCargo::ApplyCargoRecipe(const FWarehouseCargoRecipe& Recipe)
  Packing = Recipe;
  CargoKind = Recipe.ProductKind;
  SetGrossMassKg(Recipe.GrossMassKg);
- Body->SetSimulatePhysics(Simulating);
- if (Simulating) Body->WakeAllRigidBodies();
  return true;
 }
 
@@ -104,6 +101,7 @@ AWarehouseCargo::AWarehouseCargo()
 }
 void AWarehouseCargo::SetCargoMesh(UStaticMesh* Mesh)
 {
+ if (HasActorBegunPlay() && Body->IsSimulatingPhysics() && Body->GetStaticMesh() && Body->GetStaticMesh()!=Mesh) return;
  if (Mesh) Body->SetStaticMesh(Mesh);
 }
 void AWarehouseCargo::SetGrossMassKg(float MassKg)
@@ -139,20 +137,7 @@ void AWarehouseCargo::BeginPlay()
 }
 void AWarehouseCargo::ConfigureCarryPhysics(UStaticMeshComponent* Component, float MassKg)
 {
- Component->SetCollisionProfileName(TEXT("PhysicsActor"));
- Component->SetEnableGravity(true); Component->SetUseCCD(true);
- Component->SetLinearDamping(.2f); Component->SetAngularDamping(.7f);
- Component->SetMassOverrideInKg(NAME_None,FMath::Max(.1f,MassKg));
- Component->BodyInstance.SetOverrideIterationCounts(true);
- Component->BodyInstance.SetPositionSolverIterationCount(16);
- Component->BodyInstance.SetVelocitySolverIterationCount(8);
- Component->BodyInstance.SetProjectionSolverIterationCount(4);
- Component->BodyInstance.SetMaxDepenetrationVelocity(100.f);
- auto* Material=NewObject<UPhysicalMaterial>(Component);
- Material->Friction=.65f; Material->Restitution=0.f;
- Material->bOverrideRestitutionCombineMode=true;
- Material->RestitutionCombineMode=EFrictionCombineMode::Min;
- Component->SetPhysMaterialOverride(Material);
+ WarehousePhysics::ConfigureContact(Component,WarehousePhysics::SurfaceFor(Component),MassKg);
 }
 void AWarehouseCargo::WakeStackAbove()
 {

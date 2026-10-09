@@ -14,7 +14,10 @@ class UInputAction;
 class UInputMappingContext;
 class AWarehouseCargo;
 class AWarehousePallet;
+class AWarehouseForklift;
+class UStaticMeshComponent;
 class UMaterialInterface;
+class UPhysicsConstraintComponent;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -55,12 +58,21 @@ protected:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> CarryAction;
+	UPROPERTY(Transient) TObjectPtr<UInputAction> RemoteAction;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputMappingContext> CarryMappingContext;
 
 	UPROPERTY(Transient)
 	TObjectPtr<AActor> HeldCargo;
+	UPROPERTY(Transient) TObjectPtr<AWarehouseForklift> RemoteForklift;
+	UPROPERTY(VisibleAnywhere, Category="Remote") TObjectPtr<UStaticMeshComponent> RemotePhone;
+	UPROPERTY(VisibleAnywhere, Category="Remote") TObjectPtr<UStaticMeshComponent> RemoteWorldPhone;
+	UPROPERTY(VisibleAnywhere, Category="Remote") TObjectPtr<USkeletalMeshComponent> RemoteWorldMesh;
+	bool bRemoteHadViewportFocus = false;
+	bool bObserverPresentation = false;
+	void UpdateRemoteControl();
+	bool InitializeRemotePresentation();
 
 	UPROPERTY(EditDefaultsOnly, Category="Carry", meta=(ClampMin="0.05", ClampMax="1.0"))
 	float CarryOpacity = .3f;
@@ -88,16 +100,34 @@ protected:
 	FTransform PlacementStart, PlacementTarget, PlacementPalletPose;
 	float PlacementTime = -1.f;
 	float BaseWalkSpeed = 0.f;
+	UPROPERTY(VisibleAnywhere, Category="Carry") TObjectPtr<UPhysicsConstraintComponent> CarryGrip;
+	UPROPERTY(EditAnywhere, Category="Human Physics") float HumanMassKg=80.f;
+	bool bPhysicalRagdoll=false, bPhysicalSprint=false, bPhysicalGround=false, bPhysicalCrouchRequested=false;
+	float JumpSupportDelay=0.f, GripSlipTime=0.f;
+	FVector GripBodyOffset=FVector::ZeroVector;
+	void UpdatePhysicalMovement(float DeltaSeconds);
+	void UpdateGripTarget(const FTransform& Pose);
 	void UpdateLocomotion();
 	bool FindPlacement(AWarehousePallet* Pallet, const FVector& Aim, FTransform& Target) const;
 	
 public:
 	Amsc_vrCharacter();
 	virtual void Tick(float DeltaSeconds) override;
+	virtual FVector GetVelocity() const override;
+	UFUNCTION(BlueprintPure, Category="Carry") AActor* GetHeldCargo() const { return HeldCargo; }
+	UFUNCTION(BlueprintPure, Category="Human Physics") bool IsPhysicalRagdoll() const { return bPhysicalRagdoll; }
+	FQuat GetCarryTorsoLean() const;
 	virtual void OnStartCrouch(float HeightAdjust, float ScaledHeightAdjust) override;
 	virtual void OnEndCrouch(float HeightAdjust, float ScaledHeightAdjust) override;
 	UFUNCTION(BlueprintCallable, Category="Input") void SetLocomotionInput(bool Sprint, bool Crouching);
 	void SetObserverPresentation(bool Observing);
+	UFUNCTION(BlueprintCallable, Category="Remote") void ToggleRemoteControl();
+	UFUNCTION(BlueprintCallable, Category="Remote") bool BeginRemoteControl(AWarehouseForklift* Forklift);
+	UFUNCTION(BlueprintCallable, Category="Remote") void EndRemoteControl();
+	UFUNCTION(BlueprintPure, Category="Remote") AWarehouseForklift* GetRemoteForklift() const { return RemoteForklift; }
+	UFUNCTION(BlueprintPure, Category="Remote") bool HasHeldCargo() const { return IsValid(HeldCargo); }
+	USkeletalMeshComponent* GetRemoteWorldMesh() const { return RemoteWorldMesh; }
+	FQuat GetHandFacing(int Index) const;
 	UFUNCTION(BlueprintCallable, Category="Carry")
 	bool TryPickupCargo(AWarehouseCargo* Cargo);
 	UFUNCTION(BlueprintCallable, Category="Carry") bool TryPickupPallet(AWarehousePallet* Pallet);
@@ -145,6 +175,7 @@ protected:
 
 	/** Set up input action bindings */
 	virtual void SetupPlayerInputComponent(UInputComponent* InputComponent) override;
+	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	
 

@@ -49,7 +49,8 @@ bool AWarehouseChargingStation::TryReserve(AWarehouseForklift* Vehicle)
 }
 void AWarehouseChargingStation::Release(AWarehouseForklift* Vehicle)
 {
- if (Occupant==Vehicle) Occupant=nullptr;
+ if (Occupant!=Vehicle) return;
+ Occupant=nullptr;
  ShowCharge(0,false);
 }
 void AWarehouseChargingStation::ShowCharge(float Percent, bool Charging)

@@ -9,6 +9,7 @@
 class UInputMappingContext;
 class UUserWidget;
 class SWidget;
+class SBox;
 class ACameraActor;
 
 /**
@@ -72,6 +73,7 @@ protected:
 	void UpdateObserverCamera();
 	FText GetCargoReadout() const;
 	TSharedPtr<SWidget> CargoReadoutWidget;
+	TSharedPtr<SBox> CargoReadoutBox;
 	void SetObserverRoofVisibility(bool Hide);
 	TArray<TWeakObjectPtr<AActor>> ObserverHiddenRoofs;
 	FVector ObserverFocus = FVector::ZeroVector;

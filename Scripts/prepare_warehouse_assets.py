@@ -31,7 +31,7 @@ def collision_mesh(mesh, dynamic=False):
             unreal.WarehouseCargo.configure_mesh_collision(result, not dynamic)
         # A closed carton has flat load-bearing faces; a scan-derived hull can rock
         # on paper wrinkles. Fit a box to its measured exterior bounds instead.
-        sealed_carton = mesh.get_name() == 'SM_Ind_War_Storage_Box_Cardboard_Worn_02'
+        sealed_carton = mesh.get_name() == 'SM_Ind_War_Storage_Box_Cardboard_Worn_02' or mesh.get_name().startswith('SM_Carton_Intact_')
         if dynamic and sealed_carton:
             if unreal.EditorAssetLibrary.get_metadata_tag(result, 'WarehouseCollisionVersion') != 'sealed-box-v2':
                 mesh_editor.remove_collisions(result)

@@ -3,7 +3,7 @@
 #include "Animation/AnimInstance.h"
 #include "WarehouseCarryAnimInstance.generated.h"
 
-/** Copies the existing locomotion pose and adds two-handed support of the load. */
+/** Copies locomotion and poses both hands around a load or the remote-control phone. */
 UCLASS(Transient)
 class MSC_VR_API UWarehouseCarryAnimInstance : public UAnimInstance
 {

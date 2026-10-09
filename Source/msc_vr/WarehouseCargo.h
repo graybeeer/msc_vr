@@ -33,6 +33,7 @@ class MSC_VR_API AWarehouseCargo : public AActor
  GENERATED_BODY()
 public:
  AWarehouseCargo();
+ // Runtime active parcels retain their collision geometry; replace only during initialization/editor setup.
  UFUNCTION(BlueprintCallable, Category="Cargo") void SetCargoMesh(UStaticMesh* Mesh);
  UFUNCTION(BlueprintCallable, Category="Cargo") static void ConfigureMeshCollision(UStaticMesh* Mesh, bool Complex);
  static void ConfigureCarryPhysics(UStaticMeshComponent* Component, float MassKg);
@@ -46,7 +47,7 @@ public:
  // Save the recipe (including seed, item index, size limit, amount, version) with deliveries, not the arrival time.
  UFUNCTION(BlueprintPure, Category="Cargo|Generation") static FWarehouseCargoRecipe GenerateCargoRecipe(int32 DeliverySeed, int32 ItemIndex, int32 ProductIndex, FVector MaxSizeCm, float AmountScale = 1.f);
  UFUNCTION(BlueprintPure, Category="Cargo|Generation") static int32 GetCargoProfileCount();
- // Set the closed carton mesh first. Applies mesh/collision size and Chaos mass together, keeping the bottom fixed.
+ // Configure before BeginPlay (or on a deferred spawn). Active physics parcels cannot be resized/teleported.
  UFUNCTION(BlueprintCallable, Category="Cargo|Generation") bool ApplyCargoRecipe(const FWarehouseCargoRecipe& Recipe);
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Cargo|Generation") FWarehouseCargoRecipe Packing;
  UFUNCTION(BlueprintPure, Category="Cargo") FText GetCargoDescription() const;

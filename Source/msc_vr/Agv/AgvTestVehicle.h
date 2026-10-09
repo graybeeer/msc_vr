@@ -23,17 +23,18 @@ class MSC_VR_API AAgvTestVehicle : public AActor
 
 public:
 	AAgvTestVehicle();
+	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 
-	/** One fixed cycle: navigation decides, then the drive moves. Also used by headless verification. */
+	/** One control cycle. Chaos advances motion through the actual world physics tick. */
 	UFUNCTION(BlueprintCallable, Category="AGV")
 	void StepSimulation(float Dt);
 
-	/** Steps until navigation stops being active or MaxSeconds pass; returns the simulated seconds. */
+	/** Legacy synchronous verifier. Cannot advance Chaos; use an asynchronous PIE test. Returns zero. */
 	UFUNCTION(BlueprintCallable, Category="AGV")
 	float SimulateUntilIdle(float MaxSeconds, float Dt = 0.0166667f);
 
-	/** Places the reference point at a world position with the given vehicle yaw, at rest. */
+	/** Editor fixture placement only. Rejected after BeginPlay so a running body cannot be teleported. */
 	UFUNCTION(BlueprintCallable, Category="AGV")
 	void TeleportReference(FVector2D Position, float YawDeg);
 
@@ -98,6 +99,7 @@ public:
 	bool bSensorsAsleep = false;
 
 private:
+	void InitializeContactPhysics();
 	/** Steer and roll the wheel meshes to the drive's actual state. */
 	void UpdateWheelMeshes();
 
@@ -124,4 +126,9 @@ private:
 
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UStaticMeshComponent> SupportWheelR;
+	// Cosmetic twins keep rolling animations from moving the welded collision geometry.
+	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> VisualSteerPivot;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> VisualDriveWheel;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> VisualSupportWheelL;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> VisualSupportWheelR;
 };

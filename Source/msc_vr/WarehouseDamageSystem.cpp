@@ -3,16 +3,62 @@
 #include "WarehouseForklift.h"
 #include "WarehousePallet.h"
 #include "WarehouseChargingStation.h"
+#include "WarehousePhysics.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Components/TextRenderComponent.h"
 #include "Engine/World.h"
 #include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "CollisionQueryParams.h"
+#include "PhysicsEngine/BodySetup.h"
+#include "PhysicsEngine/BodyInstance.h"
+
+namespace
+{
+ bool OwnsPhysicalMass(const AActor* Actor)
+ {
+  return Actor && (Actor->ActorHasTag(TEXT("WarehousePhysicalVehicle")) || Actor->ActorHasTag(TEXT("WarehousePhysicalHuman")) || Actor->ActorHasTag(TEXT("WarehousePhysicalRig")));
+ }
+ UPrimitiveComponent* PhysicalComponent(UPrimitiveComponent* Part)
+ {
+  if (Part)
+  {
+   if (const auto* Body=Part->GetBodyInstance(NAME_None,true); Body && Body->OwnerComponent.IsValid()) return Body->OwnerComponent.Get();
+  }
+  return Part;
+ }
+ uint32 ContactBodyId(UPrimitiveComponent* Part,const AActor* Actor)
+ {
+  // Welded collision shapes describe one body, independent wheels remain separate.
+  if (auto* Body=PhysicalComponent(Part)) return Body->GetUniqueID();
+  return Actor->GetUniqueID();
+ }
+ double CollisionVolume(UPrimitiveComponent* Part)
+ {
+  double Volume=Part->GetPhysicsBodySetup() ? Part->GetPhysicsBodySetup()->GetScaledVolume(Part->GetComponentScale()) : 0;
+  if (!FMath::IsFinite(Volume) || Volume<=0)
+  {
+   const FVector Extent=Part->Bounds.BoxExtent;
+   Volume=8.*Extent.X*Extent.Y*Extent.Z;
+  }
+  return FMath::IsFinite(Volume) ? FMath::Max(.001,Volume) : .001;
+ }
+ void DistributeMass(const TArray<UPrimitiveComponent*>& Parts,float TotalKg)
+ {
+  double TotalVolume=0;
+  for (auto* Part : Parts) TotalVolume+=CollisionVolume(Part);
+  if (TotalVolume<=0) return;
+  for (auto* Part : Parts)
+   Part->SetMassOverrideInKg(NAME_None,float(TotalKg*CollisionVolume(Part)/TotalVolume));
+ }
+}
 
 AWarehouseDamageSystem::AWarehouseDamageSystem()
 {
  PrimaryActorTick.bCanEverTick = true;
+ PrimaryActorTick.TickGroup=TG_PrePhysics;
  RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 }
 AWarehouseDamageSystem* AWarehouseDamageSystem::Find(const AActor* Context)
@@ -37,6 +83,29 @@ bool AWarehouseDamageSystem::HasFailed(AActor* Object) const
  const int32 Index = IndexOf(Object);
  return Index != INDEX_NONE && Objects[Index].bFailed;
 }
+FBox AWarehouseDamageSystem::GetPhysicalBounds(AActor* Actor)
+{
+ FBox Bounds(ForceInit);
+ if (!IsValid(Actor) || !Actor->GetActorEnableCollision()) return Bounds;
+ TSet<const FBodyInstance*> Seen;
+ auto AddBody=[&](FBodyInstance* Body)
+ {
+  while (Body && Body->WeldParent) Body=Body->WeldParent;
+  if (!Body || Seen.Contains(Body) || !Body->IsValidBodyInstance()) return;
+  Seen.Add(Body);
+  const FBox NativeBounds=Body->GetBodyBounds();
+  if (NativeBounds.IsValid) Bounds+=NativeBounds;
+ };
+ TArray<UPrimitiveComponent*> Parts; Actor->GetComponents(Parts);
+ for (auto* Part : Parts)
+ {
+  if (!Part->IsCollisionEnabled() || Part->GetCollisionProfileName()==TEXT("Trigger")) continue;
+  if (auto* Mesh=Cast<USkeletalMeshComponent>(Part))
+   for (auto* Body : Mesh->Bodies) AddBody(Body);
+  else AddBody(Part->GetBodyInstance(NAME_None,true));
+ }
+ return Bounds;
+}
 float AWarehouseDamageSystem::GetSupportedMass(AActor* Object) const
 {
  const int32 Index = IndexOf(Object);
@@ -47,33 +116,91 @@ void AWarehouseDamageSystem::BeginPlay()
  Super::BeginPlay();
  InitializeStrength();
 }
+AWarehouseDamageSystem::FBodyMotion AWarehouseDamageSystem::ReadMotion(UPrimitiveComponent* Part)
+{
+ FBodyMotion Result;
+ Part=PhysicalComponent(Part);
+ if (!Part) return Result;
+ Result.Center=Part->GetComponentLocation();
+ Result.Linear=Part->GetComponentVelocity();
+ if (Part->IsSimulatingPhysics())
+ {
+  Result.Center=Part->GetCenterOfMass();
+  Result.Linear=Part->GetPhysicsLinearVelocity();
+  Result.Angular=Part->GetPhysicsAngularVelocityInRadians();
+ }
+ return Result;
+}
+void AWarehouseDamageSystem::RegisterContact(UPrimitiveComponent* Part)
+{
+ if (!WarehousePhysics::IsPhysicalContact(Part)) return;
+ auto* Body=PhysicalComponent(Part);
+ PrePhysicsMotion.Add(Body,ReadMotion(Body));
+ Part->SetNotifyRigidBodyCollision(true);
+ Part->OnComponentHit.AddUniqueDynamic(this,&AWarehouseDamageSystem::OnHit);
+}
+void AWarehouseDamageSystem::RegisterPhysicalContacts(AActor* Actor)
+{
+ if (!IsValid(Actor)) return;
+ TArray<UPrimitiveComponent*> Parts; Actor->GetComponents(Parts);
+ for (auto* Part : Parts) RegisterContact(Part);
+}
 void AWarehouseDamageSystem::InitializeStrength()
 {
  Lookup.Reset();
- PrePhysicsVelocity.Reset();
+ PrePhysicsMotion.Reset();
  Supports.SetNum(Objects.Num());
  Bounds.SetNum(Objects.Num());
  Labels.SetNum(Objects.Num());
  for (int32 I=0; I<Objects.Num(); ++I)
  {
   auto& Spec=Objects[I];
-  TArray<UStaticMeshComponent*> AllParts;
+  TArray<UPrimitiveComponent*> AllParts;
   for (AActor* Actor : Spec.Members) if (IsValid(Actor))
   {
    Lookup.Add(Actor,I);
-   TArray<UStaticMeshComponent*> Parts;
+   TArray<UPrimitiveComponent*> Parts;
    Actor->GetComponents(Parts);
-   AllParts.Append(Parts);
+   if (!OwnsPhysicalMass(Actor))
+    for (auto* Part : Parts) if (WarehousePhysics::IsPhysicalContact(Part)) AllParts.Add(Part);
    if (auto* Vehicle=Cast<AWarehouseForklift>(Actor)) { Spec.MassKg=Vehicle->VehicleMassKg; Spec.RatedLoadKg=Vehicle->RatedLoadKg; }
    if (auto* Pallet=Cast<AWarehousePallet>(Actor)) Spec.MassKg=Pallet->PalletMassKg;
    if (auto* Cargo=Cast<AWarehouseCargo>(Actor)) Spec.MassKg=Cargo->GrossMassKg;
   }
-  for (auto* Part : AllParts)
+  DistributeMass(AllParts,PhysicalMass(I));
+  for (int32 M=0;M<Spec.Members.Num();++M)
   {
-   Part->SetMassOverrideInKg(NAME_None,PhysicalMass(I)/FMath::Max(1,AllParts.Num()));
-   PrePhysicsVelocity.Add(Part,Part->GetComponentVelocity());
-   Part->SetNotifyRigidBodyCollision(true);
-   Part->OnComponentHit.AddUniqueDynamic(this,&AWarehouseDamageSystem::OnHit);
+   AActor* Actor=Spec.Members[M];
+   if (!IsValid(Actor) || !Actor->ActorHasTag(TEXT("WarehousePortable"))) continue;
+   TArray<UStaticMeshComponent*> Parts; Actor->GetComponents(Parts);
+   for (auto* Part : Parts) if (WarehousePhysics::IsPhysicalContact(Part) && !Part->IsSimulatingPhysics())
+   {
+    UStaticMesh* Prepared=Part->GetStaticMesh();
+    if (Spec.PhysicsMeshes.IsValidIndex(M) && Spec.PhysicsMeshes[M]) Prepared=Spec.PhysicsMeshes[M].Get();
+    const UBodySetup* Setup=Prepared ? Prepared->GetBodySetup() : nullptr;
+    if (!Setup || Setup->CollisionTraceFlag==CTF_UseComplexAsSimple || Setup->AggGeom.GetElementCount()==0)
+    {
+     UE_LOG(LogTemp,Error,TEXT("WAREHOUSE_PORTABLE_COLLISION_MISSING %s: prepare a simple physics mesh before play"),*Actor->GetName());
+     continue;
+    }
+    // A loose object's saved placement is retained; Chaos settles its real contacts.
+    Part->SetStaticMesh(Prepared);
+    Part->SetMobility(EComponentMobility::Movable);
+    Part->SetCollisionObjectType(ECC_PhysicsBody);
+    WarehousePhysics::ConfigureContact(Part,WarehousePhysics::SurfaceFor(Part));
+    Part->SetSimulatePhysics(true);
+   }
+  }
+ }
+ // Register contact on real primitives, including an owner's capsule/box physics root.
+ // Render-only meshes, widgets, triggers and intentional NoCollision decorations stay untouched.
+ for (TActorIterator<AActor> It(GetWorld());It;++It)
+ {
+  TArray<UPrimitiveComponent*> Parts; It->GetComponents(Parts);
+  for (auto* Part : Parts) if (WarehousePhysics::IsPhysicalContact(Part))
+  {
+   if (!OwnsPhysicalMass(*It)) WarehousePhysics::ConfigureContact(Part,WarehousePhysics::SurfaceFor(Part));
+   RegisterContact(Part);
   }
  }
  bInitialized=true;
@@ -82,8 +209,7 @@ void AWarehouseDamageSystem::InitializeStrength()
 void AWarehouseDamageSystem::Tick(float Dt)
 {
  Super::Tick(Dt);
- for (auto& Entry : PrePhysicsVelocity) if (auto* Part=Entry.Key.Get())
-  Entry.Value=Part->IsSimulatingPhysics() ? Part->GetPhysicsLinearVelocity() : Part->GetComponentVelocity();
+ for (auto& Entry : PrePhysicsMotion) if (auto* Part=Entry.Key.Get()) Entry.Value=ReadMotion(Part);
  AdvanceStrength(Dt);
 }
 void AWarehouseDamageSystem::UpdateLoads()
@@ -101,14 +227,17 @@ void AWarehouseDamageSystem::UpdateLoads()
   for (AActor* Actor : Spec.Members) if (IsValid(Actor))
   {
    if (auto* Cargo=Cast<AWarehouseCargo>(Actor)) Spec.MassKg=Cargo->GrossMassKg;
-   TArray<UStaticMeshComponent*> Parts;
+   TArray<UPrimitiveComponent*> Parts;
    Actor->GetComponents(Parts);
-   for (auto* Part : Parts) if (Part->IsVisible() && Part->IsCollisionEnabled()) Bounds[I]+=Part->Bounds.GetBox();
+   for (auto* Part : Parts) if (WarehousePhysics::IsPhysicalContact(Part)) Bounds[I]+=Part->Bounds.GetBox();
    if (auto* Pallet=Cast<AWarehousePallet>(Actor))
    {
+    Spec.MassKg=FMath::Max(1.f,Pallet->PalletMassKg);
     Spec.SupportedKg+=FMath::Max(0.f,Pallet->PayloadMassKg);
-    for (auto* Part : Parts)
-     if (FMath::Abs(Part->GetMass()-PhysicalMass(I))>.1f) Part->SetMassOverrideInKg(NAME_None,PhysicalMass(I));
+    // Virtual contents belong to the pallet body; visible cartons remain separate masses.
+    auto* Body=Pallet->GetPalletBody();
+    const float Mass=FMath::Max(1.f,Pallet->PalletMassKg)+FMath::Max(0.f,Pallet->PayloadMassKg);
+    if (Body->IsSimulatingPhysics() && FMath::Abs(Body->GetMass()-Mass)>.1f) Body->SetMassOverrideInKg(NAME_None,Mass);
    }
   }
   if (Bounds[I].IsValid) Order.Add(I);
@@ -119,7 +248,6 @@ void AWarehouseDamageSystem::UpdateLoads()
  {
   auto& Spec=Objects[I];
   const FBox& Box=Bounds[I];
-  if (Spec.bFailed) continue;
   FCollisionQueryParams Params(SCENE_QUERY_STAT(WarehouseSupport),true);
   for (AActor* Actor : Spec.Members) if (IsValid(Actor)) Params.AddIgnoredActor(Actor);
   // ponytail: sampled support at 10 Hz; use Chaos contact manifolds for arbitrary rolling/tilting stacks.
@@ -133,19 +261,13 @@ void AWarehouseDamageSystem::UpdateLoads()
     if (GetWorld()->LineTraceSingleByChannel(Hit,Point,Point-FVector(0,0,4),ECC_Visibility,Params))
     {
      const int32 Parent=IndexOf(Hit.GetActor());
-     if (Parent!=INDEX_NONE && Parent!=I && !Objects[Parent].bFailed && Bounds[Parent].IsValid && Bounds[Parent].Min.Z<Box.Min.Z-.05f)
+     if (Parent!=INDEX_NONE && Parent!=I && Bounds[Parent].IsValid && Bounds[Parent].Min.Z<Box.Min.Z-.05f)
       Supports[I].AddUnique(Parent);
     }
    }
   };
   Sample(.13f);
   if (Supports[I].IsEmpty()) Sample(.015f);
-  // A mechanically attached training pallet transfers load to the vehicle even without a trace contact.
-  for (AActor* Actor : Spec.Members) if (IsValid(Actor) && Actor->GetAttachParentActor())
-  {
-   const int32 Parent=IndexOf(Actor->GetAttachParentActor());
-   if (Parent!=INDEX_NONE) { Supports[I].Reset(); Supports[I].Add(Parent); break; }
-  }
   const float Share=(FMath::Max(.1f,Spec.MassKg)+Spec.SupportedKg)/FMath::Max(1,Supports[I].Num());
   for (int32 Parent : Supports[I])
   {
@@ -197,11 +319,11 @@ void AWarehouseDamageSystem::ApplyImpact(AActor* Object,float EnergyJ)
  ShowDamage(I);
  if (Spec.Damage>=1.f) Fail(I);
 }
-void AWarehouseDamageSystem::Contact(AActor* A,AActor* B,float EnergyJ)
+void AWarehouseDamageSystem::Contact(AActor* A,AActor* B,float EnergyJ,UPrimitiveComponent* PartA,UPrimitiveComponent* PartB)
 {
  if (!A || !B || A==B) return;
  // Both hit delegates (and substeps) describe one contact; don't charge the damage twice.
- uint32 X=A->GetUniqueID(),Y=B->GetUniqueID();
+ uint32 X=ContactBodyId(PartA,A),Y=ContactBodyId(PartB,B);
  const uint64 Key=(uint64(FMath::Min(X,Y))<<32)|FMath::Max(X,Y);
  const double Now=GetWorld()->GetTimeSeconds();
  if (const double* Last=LastContact.Find(Key); Last && Now-*Last<.08) return;
@@ -209,64 +331,53 @@ void AWarehouseDamageSystem::Contact(AActor* A,AActor* B,float EnergyJ)
  ApplyImpact(A,EnergyJ);
  ApplyImpact(B,EnergyJ);
 }
-void AWarehouseDamageSystem::ReportContact(AActor* Mover,const FHitResult& Hit,FVector VelocityCm,float MassKg)
-{
- auto* System=Find(Mover);
- if (!System || Hit.bStartPenetrating || !Hit.GetActor()) return;
- if (!System->bInitialized) System->InitializeStrength();
- const float Speed=FMath::Max(0.f,-FVector::DotProduct(VelocityCm,Hit.ImpactNormal))*.01f;
- float ReducedMass=FMath::Max(.1f,MassKg);
- if (Hit.GetComponent() && Hit.GetComponent()->IsSimulatingPhysics())
- {
-  const float OtherMass=FMath::Max(.1f,Hit.GetComponent()->GetMass());
-  ReducedMass=ReducedMass*OtherMass/(ReducedMass+OtherMass);
- }
- System->Contact(Mover,Hit.GetActor(),.5f*ReducedMass*Speed*Speed);
-}
 void AWarehouseDamageSystem::OnHit(UPrimitiveComponent* Part,AActor* Other,UPrimitiveComponent* OtherPart,FVector Impulse,const FHitResult& Hit)
 {
  if (!Part || !OtherPart || Impulse.IsNearlyZero()) return;
- const float A=Part->IsSimulatingPhysics() ? FMath::Max(.1f,Part->GetMass()) : 0;
- const float B=OtherPart->IsSimulatingPhysics() ? FMath::Max(.1f,OtherPart->GetMass()) : 0;
+ auto* BodyA=PhysicalComponent(Part);
+ auto* BodyB=PhysicalComponent(OtherPart);
+ const float A=BodyA->IsSimulatingPhysics() ? FMath::Max(.1f,BodyA->GetMass()) : 0;
+ const float B=BodyB->IsSimulatingPhysics() ? FMath::Max(.1f,BodyB->GetMass()) : 0;
  const float Reduced=(A>0 && B>0) ? A*B/(A+B) : FMath::Max(A,B);
  if (Reduced<=0) return;
  // UE impulse is kg*cm/s. Approximate dissipated normal energy, not a measured material stress.
  const float J=Impulse.Size()*.01f;
- const FVector RelativeVelocity=PrePhysicsVelocity.FindRef(Part)-(PrePhysicsVelocity.Contains(OtherPart) ? PrePhysicsVelocity.FindRef(OtherPart) : OtherPart->GetComponentVelocity());
+ const auto* BeforeA=PrePhysicsMotion.Find(BodyA);
+ const auto* BeforeB=PrePhysicsMotion.Find(BodyB);
+ const FVector Point=Hit.ImpactPoint;
+ const FVector RelativeVelocity=(BeforeA ? *BeforeA : ReadMotion(BodyA)).At(Point)-(BeforeB ? *BeforeB : ReadMotion(BodyB)).At(Point);
  const float Speed=FMath::Abs(FVector::DotProduct(RelativeVelocity,Hit.ImpactNormal))*.01f;
  // Solver depenetration/resting support impulses are not new kinetic energy.
  const float Energy=FMath::Min(J*J/(2.f*Reduced),.5f*Reduced*Speed*Speed);
  UE_LOG(LogTemp,Verbose,TEXT("WAREHOUSE_IMPACT %s -> %s: %.2f J, %.2f m/s"),*GetNameSafe(Part->GetOwner()),*GetNameSafe(Other),Energy,Speed);
- Contact(Part->GetOwner(),Other,Energy);
+ Contact(Part->GetOwner(),Other,Energy,Part,OtherPart);
 }
 void AWarehouseDamageSystem::Release(int32 Index)
 {
  auto& Spec=Objects[Index];
  if (Spec.Failure==EWarehouseFailure::Structure || Spec.Failure==EWarehouseFailure::Machine) return;
+ TArray<UPrimitiveComponent*> Released;
  for (int32 M=0; M<Spec.Members.Num(); ++M) if (AActor* Actor=Spec.Members[M]; IsValid(Actor))
  {
   Actor->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
   TArray<UStaticMeshComponent*> Parts;
   Actor->GetComponents(Parts);
-  for (auto* Part : Parts)
+  for (auto* Part : Parts) if (WarehousePhysics::IsPhysicalContact(Part))
   {
    Part->SetMobility(EComponentMobility::Movable);
-   if (Spec.PhysicsMeshes.IsValidIndex(M) && Spec.PhysicsMeshes[M]) Part->SetStaticMesh(Spec.PhysicsMeshes[M]);
-   if (Spec.Failure==EWarehouseFailure::Rack && M<6)
-   {
-    // Buckled beams shorten enough to clear their original interlocking mounting plates.
-    FVector Scale=Part->GetRelativeScale3D();
-    const FVector Size=Part->GetStaticMesh()->GetBoundingBox().GetSize()*Scale.GetAbs();
-    const int32 Axis=Size.X>Size.Y ? (Size.X>Size.Z ? 0:2) : (Size.Y>Size.Z ? 1:2);
-    Scale[Axis]*=.94f;
-    Part->SetRelativeScale3D(Scale);
-   }
-   if (Spec.Failure==EWarehouseFailure::Rack && M>=8) Part->AddWorldOffset(FVector(0,0,2));
-   Part->SetCollisionProfileName(TEXT("PhysicsActor"));
-   Part->SetMassOverrideInKg(NAME_None,PhysicalMass(Index)/FMath::Max(1,Spec.Members.Num()*Parts.Num()));
-   Part->SetSimulatePhysics(true);
-   Part->WakeAllRigidBodies();
+   // Preserve an existing dynamic body's geometry and momentum when it loses strength.
+   if (!Part->IsSimulatingPhysics() && Spec.PhysicsMeshes.IsValidIndex(M) && Spec.PhysicsMeshes[M]) Part->SetStaticMesh(Spec.PhysicsMeshes[M]);
+   Part->SetCollisionObjectType(ECC_PhysicsBody);
+   WarehousePhysics::ConfigureContact(Part,WarehousePhysics::SurfaceFor(Part));
+   Released.Add(Part);
   }
+ }
+ DistributeMass(Released,PhysicalMass(Index));
+ for (auto* Part : Released)
+ {
+  if (!Part->IsSimulatingPhysics()) Part->SetSimulatePhysics(true);
+  Part->WakeAllRigidBodies();
+  RegisterContact(Part);
  }
 }
 void AWarehouseDamageSystem::Fail(int32 Index)
@@ -282,11 +393,6 @@ void AWarehouseDamageSystem::Fail(int32 Index)
  else if (Spec.Failure!=EWarehouseFailure::Structure)
  {
   // Remove the rack's joints: its existing beams/uprights become separate physical bodies.
-  if (Spec.Failure==EWarehouseFailure::Crush)
-   for (AActor* Actor : Spec.Members) if (IsValid(Actor))
-   {
-    FVector Scale=Actor->GetActorScale3D(); Scale.Z*=.6f; Actor->SetActorScale3D(Scale);
-   }
   Release(Index);
   // Release every stacked dependent, not just the first pallet. Their next impacts can cause a cascade.
   TArray<int32> Falling; Falling.Add(Index);

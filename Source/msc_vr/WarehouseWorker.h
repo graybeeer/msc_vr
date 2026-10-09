@@ -28,6 +28,16 @@ public:
  UFUNCTION(BlueprintPure, Category="Worker") bool HasStandingClearance() const;
  virtual void BeginPlay() override;
  virtual void Tick(float DeltaSeconds) override;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Worker|Physics") float HumanMassKg=80.f;
+ UFUNCTION(BlueprintPure, Category="Worker|Physics") bool IsRagdoll() const { return bRagdoll; }
 private:
  UPROPERTY(VisibleAnywhere) TObjectPtr<class UWidgetComponent> RoleLabel;
+ bool bRagdoll=false;
+ float LabelElapsed=0.f;
 };
+
+namespace WarehouseHumanPhysics
+{
+ MSC_VR_API bool DriveCapsule(ACharacter* Person,FVector DesiredVelocity,float MotorForceN=500.f,bool SupportLegs=true,float DesiredHalfHeight=-1.f,float* GroundDistance=nullptr,float ExtraSupportedMassKg=0.f);
+ MSC_VR_API void StartRagdoll(ACharacter* Person,float MassKg);
+}

@@ -73,6 +73,10 @@ Plugins/**/Intermediate/*
 # Cache files for the editor to use
 DerivedDataCache/*
 
+# Python-generated script caches
+__pycache__/
+*.py[cod]
+
 # Reproducible Fab Marketplace content (Warehouse)
 /Content/Scene_Warehouse/
 /Content/Warehouse/Collision/

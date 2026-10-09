@@ -6,6 +6,7 @@
 class AWarehouseForklift;
 class UStaticMeshComponent;
 class UTextRenderComponent;
+class UPhysicsConstraintComponent;
 
 UENUM(BlueprintType)
 enum class EWarehouseElevatorState : uint8
@@ -21,6 +22,7 @@ class MSC_VR_API AWarehouseElevator : public AActor
  GENERATED_BODY()
 public:
  AWarehouseElevator();
+ virtual void BeginPlay() override;
  virtual void Tick(float DeltaSeconds) override;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator") bool bPowerAvailable=true;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator") bool bEStopReleased=true;
@@ -50,6 +52,10 @@ private:
  UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> Platform;
  UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UStaticMeshComponent>> Gates;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UTextRenderComponent> Display;
+ UPROPERTY(Transient) TObjectPtr<UPhysicsConstraintComponent> PlatformJoint;
+ UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> GuideAnchor;
+ UPROPERTY(Transient) TArray<TObjectPtr<UPhysicsConstraintComponent>> DoorJoints;
+ float PlatformTarget=0;
  float PlatformHeight=0;
  float DoorOpening=0;
  int32 EntryFloor=0;
@@ -58,6 +64,8 @@ private:
  bool CabinClear() const;
  bool FitsInside(AWarehouseForklift* Vehicle) const;
  bool SetDoors(bool Open,float Dt);
+ float ActualDoorOpening() const;
+ void SetDeckLock(bool Locked);
  bool MovePlatform(int32 Floor,float Dt);
  void SetState(EWarehouseElevatorState Next,const TCHAR* Message);
 };

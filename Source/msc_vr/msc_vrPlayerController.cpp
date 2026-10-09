@@ -42,7 +42,13 @@ void Amsc_vrPlayerController::BeginPlay()
 	Super::BeginPlay();
 	if (IsLocalPlayerController() && GetWorld()->GetGameViewport())
 	{
-		CargoReadoutWidget=SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Bottom).Padding(0,0,0,48)
+		auto RemoteActive=[this]()
+		{
+			const auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn());
+			return OperatorCharacter && OperatorCharacter->GetRemoteForklift()!=nullptr;
+		};
+		CargoReadoutWidget=SAssignNew(CargoReadoutBox,SBox).HAlign(HAlign_Center).VAlign(VAlign_Bottom)
+			.Padding_Lambda([RemoteActive]() { return RemoteActive() ? FMargin(24,24,0,0) : FMargin(0,0,0,48); })
 			.Visibility(EVisibility::HitTestInvisible)
 			[SNew(SBorder).Padding(12).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 				.BorderBackgroundColor(FLinearColor(0.02f,0.03f,0.04f,.9f))
@@ -144,6 +150,7 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 {
 	if (!IsLocalController() || !GetWorld()->GetGameViewport()) return;
 	if (MenuWidget.IsValid()) { CloseWarehouseMenu(); return; }
+	if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn())) OperatorCharacter->EndRemoteControl();
 	static const FTextBlockStyle ButtonText=FTextBlockStyle(FCoreStyle::Get().GetWidgetStyle<FTextBlockStyle>("NormalText"))
 		.SetFont(FCoreStyle::GetDefaultFontStyle("Regular",20)).SetColorAndOpacity(FLinearColor::White);
 	auto Panel=SNew(SVerticalBox);
@@ -158,7 +165,7 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 			.Text(FText::FromString(Label)).OnClicked_Lambda([Action]() { Action(); return FReply::Handled(); })];
 	};
 	Text(TEXT("물류창고 · 설정 / 관찰"));
-	Text(TEXT("F1: 메뉴  |  Shift: 달리기  |  Ctrl: 앉기  |  E: 집기 / 적재\n메뉴와 관찰 중에도 창고 시뮬레이션은 계속됩니다."));
+	Text(TEXT("F1: 메뉴  |  Shift: 달리기  |  Ctrl: 앉기  |  E: 집기 / 적재\nG: 바라보는 지게차를 스마트폰으로 원격 조작 / 종료\n원격: W/S 전후진 · A/D 조향 · R/F 포크 승강 · Space 제동\n메뉴와 관찰 중에도 창고 시뮬레이션은 계속됩니다."));
 	Button(bObserverView ? TEXT("1인칭 캐릭터로 돌아가기") : TEXT("전지적 관찰 시점으로 전환"),[this]() { ToggleObserverView(); CloseWarehouseMenu(); });
 	Button(TEXT("창고 전체 보기"),[this]() { if (!bObserverView) ToggleObserverView(); SetObserverFloor(-1); CloseWarehouseMenu(); });
     for (int32 Floor=0; Floor<3; ++Floor)
@@ -190,6 +197,7 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 void Amsc_vrPlayerController::ToggleObserverView()
 {
 	if (!GetPawn()) return;
+	if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn())) OperatorCharacter->EndRemoteControl();
 	if (!bObserverView)
 	{
 		if (!IsValid(ObserverCamera)) ObserverCamera=GetWorld()->SpawnActor<ACameraActor>();
@@ -301,6 +309,13 @@ void Amsc_vrPlayerController::UpdateObserverCamera()
 void Amsc_vrPlayerController::PlayerTick(float Dt)
 {
 	Super::PlayerTick(Dt);
+	if (CargoReadoutBox.IsValid())
+	{
+		const auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn());
+		const bool Remote=OperatorCharacter && OperatorCharacter->GetRemoteForklift()!=nullptr;
+		CargoReadoutBox->SetHAlign(Remote ? HAlign_Left : HAlign_Center);
+		CargoReadoutBox->SetVAlign(Remote ? VAlign_Top : VAlign_Bottom);
+	}
 	MouseSensitivity=FMath::Clamp(MouseSensitivity,.2f,3.f);
 	ViewFOV=FMath::Clamp(ViewFOV,70.f,110.f);
 	if (GetPawn()) if (auto* Camera=GetPawn()->FindComponentByClass<UCameraComponent>()) Camera->SetFieldOfView(ViewFOV);
@@ -336,11 +351,16 @@ void Amsc_vrPlayerController::PlayerTick(float Dt)
 FText Amsc_vrPlayerController::GetCargoReadout() const
 {
  if (MenuWidget.IsValid() || !PlayerCameraManager || !GetPawn()) return FText::GetEmpty();
- TArray<AActor*> Attached;
- GetPawn()->GetAttachedActors(Attached);
- for (AActor* Actor : Attached) if (auto* Cargo=Cast<AWarehouseCargo>(Actor)) return Cargo->GetCargoDescription();
- for (AActor* Actor : Attached) if (auto* Pallet=Cast<AWarehousePallet>(Actor))
-  return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\nE : 안전한 곳에 내려놓기"),Pallet->PalletMassKg));
+ if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn()))
+  if (auto* Vehicle=OperatorCharacter->GetRemoteForklift())
+   return FText::FromString(FString::Printf(TEXT("스마트폰 원격 조작 · %s\nW/S 전후진 · A/D 조향 · R/F 포크 승강 · Space 제동 · G 종료\n%s\n배터리 %.0f%% · 적재 %.0f / %.0f kg"),
+    *Vehicle->VehicleName,*Vehicle->Status,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
+ if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn()))
+ {
+  if (auto* Cargo=Cast<AWarehouseCargo>(OperatorCharacter->GetHeldCargo())) return Cargo->GetCargoDescription();
+  if (auto* Pallet=Cast<AWarehousePallet>(OperatorCharacter->GetHeldCargo()))
+   return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\nE : 안전한 곳에 내려놓기"),Pallet->PalletMassKg));
+ }
  const FVector Eye=PlayerCameraManager->GetCameraLocation();
  FHitResult Hit;
  FCollisionQueryParams Params(SCENE_QUERY_STAT(CargoReadout),true,GetPawn());
@@ -351,9 +371,9 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
   if (!bObserverView && Hit.Distance<=250.f)
    if (auto* Pallet=Cast<AWarehousePallet>(Hit.GetActor()))
     return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\nE : 빈 팔레트 들기"),Pallet->PalletMassKg));
-  if (!bObserverView && Hit.Distance<=250.f)
+  if (!bObserverView && Hit.Distance<=300.f)
    if (auto* Vehicle=Cast<AWarehouseForklift>(Hit.GetActor()))
-    return FText::FromString(FString::Printf(TEXT("E : %s\n%s\n배터리 %.0f%% · 적재 %.0f / %.0f kg"),
+    return FText::FromString(FString::Printf(TEXT("E : %s  |  G : 스마트폰 원격 조작\n%s\n배터리 %.0f%% · 적재 %.0f / %.0f kg"),
      Vehicle->bPowered ? TEXT("자율 운행 정지") : TEXT("자율 운행 시작 / 재개"),
      *Vehicle->Status,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
  }
@@ -362,9 +382,11 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
 
 void Amsc_vrPlayerController::EndPlay(const EEndPlayReason::Type Reason)
 {
+	if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn())) OperatorCharacter->EndRemoteControl();
 	SetObserverRoofVisibility(false);
 	if (CargoReadoutWidget.IsValid() && GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(CargoReadoutWidget.ToSharedRef());
 	CargoReadoutWidget.Reset();
+	CargoReadoutBox.Reset();
 	CloseWarehouseMenu();
 	if (IsValid(ObserverCamera)) ObserverCamera->Destroy();
 	Super::EndPlay(Reason);

@@ -5,12 +5,16 @@
 #include "AgvNavigatorComponent.h"
 #include "AgvSafetyComponent.h"
 #include "AgvPath.h"
+#include "WarehousePhysics.h"
 #include "Components/StaticMeshComponent.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
 #include "UObject/ConstructorHelpers.h"
 
 AAgvTestVehicle::AAgvTestVehicle()
 {
 	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.TickGroup=TG_PrePhysics;
+	Tags.Add(TEXT("WarehousePhysicalVehicle"));
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 
 	// The teammate's orange AGV (WarehouseForklift on main), forks along local +X, origin at the fork heel face: the same
@@ -22,8 +26,8 @@ AAgvTestVehicle::AAgvTestVehicle()
 		Mesh->SetupAttachment(Parent);
 		Mesh->SetStaticMesh(ConstructorHelpers::FObjectFinder<UStaticMesh>(*FString::Printf(TEXT("/Game/Warehouse/AGV/Meshes/SM_Refined_AGV_%s"), Name)).Object);
 		Mesh->SetRelativeLocation(Location);
-		// Solid to queries only (no physics): blocks the vehicle's own sensors and is seen by everyone else's.
-		Mesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		Mesh->SetMobility(EComponentMobility::Movable);
+		Mesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 		Mesh->SetCollisionObjectType(ECC_WorldDynamic);
 		Mesh->SetCollisionResponseToAllChannels(ECR_Block);
 		return Mesh;
@@ -32,7 +36,7 @@ AAgvTestVehicle::AAgvTestVehicle()
 	UStaticMeshComponent* LiftStage = Part(TEXT("LiftStage"), Chassis, FVector::ZeroVector);
 	Part(TEXT("LiftRam"), LiftStage, FVector::ZeroVector);
 	Part(TEXT("LiftPulley"), LiftStage, FVector::ZeroVector);
-	Part(TEXT("LiftChains"), Chassis, FVector(0.0, 0.0, 15.0))->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Part(TEXT("LiftChains"), Chassis, FVector(0.0, 0.0, 15.0));
 	// The carrier sits behind the fork heels, as on the teammate's model.
 	USceneComponent* Carriage = CreateDefaultSubobject<USceneComponent>(TEXT("CarriageFrame"));
 	Carriage->SetupAttachment(Chassis);
@@ -43,10 +47,29 @@ AAgvTestVehicle::AAgvTestVehicle()
 	SteerPivot = CreateDefaultSubobject<USceneComponent>(TEXT("SteerPivot"));
 	SteerPivot->SetupAttachment(Chassis);
 	SteerPivot->SetRelativeLocation(FVector(DriveWheelX, 0.0, 0.0));
-	Part(TEXT("DriveSteer"), SteerPivot, FVector(-DriveWheelX, 0.0, 0.0));
+	UStaticMeshComponent* DriveUnit=Part(TEXT("DriveSteer"), SteerPivot, FVector(-DriveWheelX, 0.0, 0.0));
 	DriveWheel = Part(TEXT("DriveWheel"), SteerPivot, FVector(0.0, 0.0, 15.6));
 	SupportWheelL = Part(TEXT("LoadWheelL"), Chassis, FVector(SupportWheelX, SupportWheelY, 8.0));
 	SupportWheelR = Part(TEXT("LoadWheelR"), Chassis, FVector(SupportWheelX, -SupportWheelY, 8.0));
+	VisualSteerPivot=CreateDefaultSubobject<USceneComponent>(TEXT("VisualSteerPivot"));
+	VisualSteerPivot->SetupAttachment(Chassis);
+	VisualSteerPivot->SetRelativeLocation(SteerPivot->GetRelativeLocation());
+	auto Visual=[&](const TCHAR* Name,UStaticMeshComponent* Source,USceneComponent* Parent)
+	{
+		auto* Mesh=CreateDefaultSubobject<UStaticMeshComponent>(Name);
+		Mesh->SetupAttachment(Parent);
+		Mesh->SetStaticMesh(Source->GetStaticMesh());
+		Mesh->SetRelativeTransform(Source->GetRelativeTransform());
+		for (int32 I=0;I<Source->GetNumMaterials();++I) Mesh->SetMaterial(I,Source->GetMaterial(I));
+		Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Mesh->ComponentTags.Add(TEXT("WarehouseCosmetic"));
+		Source->SetVisibility(false);
+		return Mesh;
+	};
+	Visual(TEXT("VisualDriveUnit"),DriveUnit,VisualSteerPivot);
+	VisualDriveWheel=Visual(TEXT("VisualDriveWheel"),DriveWheel,VisualSteerPivot);
+	VisualSupportWheelL=Visual(TEXT("VisualSupportWheelL"),SupportWheelL,Chassis);
+	VisualSupportWheelR=Visual(TEXT("VisualSupportWheelR"),SupportWheelR,Chassis);
 
 	Navigator = CreateDefaultSubobject<UAgvNavigatorComponent>(TEXT("Navigator"));
 	Drive = CreateDefaultSubobject<UAgvDynamicDriveComponent>(TEXT("Drive"));
@@ -62,6 +85,7 @@ AAgvTestVehicle::AAgvTestVehicle()
 	// (VNSL14), about 36 cm behind the fork heels. No counterweight: the load hangs in front of the support wheels and
 	// the body behind them holds it (RatedLoadKg; the tipping limit is in FORKLIFT_NAVIGATION.md).
 	Drive->ChassisMassKg = 1000.f;
+	Drive->RatedPayloadKg=RatedLoadKg;
 	Drive->ChassisCenterOfMassCm = Refined((650.0 * -30.0 + 250.0 * 35.0 + 100.0 * -20.0) / 1000.0, 0.0, 70.0);
 	Drive->ChassisYawInertiaKgM2 = (float)(400.0 * ModelScale * ModelScale);
 	// Same tractive and braking force as at the source model's wheel (radius 20.5).
@@ -163,6 +187,76 @@ AAgvTestVehicle::AAgvTestVehicle()
 		FBox2D(FVector2D(0.0, 16.0), FVector2D(115.0, 34.0)) };
 }
 
+void AAgvTestVehicle::BeginPlay()
+{
+	Super::BeginPlay();
+	InitializeContactPhysics();
+}
+
+void AAgvTestVehicle::InitializeContactPhysics()
+{
+	Tags.AddUnique(TEXT("WarehousePhysicalVehicle"));
+	TArray<UStaticMeshComponent*> Parts;
+	GetComponents(Parts);
+	Parts.RemoveAll([](UStaticMeshComponent* Part) { return !Part->GetStaticMesh() || Part->ComponentHasTag(TEXT("WarehouseCosmetic")); });
+	auto Weight=[](const UStaticMeshComponent* Part)
+	{
+		const FString Name=Part->GetName();
+		if (Name==TEXT("Body")) return 789.f;
+		if (Name==TEXT("DriveSteer")) return 40.f;
+		if (Name==TEXT("Carriage") || Name==TEXT("LiftStage")) return 30.f;
+		if (Name==TEXT("ForkL") || Name==TEXT("ForkR")) return 25.f;
+		if (Name==TEXT("DriveWheel")) return 20.f;
+		if (Name==TEXT("LiftChains")) return 1.f;
+		return 10.f;
+	};
+	float TotalWeight=0;
+	for (auto* Part : Parts) TotalWeight+=Weight(Part);
+	for (auto* Part : Parts)
+	{
+		Part->SetMobility(EComponentMobility::Movable);
+		Part->BodyInstance.bAutoWeld=false;
+		Part->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		const bool Wheel=Part==DriveWheel || Part==SupportWheelL || Part==SupportWheelR;
+		WarehousePhysics::ConfigureContact(Part,Wheel ? EWarehouseSurface::Rubber : EWarehouseSurface::Steel,
+			Drive->ChassisMassKg*Weight(Part)/FMath::Max(1.f,TotalWeight));
+		if (Wheel)
+		{
+			// Native normal contact + explicit tyre shear, not two friction solvers on the same contact.
+			Part->ComponentTags.AddUnique(TEXT("AgvExplicitTyre"));
+			// ConfigureContact has already cached its rubber material in Chaos.
+			// Mutating that UObject alone leaves the cached native friction unchanged.
+			// A fresh material creates its native handle from these final values.
+			auto* Material=NewObject<UPhysicalMaterial>(Part);
+			Material->Friction=Material->StaticFriction=0;
+			Material->Restitution=.15f;
+			Material->bOverrideFrictionCombineMode=true;
+			Material->FrictionCombineMode=EFrictionCombineMode::Min;
+			Material->bOverrideRestitutionCombineMode=true;
+			Material->RestitutionCombineMode=EFrictionCombineMode::Average;
+			Part->SetPhysMaterialOverride(Material);
+		}
+	}
+	USceneComponent* PreviousRoot=RootComponent;
+	Chassis->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+	SetRootComponent(Chassis);
+	if (PreviousRoot!=Chassis) PreviousRoot->AttachToComponent(Chassis,FAttachmentTransformRules::KeepWorldTransform);
+	Chassis->BodyInstance.bLockXRotation=Chassis->BodyInstance.bLockYRotation=Chassis->BodyInstance.bLockZRotation=false;
+	Chassis->BodyInstance.bLockRotation=false;
+	Chassis->BodyInstance.bLockTranslation=false;
+	Chassis->BodyInstance.bLockXTranslation=Chassis->BodyInstance.bLockYTranslation=Chassis->BodyInstance.bLockZTranslation=false;
+	Chassis->BodyInstance.SetDOFLock(EDOFMode::SixDOF);
+	Chassis->SetSimulatePhysics(true);
+	for (auto* Part : Parts) if (Part!=Chassis) Part->WeldTo(Chassis,NAME_None,true);
+	const FVector LocalCenter=GetActorTransform().InverseTransformPosition(Chassis->GetCenterOfMass());
+	// The offset moves the chassis member's COM, so scale it by cluster/own mass.
+	Chassis->SetCenterOfMass((Drive->ChassisCenterOfMassCm-LocalCenter)*(TotalWeight/Weight(Chassis)));
+	Drive->SetPhysicsBody(Chassis);
+	UE_LOG(LogTemp,Log,TEXT("AGV_CHAOS_WELD_MASS %s %.3f kg / target %.3f kg, %d physical pieces"),
+		*GetName(),Chassis->GetMass(),Drive->ChassisMassKg,Parts.Num());
+	ensureMsgf(FMath::Abs(Chassis->GetMass()-Drive->ChassisMassKg)<1.f,TEXT("Prototype welded mass differs from its own-mass ledger"));
+}
+
 void AAgvTestVehicle::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -236,10 +330,10 @@ void AAgvTestVehicle::UpdateWheelMeshes()
 	{
 		return -FMath::Fmod(FMath::RadiansToDegrees(TravelCm / RadiusCm), 360.0);
 	};
-	SteerPivot->SetRelativeRotation(FRotator(0.0, Drive->SteerAngleDeg, 0.0));
-	DriveWheel->SetRelativeRotation(FRotator(Spin(Drive->DriveWheelTravelCm, Drive->DriveWheelRadiusCm), 0.0, 0.0));
+	VisualSteerPivot->SetRelativeRotation(FRotator(0.0, Drive->SteerAngleDeg, 0.0));
+	VisualDriveWheel->SetRelativeRotation(FRotator(Spin(Drive->DriveWheelTravelCm, Drive->DriveWheelRadiusCm), 0.0, 0.0));
 	// In the order of the drive's PassiveWheels.
-	UStaticMeshComponent* const Meshes[] = { SupportWheelL, SupportWheelR };
+	UStaticMeshComponent* const Meshes[] = { VisualSupportWheelL, VisualSupportWheelR };
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Meshes) && Index < Drive->PassiveWheels.Num(); ++Index)
 	{
 		const FAgvPassiveWheel& Wheel = Drive->PassiveWheels[Index];
@@ -249,20 +343,20 @@ void AAgvTestVehicle::UpdateWheelMeshes()
 
 float AAgvTestVehicle::SimulateUntilIdle(float MaxSeconds, float Dt)
 {
-	float Elapsed = 0.f;
-	while (Navigator->IsNavigating() && Elapsed < MaxSeconds && Dt > 0.f)
-	{
-		StepSimulation(Dt);
-		Elapsed += Dt;
-	}
-	return Elapsed;
+	UE_LOG(LogTemp,Warning,TEXT("AGV synchronous stepping cannot advance Chaos. Run an asynchronous PIE world tick."));
+	return 0.f;
 }
 
 void AAgvTestVehicle::TeleportReference(FVector2D Position, float YawDeg)
 {
+	if (HasActorBegunPlay())
+	{
+		UE_LOG(LogTemp,Warning,TEXT("AGV runtime teleport rejected; submit a navigation order instead."));
+		return;
+	}
 	Drive->Halt();
 	const FVector2D Origin = Position - AgvMath::Dir(FMath::DegreesToRadians((double)YawDeg)) * Drive->ReferenceOffsetCm;
-	SetActorLocationAndRotation(FVector(Origin.X, Origin.Y, GetActorLocation().Z), FRotator(0.0, YawDeg, 0.0));
+	SetActorTransform(FTransform(FRotator(0.0,YawDeg,0.0),FVector(Origin.X,Origin.Y,GetActorLocation().Z),GetActorScale3D()));
 	Localizer->InitializePose();
 	Safety->ResetScans();
 }
