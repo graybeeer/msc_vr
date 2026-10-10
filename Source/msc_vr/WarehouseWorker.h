@@ -38,6 +38,6 @@ private:
 
 namespace WarehouseHumanPhysics
 {
- MSC_VR_API bool DriveCapsule(ACharacter* Person,FVector DesiredVelocity,float MotorForceN=500.f,bool SupportLegs=true,float DesiredHalfHeight=-1.f,float* GroundDistance=nullptr,float ExtraSupportedMassKg=0.f);
+ MSC_VR_API bool DriveCapsule(ACharacter* Person,FVector DesiredVelocity,float MotorForceN=500.f,bool SupportLegs=true,float DesiredHalfHeight=-1.f,float* GroundDistance=nullptr,float ExtraSupportedMassKg=0.f,FVector LoadOffsetCm=FVector::ZeroVector);
  MSC_VR_API void StartRagdoll(ACharacter* Person,float MassKg);
 }

@@ -118,14 +118,14 @@ void AWarehouseForklift::InitializePhysicalRig()
  CarriageJoint->SetLinearPositionDrive(false,false,true);
  CarriageJoint->SetLinearVelocityDrive(false,false,true);
  CarriageJoint->SetLinearDriveAccelerationMode(false);
- CarriageJoint->SetLinearDriveParams(220000.f,22000.f,1600000.f); // 16kN hydraulic force, finite.
+ CarriageJoint->SetLinearDriveParams(220000.f,22000.f,FMath::Max(1.f,LiftForceNewtons)*100.f);
  CarriageJoint->SetLinearPositionTarget(FVector(0,0,Range*.5f));
  StageJoint=Joint(TEXT("InnerMastHydraulicJoint"),LiftStage,GetActorTransform());
  StageJoint->SetLinearZLimit(LCM_Limited,Range*.25f);
  StageJoint->SetConstraintReferencePosition(EConstraintFrame::Frame1,FVector(0,0,Range*.25f));
  StageJoint->SetConstraintReferencePosition(EConstraintFrame::Frame2,FVector::ZeroVector);
  StageJoint->SetLinearPositionDrive(false,false,true); StageJoint->SetLinearVelocityDrive(false,false,true);
- StageJoint->SetLinearDriveAccelerationMode(false); StageJoint->SetLinearDriveParams(120000.f,12000.f,800000.f);
+ StageJoint->SetLinearDriveAccelerationMode(false); StageJoint->SetLinearDriveParams(120000.f,12000.f,FMath::Max(1.f,MastForceNewtons)*100.f);
  StageJoint->SetLinearPositionTarget(FVector(0,0,Range*.25f));
  // The nested guides overlap by design. Their mount permits travel but excludes internal self-contact.
  auto* InternalGuide=NewObject<UPhysicsConstraintComponent>(this,TEXT("MastCarriageMount"));
@@ -155,6 +155,12 @@ void AWarehouseForklift::InitializePhysicalRig()
   const FQuat Axle=FRotationMatrix::MakeFromXZ(GetActorRightVector(),GetActorUpVector()).ToQuat();
   auto* Constraint=Joint(*FString::Printf(TEXT("PhysicalAxle_%d"),I),Wheels[I],FTransform(Axle,Wheels[I]->GetComponentLocation()),I==0 ? SteeringBody.Get() : nullptr);
   Constraint->SetAngularTwistLimit(ACM_Free,0);
+  if (I==0)
+  {
+   Constraint->SetAngularDriveMode(EAngularDriveMode::TwistAndSwing);
+   Constraint->SetAngularDriveAccelerationMode(false);
+   Constraint->SetAngularVelocityTarget(FVector::ZeroVector);
+  }
   WheelJoints.Add(Constraint);
   if (I>0)
   {
@@ -186,6 +192,7 @@ bool AWarehouseForklift::CommandDrive(float Speed,float Curvature,float Dt)
  // Routes specify floor-plane travel. Chassis suspension/tyre pitch must not
  // turn a normal rolling contact into a predicted downward floor collision.
  const FVector Preview=GetActorForwardVector().GetSafeNormal2D()*Speed*FMath::Max(.008f,Dt);
+ if (FMath::Abs(Speed)>1.f) LastDriveDirection=FMath::Sign(Speed);
  if (!ClearToMove(Preview,false)) { BrakeDrive(); return false; }
  const float Limit=bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(180.f,EmptyTravelSpeedCm);
  DesiredDriveSpeed=FMath::Clamp(Speed,-Limit,Limit);
@@ -221,7 +228,7 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  }
  if (!bPowered || bMechanicalFailure || !bEStopReleased || !bBrakeHealthy) BrakeDrive();
  if (DesiredDriveSpeed*DriveSpeedTarget<0.f) DriveSpinIntegral=0;
- DriveSpeedTarget=FMath::FInterpConstantTo(DriveSpeedTarget,DesiredDriveSpeed,Dt,180.f);
+ DriveSpeedTarget=FMath::FInterpConstantTo(DriveSpeedTarget,DesiredDriveSpeed,Dt,FMath::Max(1.f,DriveAccelerationCm));
  const float Wheelbase=FMath::Abs((-74.f+7.f)*(215.f/282.55f));
  const bool Turning=!FMath::IsNearlyZero(DesiredTurnRate);
  const float RequestedSteering=Turning ? -FMath::Sign(DesiredTurnRate)*PI*.5f : -FMath::Atan(Wheelbase*DesiredCurvature);
@@ -237,8 +244,15 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  const float ActualSteering=FMath::Atan2(-FVector::DotProduct(Axle,GetActorForwardVector()),FVector::DotProduct(Axle,GetActorRightVector()));
  SteeringJoint->SetAngularOrientationTarget(FRotator(0,0,FMath::RadiansToDegrees(SteeringAngle)));
  if (FMath::Abs(FMath::FindDeltaAngleRadians(ActualSteering,SteeringAngle))>.01f) SteeringBody->WakeAllRigidBodies();
- const bool TurnReady=Turning && FMath::Abs(FMath::FindDeltaAngleRadians(ActualSteering,RequestedSteering))<FMath::DegreesToRadians(8.f) && ChassisBody->GetPhysicsLinearVelocity().Size2D()<30.f;
- const bool Braking=Turning ? !TurnReady : FMath::Abs(DesiredDriveSpeed)<.01f;
+ const float SteeringError=FMath::Abs(FMath::FindDeltaAngleRadians(ActualSteering,RequestedSteering));
+ const bool TurnReady=Turning && SteeringError<FMath::DegreesToRadians(1.5f) && ChassisBody->GetPhysicsLinearVelocity().Size2D()<30.f;
+ // Finish steering before applying drive torque; a sideways tyre otherwise
+ // translates the chassis during a pivot or when resuming straight travel.
+ const bool Braking=Turning ? !TurnReady : FMath::Abs(DesiredDriveSpeed)<.01f || SteeringError>FMath::DegreesToRadians(10.f);
+ // The implicit joint brake opposes rolling with finite torque each substep.
+ // An explicit RPM-zero motor can reverse a locked tyre between game ticks.
+ WheelJoints[0]->SetAngularDriveParams(0.f,1800000.f,FMath::Max(1.f,BrakeTorqueNm)*10000.f);
+ WheelJoints[0]->SetAngularVelocityDriveTwistAndSwing(Braking && bBrakeHealthy,false);
  // Wheel RPM alone cannot measure tyre slip. Close the travel loop on the
  // actual chassis velocity as well, without adding a force to the chassis.
  const float SpeedCorrection=FMath::Clamp((DriveSpeedTarget-CurrentSpeedCm)*2.f,-60.f,60.f);
@@ -247,7 +261,7 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  FCollisionQueryParams GroundQuery(SCENE_QUERY_STAT(DriveTyreContact),false,this);
  const bool Grounded=GetWorld()->LineTraceSingleByChannel(Ground,Drive->GetComponentLocation(),Drive->GetComponentLocation()-FVector(0,0,Radius+2.f),ECC_Visibility,GroundQuery);
  const float Error=DesiredSpin-Spin;
- const float Limit=Braking ? 532.f : FMath::Min(266.f,2200.f/FMath::Max(1.f,FMath::Abs(Spin)));
+ const float Limit=Braking ? FMath::Max(1.f,BrakeTorqueNm) : FMath::Min(FMath::Max(1.f,DriveTorqueNm),FMath::Max(1.f,DrivePowerWatts)/FMath::Max(1.f,FMath::Abs(Spin)));
  const float WheelInertia=FMath::Max(.001f,float(Drive->BodyInstance.GetBodyInertiaTensor().Y/10000.));
  const float GroundGain=Braking ? 180.f : 90.f;
  const float Gain=Grounded ? GroundGain : FMath::Min(GroundGain,.8f*WheelInertia/FMath::Max(.008f,Dt));
@@ -256,7 +270,7 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  if (Braking || !Grounded) DriveSpinIntegral=0;
  else if (FMath::Abs(Control)<Limit || Control*Error<0.f)
   DriveSpinIntegral=FMath::Clamp(DriveSpinIntegral+Error*Dt,-Limit/IntegralGain,Limit/IntegralGain);
- float TorqueNm=FMath::Clamp(Error*Gain+DriveSpinIntegral*IntegralGain,-Limit,Limit);
+ float TorqueNm=Braking ? 0.f : FMath::Clamp(Error*Gain+DriveSpinIntegral*IntegralGain,-Limit,Limit);
  if (FParse::Param(FCommandLine::Get(),TEXT("DriveDiagnostics")) &&
      FMath::FloorToInt(GetWorld()->GetTimeSeconds()*2.f)!=FMath::FloorToInt((GetWorld()->GetTimeSeconds()-Dt)*2.f))
   UE_LOG(LogTemp,Log,TEXT("AGV_DRIVE_DIAG Turn=%.3f SteerTarget=%.2f SteerActual=%.2f Swing1=%.2f Swing2=%.2f Twist=%.2f SpinTarget=%.3f Spin=%.3f Torque=%.2f Integral=%.3f Speed=%.2f Powered=%d"),

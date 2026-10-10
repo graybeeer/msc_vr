@@ -30,6 +30,9 @@
 #include "Widgets/Input/SSlider.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Components/AudioComponent.h"
+#include "Sound/SoundWaveProcedural.h"
+#include "Kismet/GameplayStatics.h"
 
 Amsc_vrPlayerController::Amsc_vrPlayerController()
 {
@@ -56,6 +59,20 @@ void Amsc_vrPlayerController::BeginPlay()
 				[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",28)).ColorAndOpacity(FLinearColor::White)
 					.Text_Lambda([this]() { return GetCargoReadout(); })]];
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(CargoReadoutWidget.ToSharedRef(),5);
+		EmergencyAlertWidget=SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Top).Padding(FMargin(24,24))
+			.Visibility(EVisibility::HitTestInvisible)
+			[SNew(SBox).WidthOverride(820)
+				[SNew(SBorder).Padding(18).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+					.BorderBackgroundColor(FLinearColor(.35f,.015f,.01f,.96f))
+					.Visibility_Lambda([this]() { return EmergencyAlertText.IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible; })
+					[SNew(SVerticalBox)
+						+SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Bold",30))
+							.ColorAndOpacity(FLinearColor(1,.8f,.25f)).Text(FText::FromString(TEXT("비상 · 지게차 끼임 / 이동 불가")))]
+						+SVerticalBox::Slot().AutoHeight().Padding(0,10)[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",23))
+							.ColorAndOpacity(FLinearColor::White).WrapTextAt(780).Text_Lambda([this]() { return FText::FromString(EmergencyAlertText); })]
+						+SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",20))
+							.ColorAndOpacity(FLinearColor::White).WrapTextAt(780).Text(FText::FromString(TEXT("주변 장애물을 제거하거나 G로 수동 탈출하세요. 해결 후 E로 재점검·재개합니다.")))]]]];
+		GetWorld()->GetGameViewport()->AddViewportWidgetContent(EmergencyAlertWidget.ToSharedRef(),200);
 	}
 
 	
@@ -309,6 +326,7 @@ void Amsc_vrPlayerController::UpdateObserverCamera()
 void Amsc_vrPlayerController::PlayerTick(float Dt)
 {
 	Super::PlayerTick(Dt);
+	UpdateEmergencyAlerts(Dt);
 	if (CargoReadoutBox.IsValid())
 	{
 		const auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn());
@@ -382,6 +400,9 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
 
 void Amsc_vrPlayerController::EndPlay(const EEndPlayReason::Type Reason)
 {
+	if (EmergencyAudio) { EmergencyAudio->Stop(); EmergencyAudio->DestroyComponent(); }
+	if (EmergencyAlertWidget.IsValid() && GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(EmergencyAlertWidget.ToSharedRef());
+	EmergencyAlertWidget.Reset(); EmergencyAudio=nullptr; EmergencyTone=nullptr;
 	if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn())) OperatorCharacter->EndRemoteControl();
 	SetObserverRoofVisibility(false);
 	if (CargoReadoutWidget.IsValid() && GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(CargoReadoutWidget.ToSharedRef());
@@ -390,4 +411,64 @@ void Amsc_vrPlayerController::EndPlay(const EEndPlayReason::Type Reason)
 	CloseWarehouseMenu();
 	if (IsValid(ObserverCamera)) ObserverCamera->Destroy();
 	Super::EndPlay(Reason);
+}
+
+void Amsc_vrPlayerController::UpdateEmergencyAlerts(float Dt)
+{
+ if (!IsLocalPlayerController()) return;
+ EmergencyAlarmElapsed+=Dt; EmergencyToneElapsed+=Dt; EmergencyPollElapsed+=Dt;
+ if (EmergencyAudio && EmergencyToneElapsed>.75f) EmergencyAudio->Stop();
+ if (EmergencyPollElapsed>=.25f)
+ {
+  EmergencyPollElapsed=0;
+  TArray<FString> Notices;
+  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) if (It->bEmergencyBlocked)
+  {
+   const float Distance=GetPawn() ? FVector::Dist(GetPawn()->GetActorLocation(),It->GetActorLocation())*.01f : 0.f;
+   const FString Job=It->ActiveJob.JobId.IsEmpty() ? FString() : TEXT(" · 작업 ")+It->ActiveJob.JobId;
+   Notices.Add(FString::Printf(TEXT("%s%s · 거리 %.0fm\n%s"),*It->VehicleName,*Job,Distance,*It->EmergencyReason));
+  }
+  if (EmergencyAlertText.IsEmpty() && !Notices.IsEmpty()) EmergencyAlarmElapsed=6.f;
+  EmergencyAlertText=FString::Join(Notices,TEXT("\n\n"));
+  if (Notices.IsEmpty())
+  {
+   EmergencyAlarmElapsed=0;
+   if (EmergencyAudio) EmergencyAudio->Stop();
+  }
+ }
+ if (!EmergencyAlertText.IsEmpty() && EmergencyAlarmElapsed>=6.f) PlayEmergencyAlarm();
+}
+
+void Amsc_vrPlayerController::PlayEmergencyAlarm()
+{
+ EmergencyAlarmElapsed=0; EmergencyToneElapsed=0; ++EmergencyAlarmCount;
+ if (!EmergencyTone)
+ {
+  EmergencyTone=NewObject<USoundWaveProcedural>(this);
+  EmergencyTone->SetSampleRate(22050); EmergencyTone->NumChannels=1; EmergencyTone->Duration=.7f;
+  EmergencyAudio=UGameplayStatics::CreateSound2D(this,EmergencyTone,.45f,1.f,0.f,nullptr,false,false);
+  if (EmergencyAudio) EmergencyAudio->bIsUISound=true;
+ }
+ // A short two-tone PCM alarm needs no editor-only or third-party sound asset.
+ if (EmergencyAudio)
+ {
+  EmergencyAudio->Stop(); EmergencyTone->ResetAudio();
+  TArray<int16> Samples; Samples.SetNumZeroed(15435);
+  for (int32 I=0;I<Samples.Num();++I)
+  {
+   const float T=float(I)/22050.f;
+   const float Local=T<.3f ? T : T-.4f;
+   if (Local<0 || Local>=.3f) continue;
+   const float Envelope=FMath::Clamp(FMath::Min(Local,.3f-Local)*100.f,0.f,1.f);
+   Samples[I]=int16(11000.f*Envelope*FMath::Sin(2.f*PI*(T<.3f ? 880.f : 1180.f)*T));
+  }
+  EmergencyTone->QueueAudio(reinterpret_cast<const uint8*>(Samples.GetData()),Samples.Num()*sizeof(int16));
+  EmergencyAudio->Play();
+ }
+ UE_LOG(Logmsc_vr,Log,TEXT("AGV_EMERGENCY_ALARM_REQUEST %d: %s"),EmergencyAlarmCount,*EmergencyAlertText);
+}
+
+bool Amsc_vrPlayerController::IsEmergencyAlarmPlaying() const
+{
+ return EmergencyAudio && EmergencyAudio->IsPlaying();
 }

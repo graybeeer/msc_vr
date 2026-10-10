@@ -11,6 +11,8 @@ class UUserWidget;
 class SWidget;
 class SBox;
 class ACameraActor;
+class UAudioComponent;
+class USoundWaveProcedural;
 
 /**
  *  Simple first person Player Controller
@@ -37,6 +39,9 @@ public:
 	UFUNCTION(BlueprintPure, Category="Settings") bool IsWarehouseMenuOpen() const { return MenuWidget.IsValid(); }
 	virtual void PlayerTick(float DeltaTime) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Alerts") FString EmergencyAlertText;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Alerts") int32 EmergencyAlarmCount=0;
+	UFUNCTION(BlueprintPure, Category="Alerts") bool IsEmergencyAlarmPlaying() const;
 
 protected:
 
@@ -73,6 +78,12 @@ protected:
 	void UpdateObserverCamera();
 	FText GetCargoReadout() const;
 	TSharedPtr<SWidget> CargoReadoutWidget;
+	TSharedPtr<SWidget> EmergencyAlertWidget;
+	UPROPERTY(Transient) TObjectPtr<USoundWaveProcedural> EmergencyTone;
+	UPROPERTY(Transient) TObjectPtr<UAudioComponent> EmergencyAudio;
+	void UpdateEmergencyAlerts(float Dt);
+	void PlayEmergencyAlarm();
+	float EmergencyPollElapsed=0, EmergencyAlarmElapsed=0, EmergencyToneElapsed=0;
 	TSharedPtr<SBox> CargoReadoutBox;
 	void SetObserverRoofVisibility(bool Hide);
 	TArray<TWeakObjectPtr<AActor>> ObserverHiddenRoofs;

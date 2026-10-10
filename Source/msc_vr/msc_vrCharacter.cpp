@@ -216,12 +216,13 @@ void Amsc_vrCharacter::ToggleCarry()
 		FHitResult Hit;
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(PlaceAim),true,this);
 		Params.AddIgnoredActor(HeldCargo);
-		if (Cast<AWarehouseCargo>(HeldCargo) && GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+FirstPersonCameraComponent->GetForwardVector()*250.f,ECC_Visibility,Params))
+		if (GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+FirstPersonCameraComponent->GetForwardVector()*250.f,ECC_Visibility,Params))
 		{
 			AWarehousePallet* TargetPallet=Cast<AWarehousePallet>(Hit.GetActor());
 			for (TActorIterator<AWarehousePallet> It(GetWorld()); It; ++It)
 			{
 				if (Cast<AWarehousePallet>(Hit.GetActor())) break;
+				if (*It==HeldCargo) continue;
 				const FVector Local=It->GetActorTransform().InverseTransformPosition(Hit.ImpactPoint);
 				if (FMath::Abs(Local.X)>56 || FMath::Abs(Local.Y)>56 || Local.Z<0 || Local.Z>180) continue;
 				if (!TargetPallet || It->GetActorLocation().Z>TargetPallet->GetActorLocation().Z) TargetPallet=*It;
@@ -229,7 +230,7 @@ void Amsc_vrCharacter::ToggleCarry()
 			if (TargetPallet)
 			{
 				if (!TryPlaceOnPallet(TargetPallet,Hit.ImpactPoint) && GEngine)
-					GEngine->AddOnScreenDebugMessage(41,2.f,FColor::Yellow,TEXT("No stable space on this pallet. Aim at a clear, level surface."));
+					GEngine->AddOnScreenDebugMessage(41,2.f,FColor::Yellow,TEXT("비어 있는 수평 받침면을 가까이에서 바라보세요. 팔레트 위 공간이 필요합니다."));
 				return;
 			}
 		}
@@ -317,11 +318,12 @@ void Amsc_vrCharacter::UpdatePhysicalMovement(float DeltaSeconds)
 	JumpSupportDelay=FMath::Max(0.f,JumpSupportDelay-DeltaSeconds);
 	FVector Input=ConsumeMovementInputVector().GetClampedToMaxSize(1.f);
 	if (IsValid(RemoteForklift) || bObserverPresentation || (Controller && Controller->IsMoveInputIgnored())) Input=FVector::ZeroVector;
-	const float Speed=bIsCrouched ? 60.f : (IsValid(HeldCargo) ? 120.f : (bPhysicalSprint ? 350.f : 200.f));
+	const float Speed=bIsCrouched ? 60.f : (IsValid(HeldCargo) ? 120.f : (bPhysicalSprint ? 350.f : 250.f));
 	float GroundDistance=-1.f;
 	const float DesiredHalf=bPhysicalCrouchRequested ? 58.f : 96.f;
 	const float HeldMass=IsValid(HeldCargo) ? CarryBody(HeldCargo)->GetMass() : 0.f;
-	bPhysicalGround=WarehouseHumanPhysics::DriveCapsule(this,Input*Speed,500.f,JumpSupportDelay<=0.f,DesiredHalf,&GroundDistance,HeldMass);
+	const FVector LoadOffset=IsValid(HeldCargo) ? CarryBody(HeldCargo)->GetCenterOfMass()-GetCapsuleComponent()->GetCenterOfMass() : FVector::ZeroVector;
+	bPhysicalGround=WarehouseHumanPhysics::DriveCapsule(this,Input*Speed,500.f,JumpSupportDelay<=0.f,DesiredHalf,&GroundDistance,HeldMass,LoadOffset);
 	auto* Movement=GetCharacterMovement();
 	Movement->Velocity=GetVelocity();
 	// Chaos owns displacement; retain the template's animation telemetry only.
@@ -525,6 +527,10 @@ bool Amsc_vrCharacter::TryPickupObject(AActor* Cargo)
  else for (TActorIterator<AWarehouseCargo> It(GetWorld());It;++It) It->GetCargoBody()->WakeAllRigidBodies();
 	GripBodyOffset=Body->GetComponentQuat().UnrotateVector(Center-Body->GetComponentLocation());
 	CarryGrip->SetWorldLocationAndRotation(Center,Body->GetComponentQuat());
+	// A broad 25 kg pallet needs firmer angular guidance than a small carton.
+	// Keep the same finite 40 Nm torque ceiling; do not lock its rotation.
+	const bool CarryingPallet=Cast<AWarehousePallet>(Cargo)!=nullptr;
+	CarryGrip->SetAngularDriveParams(CarryingPallet ? 6000000.f : 30000.f,CarryingPallet ? 800000.f : 6000.f,400000.f);
 	CarryGrip->SetConstrainedComponents(GetCapsuleComponent(),NAME_None,Body,NAME_None);
 	CarryGrip->SetConstraintReferenceFrame(EConstraintFrame::Frame2,FTransform(FQuat::Identity,GripBodyOffset));
 	GripSlipTime=0.f;
@@ -567,7 +573,7 @@ bool Amsc_vrCharacter::TryPickupObject(AActor* Cargo)
 
 void Amsc_vrCharacter::DropCargo()
 {
- PlacementTime=-1.f; PlacementPallet=nullptr;
+ PlacementTime=-1.f; PlacementLowerTime=-1.f; PlacementPallet=nullptr;
  CarryGrip->BreakConstraint();
  if (IsValid(HeldCargo))
  {
@@ -654,23 +660,32 @@ void Amsc_vrCharacter::OnEndCrouch(float HeightAdjust, float ScaledHeightAdjust)
 
 bool Amsc_vrCharacter::FindPlacement(AWarehousePallet* Pallet, const FVector& Aim, FTransform& Target) const
 {
-	if (!IsValid(Pallet) || !IsValid(HeldCargo) || Pallet->GetAttachParentActor() ||
+	if (!IsValid(Pallet) || !IsValid(HeldCargo) || Pallet==HeldCargo || Pallet->GetAttachParentActor() ||
 		FVector::Dist(Aim,FirstPersonCameraComponent->GetComponentLocation())>260.f) return false;
 	if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->HasFailed(Pallet)) return false;
 	if (FMath::Abs(Pallet->GetActorRotation().Pitch)>2 || FMath::Abs(Pallet->GetActorRotation().Roll)>2) return false;
+	const auto* HeldPallet=Cast<AWarehousePallet>(HeldCargo);
+	if (HeldPallet)
+	{
+		if (HeldPallet->PayloadMassKg>0 || Pallet->PayloadMassKg>0 || Pallet->GetVelocity().Size()>15.f ||
+			Pallet->GetPalletBody()->GetPhysicsAngularVelocityInDegrees().Size()>5.f) return false;
+		if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->GetSupportedMass(Pallet)>.01f) return false;
+	}
 	const auto Bounds=CarryBody(HeldCargo)->GetStaticMesh()->GetBounds();
 	const FVector Scale=HeldCargo->GetActorScale3D();
 	const FVector Extent=Bounds.BoxExtent*Scale.GetAbs();
 	const FVector PalletScale=Pallet->GetActorScale3D().GetAbs();
 	const FVector Half=FVector(55,55,0)*PalletScale;
-	if (Extent.X>Half.X-2 || Extent.Y>Half.Y-2) return false;
+	const float Margin=HeldPallet ? -.5f : 2.f;
+	if (Extent.X>Half.X-Margin || Extent.Y>Half.Y-Margin) return false;
 	const FQuat Rotation=FRotator(0,Pallet->GetActorRotation().Yaw,0).Quaternion();
 	FVector Local=Rotation.UnrotateVector(Aim-Pallet->GetActorLocation());
-	Local.X=FMath::Clamp(Local.X,-Half.X+Extent.X+2,Half.X-Extent.X-2);
-	Local.Y=FMath::Clamp(Local.Y,-Half.Y+Extent.Y+2,Half.Y-Extent.Y-2);
+	Local.X=HeldPallet ? 0.f : FMath::Clamp(Local.X,-Half.X+Extent.X+2,Half.X-Extent.X-2);
+	Local.Y=HeldPallet ? 0.f : FMath::Clamp(Local.Y,-Half.Y+Extent.Y+2,Half.Y-Extent.Y-2);
 	FVector Center=Pallet->GetActorLocation()+Rotation.RotateVector(FVector(Local.X,Local.Y,0));
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(PalletPlacement),true,this);
 	Params.AddIgnoredActor(HeldCargo);
+	const float DeckTop=Pallet->GetPalletBody()->Bounds.Origin.Z+Pallet->GetPalletBody()->Bounds.BoxExtent.Z;
 	float High=-FLT_MAX;
 	TArray<FVector> Supports;
 	// A carton bridges the gaps between pallet deck boards. Require support in
@@ -680,8 +695,14 @@ bool Amsc_vrCharacter::FindPlacement(AWarehousePallet* Pallet, const FVector& Ai
 		FVector Start=Center+Rotation.RotateVector(FVector(X*Extent.X,Y*Extent.Y,0));
 		Start.Z=FMath::Min(Aim.Z+Extent.Z*2+20,FirstPersonCameraComponent->GetComponentLocation().Z+40);
 		FHitResult Hit;
-		if (!GetWorld()->LineTraceSingleByChannel(Hit,Start,FVector(Start.X,Start.Y,Pallet->GetActorLocation().Z),ECC_Visibility,Params) ||
-			Hit.ImpactNormal.Z<.95f || (Hit.GetActor()!=Pallet && !Cast<AWarehouseCargo>(Hit.GetActor()))) continue;
+		if (!GetWorld()->LineTraceSingleByChannel(Hit,Start,FVector(Start.X,Start.Y,Pallet->GetActorLocation().Z),ECC_Visibility,Params)) continue;
+		if (HeldPallet && Hit.GetActor()!=Pallet)
+		{
+			// Deck gaps can expose the floor or a lower pallet. They are not cargo.
+			if (Hit.ImpactPoint.Z>DeckTop-2.5f) return false;
+			continue;
+		}
+		if (Hit.ImpactNormal.Z<.95f || (Hit.GetActor()!=Pallet && !Cast<AWarehouseCargo>(Hit.GetActor()))) continue;
 		if (auto* Cargo=Cast<AWarehouseCargo>(Hit.GetActor()); Cargo && (Cargo->GetAttachParentActor() || Cargo->GetVelocity().Size()>5)) return false;
 		High=FMath::Max(High,static_cast<float>(Hit.ImpactPoint.Z));
 		Supports.Add(FVector(X,Y,Hit.ImpactPoint.Z));
@@ -701,11 +722,12 @@ bool Amsc_vrCharacter::FindPlacement(AWarehousePallet* Pallet, const FVector& Ai
 
 bool Amsc_vrCharacter::TryPlaceOnPallet(AWarehousePallet* Pallet, FVector Aim)
 {
-	if (PlacementTime>=0 || !Cast<AWarehouseCargo>(HeldCargo) || !FindPlacement(Pallet,Aim,PlacementTarget)) return false;
+	if (PlacementTime>=0 || (!Cast<AWarehouseCargo>(HeldCargo) && !Cast<AWarehousePallet>(HeldCargo)) || !FindPlacement(Pallet,Aim,PlacementTarget)) return false;
 	PlacementPallet=Pallet;
 	PlacementPalletPose=Pallet->GetActorTransform();
 	PlacementStart=HeldCargo->GetActorTransform();
 	PlacementTime=0.f;
+	PlacementLowerTime=-1.f;
 	return true;
 }
 
@@ -756,19 +778,68 @@ void Amsc_vrCharacter::UpdateCarryPose(float DeltaSeconds)
  PickupTime+=DeltaSeconds;
  if (PlacementTime>=0.f)
  {
-  if (!IsValid(PlacementPallet) || !PlacementPallet->GetActorTransform().Equals(PlacementPalletPose,2.f))
+  if (!IsValid(PlacementPallet) || !PlacementPallet->GetActorLocation().Equals(PlacementPalletPose.GetLocation(),2.f) ||
+      PlacementPallet->GetActorQuat().AngularDistance(PlacementPalletPose.GetRotation())>FMath::DegreesToRadians(2.f) ||
+      !PlacementPallet->GetActorScale3D().Equals(PlacementPalletPose.GetScale3D(),.01f))
   { PlacementTime=-1.f; PlacementPallet=nullptr; }
   else
   {
    PlacementTime+=DeltaSeconds;
-   Goal.Blend(PlacementStart,PlacementTarget,FMath::SmoothStep(0.f,1.f,FMath::Min(PlacementTime/.45f,1.f)));
+   const float Alpha=FMath::SmoothStep(0.f,1.f,FMath::Min(PlacementTime/(Pallet ? 2.5f : .45f),1.f));
+   Goal.Blend(PlacementStart,PlacementTarget,Alpha);
+   if (Pallet)
+   {
+    // Rotate the upright pallet above the deck using the same finite physical grip.
+    // Interpolate its centre rather than its base pivot to avoid sweeping below the support.
+    const FVector StartCenter=PlacementStart.TransformPosition(Bounds.Origin);
+    const FVector EndCenter=PlacementTarget.TransformPosition(Bounds.Origin);
+    FVector Center=FMath::Lerp(StartCenter,EndCenter,Alpha)+FVector(0,0,FMath::Sin(Alpha*PI)*NativeExtent.X);
+    const FQuat ActualRotation=HeldCargo->GetActorQuat();
+    if (PlacementLowerTime<0.f && PlacementTime>2.5f &&
+        ActualRotation.AngularDistance(PlacementTarget.GetRotation())<FMath::DegreesToRadians(3.f) &&
+        FVector::Dist2D(Body->Bounds.Origin,EndCenter)<3.f && Body->GetPhysicsLinearVelocity().Size2D()<20.f)
+    {
+     PlacementLowerTime=0.f;
+     PlacementLowerStartZ=Body->Bounds.Origin.Z;
+    }
+    if (PlacementLowerTime<0.f)
+    {
+     const float VerticalExtent=FMath::Abs(ActualRotation.GetAxisX().Z)*NativeExtent.X+
+         FMath::Abs(ActualRotation.GetAxisY().Z)*NativeExtent.Y+FMath::Abs(ActualRotation.GetAxisZ().Z)*NativeExtent.Z;
+     // Finish rotating, centring and braking above the deck before making contact.
+     // Otherwise the wooden feet can catch a board gap while still sliding sideways.
+     Center.Z=FMath::Max(Center.Z,EndCenter.Z+VerticalExtent-NativeExtent.Z+8.f);
+    }
+    else
+    {
+     PlacementLowerTime+=DeltaSeconds;
+     Center.Z=FMath::Lerp(PlacementLowerStartZ,EndCenter.Z,FMath::SmoothStep(0.f,1.f,FMath::Min(PlacementLowerTime/.8f,1.f)));
+    }
+    Goal.SetLocation(Center-Goal.GetRotation().RotateVector(Bounds.Origin*Goal.GetScale3D()));
+   }
    const FVector Actual=HeldCargo->GetActorTransform().TransformPosition(Bounds.Origin);
    const FVector Target=PlacementTarget.TransformPosition(Bounds.Origin);
    FHitResult Support; FCollisionQueryParams Query(SCENE_QUERY_STAT(HandPlacementSupport),true,this); Query.AddIgnoredActor(HeldCargo);
-   const bool Supported=GetWorld()->LineTraceSingleByChannel(Support,Actual,Actual-FVector(0,0,NativeExtent.Z+5.f),ECC_Visibility,Query) && Support.ImpactNormal.Z>.95f && (Support.GetActor()==PlacementPallet || Cast<AWarehouseCargo>(Support.GetActor()));
-   if (PlacementTime>.65f && FVector::Dist(Actual,Target)<3.f && Body->GetPhysicsLinearVelocity().Size()<12.f && Body->GetPhysicsAngularVelocityInDegrees().Size()<20.f && Supported)
+   bool Supported=GetWorld()->LineTraceSingleByChannel(Support,Actual,Actual-FVector(0,0,NativeExtent.Z+5.f),ECC_Visibility,Query) && Support.ImpactNormal.Z>.95f && (Support.GetActor()==PlacementPallet || Cast<AWarehouseCargo>(Support.GetActor()));
+   const bool Aligned=!Pallet || HeldCargo->GetActorQuat().AngularDistance(PlacementTarget.GetRotation())<FMath::DegreesToRadians(2.f);
+   const bool Arrived=Pallet ? FVector::Dist2D(Actual,Target)<3.f && FMath::Abs(Actual.Z-Target.Z)<2.f : FVector::Dist(Actual,Target)<3.f;
+   const bool Settled=Body->GetPhysicsLinearVelocity().Size()<12.f && Body->GetPhysicsAngularVelocityInDegrees().Size()<20.f;
+   if (Pallet && Arrived && Settled && Aligned)
+   {
+    bool Quadrants[4]={false,false,false,false};
+    for (float X : {-.9f,-.5f,-.15f,.15f,.5f,.9f}) for (float Y : {-.9f,-.5f,-.15f,.15f,.5f,.9f})
+    {
+     const FVector Point=Actual+HeldCargo->GetActorQuat().RotateVector(FVector(X*NativeExtent.X,Y*NativeExtent.Y,0));
+     FHitResult Contact;
+     if (GetWorld()->LineTraceSingleByChannel(Contact,Point,Point-FVector(0,0,NativeExtent.Z+5.f),ECC_Visibility,Query) &&
+         Contact.GetActor()==PlacementPallet && Contact.ImpactNormal.Z>.95f)
+      Quadrants[(X>0 ? 1 : 0)+(Y>0 ? 2 : 0)]=true;
+    }
+    Supported=Quadrants[0] && Quadrants[1] && Quadrants[2] && Quadrants[3];
+   }
+   if (PlacementTime>.65f && Arrived && Settled && Supported && Aligned)
    { DropCargo(); return; }
-   if (PlacementTime>5.f) { PlacementTime=-1.f; PlacementPallet=nullptr; }
+   if (PlacementTime>(Pallet ? 8.f : 5.f)) { PlacementTime=-1.f; PlacementPallet=nullptr; }
   }
  }
  else
@@ -782,6 +853,8 @@ void Amsc_vrCharacter::UpdateCarryPose(float DeltaSeconds)
  GripSlipTime=PickupTime>1.f && Error>40.f ? GripSlipTime+DeltaSeconds : 0.f;
  if (GripSlipTime>.35f)
  {
+  UE_LOG(Logmsc_vr,Warning,TEXT("Physical grip slipped: %s placement=%.2f error=%.2f actual=%s goal=%s"),
+      *HeldCargo->GetName(),PlacementTime,Error,*ActualCenter.ToString(),*Goal.TransformPosition(Bounds.Origin).ToString());
   if (GEngine) GEngine->AddOnScreenDebugMessage(41,2.f,FColor::Yellow,TEXT("충돌 또는 하중 때문에 손의 지지가 풀렸습니다."));
   DropCargo(); return;
  }

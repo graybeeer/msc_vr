@@ -99,6 +99,12 @@ bool AWarehouseForklift::UpdateLoadSupport(float Dt)
 
 bool AWarehouseForklift::RemotePoseClear(const FTransform& Pose)
 {
+ if (!RefreshObstacleChecks()) return bTurnObstacleClear;
+ bTurnObstacleClear=PhysicalPoseClear(Pose);
+ return bTurnObstacleClear;
+}
+bool AWarehouseForklift::PhysicalPoseClear(const FTransform& Pose) const
+{
  FCollisionQueryParams FloorParams(SCENE_QUERY_STAT(RemoteFloor),false,this);
  FloorParams.AddIgnoredActors(GetPhysicalLoads());
  FHitResult Ground;
@@ -108,11 +114,15 @@ bool AWarehouseForklift::RemotePoseClear(const FTransform& Pose)
  // Linear movement uses ClearToMove's swept contact test. A snapshot overlap
  // cannot distinguish bearing contact from a jam on a continuously dynamic load.
  if (Pose.GetRotation().Equals(GetActorQuat(),1.e-5f)) return true;
- if (!RefreshObstacleChecks()) return bTurnObstacleClear;
- bTurnObstacleClear=false;
  FComponentQueryParams Params(SCENE_QUERY_STAT(RemoteTurn),this);
  Params.AddIgnoredComponent(Ground.GetComponent());
+ const TArray<AActor*> Loads=GetPhysicalLoads();
+ Params.AddIgnoredActors(Loads);
  TArray<UStaticMeshComponent*> Parts; GetComponents(Parts);
+ for (AActor* Load : Loads) if (IsValid(Load))
+ {
+  TArray<UStaticMeshComponent*> LoadParts;Load->GetComponents(LoadParts);Parts.Append(LoadParts);
+ }
  for (auto* Part : Parts)
  {
   if (!Part->IsQueryCollisionEnabled() || Part->BodyInstance.WeldParent) continue;
@@ -121,23 +131,11 @@ bool AWarehouseForklift::RemotePoseClear(const FTransform& Pose)
   GetWorld()->ComponentOverlapMultiByChannel(Hits,Part,Candidate.GetLocation(),Candidate.GetRotation(),Part->GetCollisionObjectType(),Params);
   for (const auto& Hit : Hits) if (Hit.bBlockingHit)
   {
-   // Loaded tines may touch the underside. Side/heel penetration is a jam.
-   bool SupportContact=false;
-   if (bSupportingPallet && Hit.GetActor()==TargetPallet &&
-       (Part->GetFName()==TEXT("ForkL") || Part->GetFName()==TEXT("ForkR")) && Hit.GetComponent())
-   {
-    const FBox Bounds=Part->GetStaticMesh()->GetBoundingBox();
-    FMTDResult Blade,Heel;
-    const bool BladeHit=Hit.GetComponent()->ComputePenetration(Blade,FCollisionShape::MakeBox(FVector(57.5,9,3)),
-      Candidate.TransformPosition(FVector(57.5,Bounds.GetCenter().Y,6.5)),Candidate.GetRotation());
-    const bool HeelHit=Hit.GetComponent()->ComputePenetration(Heel,FCollisionShape::MakeBox(FVector(-Bounds.Min.X*.5,9,(Bounds.Max.Z-3.5)*.5)),
-      Candidate.TransformPosition(FVector(Bounds.Min.X*.5,Bounds.GetCenter().Y,(3.5+Bounds.Max.Z)*.5)),Candidate.GetRotation());
-    SupportContact=!HeelHit && (!BladeHit || (FMath::Abs(Blade.Direction.Z)>.95f && Blade.Distance<=.2f));
-   }
-   if (!SupportContact) return false;
+   // Forecast truck and supported loads together; native loose-load contacts
+   // still determine whether the pallet follows, jams, slips or falls.
+   return false;
   }
  }
- bTurnObstacleClear=true;
  return true;
 }
 

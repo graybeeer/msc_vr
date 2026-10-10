@@ -101,6 +101,7 @@ protected:
 	bool InitializeCarryMesh();
 	UPROPERTY(Transient) TObjectPtr<AWarehousePallet> PlacementPallet;
 	FTransform PlacementStart, PlacementTarget, PlacementPalletPose;
+	float PlacementLowerTime=-1.f, PlacementLowerStartZ=0.f;
 	float PlacementTime = -1.f;
 	float BaseWalkSpeed = 0.f;
 	UPROPERTY(VisibleAnywhere, Category="Carry") TObjectPtr<UPhysicsConstraintComponent> CarryGrip;

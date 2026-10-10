@@ -54,6 +54,11 @@ public:
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Perception", meta=(ClampMin="100",ClampMax="1000")) float PalletDetectionRangeCm = 400;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Perception") int32 ObstacleCheckCount = 0;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Perception") double LastObstacleCheckSeconds = -1;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Recovery") int32 RecoveryCount = 0;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Recovery") int32 ForkInsertionRetries = 0;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Recovery") int32 DetourCount = 0;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Recovery") bool bEmergencyBlocked = false;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Recovery") FString EmergencyReason;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") EWarehouseAIState AIState = EWarehouseAIState::Off;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") FWarehouseWorkOrder ActiveJob;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") TArray<FWarehouseRoutePoint> PlannedRoute;
@@ -90,6 +95,13 @@ public:
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1", ClampMax="180")) float EmptyTravelSpeedCm = 180;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1", ClampMax="100")) float LoadedTravelSpeedCm = 100;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1", ClampMax="30")) float ForkLeadingSpeedCm = 30;
+ // Finite training actuator limits; these are tuning assumptions, not manufacturer data.
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Physics|Actuators", meta=(ClampMin="1")) float DriveTorqueNm = 400;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Physics|Actuators", meta=(ClampMin="1")) float DrivePowerWatts = 3500;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Physics|Actuators", meta=(ClampMin="1")) float BrakeTorqueNm = 532;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Physics|Actuators", meta=(ClampMin="1")) float DriveAccelerationCm = 240;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Physics|Actuators", meta=(ClampMin="1")) float LiftForceNewtons = 20000;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Physics|Actuators", meta=(ClampMin="1")) float MastForceNewtons = 10000;
  // Minimum curvature radius used by the autonomous pose graph planner.
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Specification") float MinimumTurningRadiusCm = 117.3f;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") float CurrentSpeedCm = 0;
@@ -126,6 +138,7 @@ private:
  bool bRemoteLoadFault=false;
  void AdvanceRemote(float Dt);
  bool RemotePoseClear(const FTransform& Pose);
+ bool PhysicalPoseClear(const FTransform& Pose) const;
  bool PalletClaimedByOther(AWarehousePallet* Pallet) const;
  bool UpdateLoadSupport(float Dt);
  bool BeginFloorTransfer(float TargetZ, EWarehouseAIState Resume);
@@ -161,6 +174,22 @@ private:
  bool bRouteStarted = false;
  bool bResumeAfterCheck = false;
  bool bPalletReleased = false;
+ bool IsRecovering() const;
+ void RecoveryFault(const TCHAR* Reason,const TCHAR* PlayerMessage);
+ bool BeginRecovery(EWarehouseAIState From,const FString& Reason);
+ void AdvanceRecovery(float Dt);
+ void CheckDriveProgress(float Dt);
+ bool PlanRecoveryDetour(const FTransform& Goal);
+ EWarehouseAIState RecoveryResume = EWarehouseAIState::Ready;
+ FTransform RecoveryGoal;
+ FVector RecoveryStart = FVector::ZeroVector;
+ FVector EmergencyLocation = FVector::ZeroVector;
+ FVector ProgressLocation = FVector::ZeroVector;
+ float LastDriveDirection = 1, RecoveryDirection = -1, RecoveryDistance = 80;
+ float StalledSeconds = 0;
+ int32 RecoveryAttempts = 0;
+ bool bRetryInsertion = false, bRecoveryNeedsRoute = false;
+ FString WaitObstacleReason;
  int32 RouteIndex = 0;
  UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> Carriage;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> LiftStage;

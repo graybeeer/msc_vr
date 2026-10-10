@@ -12,7 +12,8 @@ enum class EWarehouseAIState : uint8
  AlignUnload, LowerLoad, WithdrawFork, VerifyUnload, ReportComplete,
  PlanCharge, NavigateCharge, DockCharge, Charging, LeaveCharger,
  WaitingObstacle, Paused, Fault,
- ElevatorApproach, ElevatorCall, ElevatorWait, ElevatorBoard, ElevatorRide, ElevatorExit
+ ElevatorApproach, ElevatorCall, ElevatorWait, ElevatorBoard, ElevatorRide, ElevatorExit,
+ RecoverLower, RecoverWithdraw, RecoverReplan
 };
 
 USTRUCT(BlueprintType)
@@ -43,4 +44,5 @@ struct FWarehouseRoutePoint
  GENERATED_BODY()
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly) FTransform Pose;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly) bool bReverse = false;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly) bool bPivot = false;
 };

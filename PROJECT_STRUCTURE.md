@@ -8,13 +8,16 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 ## 작업별 첫 탐색 경로
 
+
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
+| 창고 확장·노란 입고 구역·적재 감지·빈 랙 자동 배정 | `Source/msc_vr/WarehouseInboundZone.h/.cpp`, `Scripts/configure_inbound_area.py`, `Scripts/verify_inbound_area_pie.py` | 맵/조작은 `WAREHOUSE.md`, 작업 예약은 `AUTONOMY.md`, 보 지지와 실제 운반은 `WarehouseForkliftAI.cpp`, 공통 형상 예측은 `WarehouseForkliftRemote.cpp`의 `PhysicalPoseClear` |
 | 공통 충돌·마찰·관성·실제 강체 구동 | `PHYSICS.md`, `WarehousePhysics.h/.cpp`, `WarehouseForkliftPhysics.cpp`, `WarehouseWorker.cpp`, `msc_vrCharacter.cpp` | `WarehouseDamageSystem`, `WarehouseElevator`, `Config/DefaultEngine.ini`, `Scripts/prepare_warehouse_dynamics.py`, `Scripts/verify_warehouse_contact_physics.py` |
 | 실제 Chaos 물리·주행·운반·손상 검증 | `PHYSICS.md`의 검증 표, `Scripts/verify_native_forklift_motion_pie.py`, `Scripts/verify_warehouse_contact_physics.py`, `Scripts/verify_native_damage_pie.py` | 승강기 호출은 `Scripts/verify_native_elevator_pie.py`, 저장된 창고 시작 상태는 `Scripts/verify_dynamic_warehouse_startup.py`; 과거 동기식 검사는 현재 강체 검증에 쓰지 않음 |
 | 창고 작업자·역할 이름표·배치 | `Source/msc_vr/WarehouseWorker.h/.cpp`, `Scripts/configure_warehouse_workers.py`, `Scripts/verify_warehouse_workers.py` | `WAREHOUSE.md`의 역할별 작업자, 기본 플레이어 전신 메시 |
 | 3층 복층·승강기·층간 운반 | `Scripts/configure_mezzanine.py`, `Source/msc_vr/WarehouseElevator.h/.cpp`, `WarehouseForkliftAI.cpp` | `MEZZANINE.md`, `Scripts/verify_mezzanine.py`, `Scripts/verify_mezzanine_pie.py`, `Scripts/verify_dynamic_forklift_transfer_pie.py`; 관찰 층 선택은 PlayerController |
 | 창고 배치·랙·화물·조명 | `WAREHOUSE.md`, `Scripts/build_first_person_warehouse.py`, `Content/FirstPerson/Lvl_FirstPerson.umap` | `Content/__ExternalActors__/FirstPerson/Lvl_FirstPerson/` (엔진이 생성한 액터 데이터) |
+| 빈 랙·구석 빈 팔레트 더미·손으로 팔레트 쌓기 | `Scripts/configure_empty_storage.py`, `msc_vrCharacter.cpp`의 `FindPlacement`/`TryPlaceOnPallet`, `Scripts/verify_empty_storage_pie.py` | `Scripts/configure_warehouse_strength.py`, `WAREHOUSE.md`의 양손 운반과 적재; 짐 운반의 균형은 `WarehouseWorker.cpp`의 `DriveCapsule`과 `PHYSICS.md` |
 | 지게차 기준 실측 크기·팔레트/중량/경량 랙·통로·팔레트·트럭 | `Scripts/apply_real_world_scale.py`, `Scripts/verify_real_world_scale.py`, `WAREHOUSE.md`의 실제 크기 기준 | `VNSL14_SPEC.md`, 창고/외부 에셋 배치 스크립트 |
 | 트럭 후면 개방·적재함 내부·택배 적재 | `Scripts/configure_truck_interior.py`, `Scripts/verify_truck_interior_pie.py`, `WAREHOUSE.md`의 트럭 내부 절 | 맵의 `TRK_` 액터, `Content/Warehouse/Exterior/TruckInterior/` (Fab 파생 메시, Git 제외); 큰 지게차 안내는 `msc_vrPlayerController.cpp` |
 | 입고·출고 트럭 분류·작업 완료·출발 허가·자동 교대 설계 | `TRUCK_LOGISTICS_DESIGN.md` (구현 전 설계) | `Scripts/configure_truck_interior.py`, `Scripts/build_warehouse_exterior.py`, `WarehouseCargo`, `WarehouseForkliftAI`의 작업 보고, `WarehouseDamageSystem` |
@@ -30,6 +33,8 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 운반 물체 반투명·시야 확보 | `msc_vrCharacter.cpp`의 `TryPickupCargo`/`DropCargo`, `msc_vrCharacter.h`의 `CarryOpacity` | `Scripts/prepare_carry_material.py`, `Content/Warehouse/Materials/M_CarryTransparent.uasset`, `Scripts/verify_two_hand_carry.py` |
 | 자율 작업·자체 점검·경로·팔레트 인식·작업 큐/보고 | `AUTONOMY.md`, `Source/msc_vr/WarehouseForkliftAI.cpp`, `WarehouseAutonomyTypes.h`, `Scripts/configure_forklift_autonomy.py` | `Scripts/verify_forklift_autonomy.py`, `Scripts/verify_forklift_autonomy_pie.py`, `WarehouseForklift.h/.cpp` |
 | 1초 장애물 확인·결과 유지·다음 검사에서 해제 | `WarehouseForklift.cpp`의 `RefreshObstacleChecks`/`ClearToMove`, `WarehouseForkliftAI.cpp`의 `FollowRoute`, `WarehouseForkliftRemote.cpp`의 `RemotePoseClear` | `AUTONOMY.md`, `Scripts/verify_obstacle_interval_pie.py`; 실제 물리 충돌은 `WarehousePhysics`/`WarehouseForkliftPhysics` |
+| 포크 끼임·후진 재삽입·접촉 탈출·우회 | `WarehouseForkliftRecovery.cpp`, `WarehouseForkliftAI.cpp`, `WarehouseForklift.cpp`의 `StopFor`/`ClearToMove`, `Scripts/verify_forklift_recovery_pie.py` | `AUTONOMY.md`, 구동력은 `WarehouseForkliftPhysics.cpp`와 `PHYSICS.md` |
+| 지게차 끼임 비상 UI·경고음 | `WarehouseForkliftRecovery.cpp`의 `RecoveryFault`, `msc_vrPlayerController.cpp`의 `UpdateEmergencyAlerts`/`PlayEmergencyAlarm` | `AUTONOMY.md`, `Scripts/verify_forklift_recovery_pie.py`의 `-RecoveryCapture` |
 | 지게차 E 시작·운반·사람 감지·충돌 | `Source/msc_vr/WarehouseForklift.h/.cpp`, `msc_vrCharacter.cpp` | `Scripts/verify_forklift_training.py`, 맵 생성 스크립트의 지게차 배치 |
 | 1층 지게차 2대·개별 작업·G 스마트폰 원격 조작 | `Source/msc_vr/WarehouseForkliftRemote.cpp`, `msc_vrCharacter.h/.cpp`, `Scripts/configure_dual_forklifts.py` | `AUTONOMY.md`, `Scripts/verify_dual_forklifts_remote_pie.py`; 양손 자세는 `WarehouseCarryAnimInstance`, 안내창은 `msc_vrPlayerController`, 중복 배정은 `WarehouseForkliftAI` |
 | 원격 조작 캐릭터·스마트폰 30% 반투명·종료 시 비활성화 | `msc_vrCharacter.cpp`의 `SetRemoteCharacterFade`/`BeginRemoteControl`/`EndRemoteControl`, `Scripts/prepare_remote_character_fade.py` | `Content/Warehouse/Materials/RemoteCharacter/`, `Scripts/verify_character_drive_response_pie.py`; 조작 규칙은 `AUTONOMY.md` |
@@ -91,7 +96,9 @@ msc_vr/
     configure_cargo_variety.py
     configure_carryable_cargo.py
     configure_dual_forklifts.py
+    configure_empty_storage.py
     configure_forklift_autonomy.py
+    configure_inbound_area.py
     configure_mezzanine.py
     configure_observer_view.py
     configure_truck_interior.py
@@ -128,10 +135,13 @@ msc_vr/
     verify_dual_forklifts_remote_pie.py
     verify_dynamic_forklift_transfer_pie.py
     verify_dynamic_warehouse_startup.py
+    verify_empty_storage_pie.py
     verify_first_person_warehouse.py
     verify_forklift_autonomy.py
     verify_forklift_autonomy_pie.py
+    verify_forklift_recovery_pie.py
     verify_forklift_training.py
+    verify_inbound_area_pie.py
     verify_mezzanine.py
     verify_mezzanine_pie.py
     verify_native_damage_pie.py
@@ -181,7 +191,10 @@ msc_vr/
       WarehouseForklift.h
       WarehouseForkliftAI.cpp
       WarehouseForkliftPhysics.cpp
+      WarehouseForkliftRecovery.cpp
       WarehouseForkliftRemote.cpp
+      WarehouseInboundZone.cpp
+      WarehouseInboundZone.h
       WarehousePallet.cpp
       WarehousePallet.h
       WarehousePhysics.cpp

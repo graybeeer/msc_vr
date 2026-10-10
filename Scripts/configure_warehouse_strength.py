@@ -49,7 +49,7 @@ def configure_strength():
     if 'MZ_AGVElevator' in named:
         # The connected building is one fixed structure. Assigning concrete slab dead
         # load to each thin decorative flange/mullion produced false startup failures.
-        building_prefixes=('WH_Wall_','WH_Column_','WH_Roof','WH_LoadingDoor_Header',
+        building_prefixes=('WH_Wall_','WH_Column_','WH_Roof','WH_LoadingDoor_Header','WH_InboundFloor','WH_InboundColumn_','WH_InboundRoofBeam_',
             'EXT_Foundation','EXT_FrontCladding','EXT_SideCladding','EXT_HeaderCladding',
             'EXT_FrontBlueBand','EXT_SideBlueBand','EXT_FrontWindow','EXT_SideWindow',
             'EXT_FrontJoint','EXT_FrontMullion','EXT_SideMullion','EXT_SideParapet',
@@ -82,6 +82,13 @@ def configure_strength():
                 prefix=f'MZ_L{floor+1}_Rack_{side}_{row}'
                 members=[named.get(prefix+'_'+p) for p in 'ABCDEFGH']
                 if all(members):add(prefix,members,failure.RACK,180,4000,250,1600,2000,(floor*400+20,floor*400+140))
+    # Added empty bays use the same calibrated model and limits as occupied bays.
+    empty_bays={label.rsplit('_',1)[0] for label in named if re.fullmatch(r'WH_(?:EmptyRack_L[123]_\d+|InboundRack_\d+)_[A-H]',label)}
+    for prefix in sorted(empty_bays):
+        floor=int(prefix.split('_L')[1].split('_')[0])-1 if '_L' in prefix else 0
+        members=[named[prefix+'_'+part] for part in 'ABCDEFGH']
+        decks=[named[prefix+'_Deck_'+str(z)] for z in (20,140) if prefix+'_Deck_'+str(z) in named]
+        add(prefix,members+decks,failure.RACK,250 if decks else 180,4000,250,1600,2000,(floor*400+20,floor*400+140))
     for label, actor in named.items():
         if actor.get_path_name() in grouped or not actor.get_actor_enable_collision():
             continue

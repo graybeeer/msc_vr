@@ -15,7 +15,7 @@
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "PhysicsEngine/SkeletalBodySetup.h"
 
-bool WarehouseHumanPhysics::DriveCapsule(ACharacter* Person,FVector DesiredVelocity,float MotorForceN,bool SupportLegs,float DesiredHalfHeight,float* GroundDistance,float ExtraSupportedMassKg)
+bool WarehouseHumanPhysics::DriveCapsule(ACharacter* Person,FVector DesiredVelocity,float MotorForceN,bool SupportLegs,float DesiredHalfHeight,float* GroundDistance,float ExtraSupportedMassKg,FVector LoadOffsetCm)
 {
  auto* Body=Person->GetCapsuleComponent();
  FHitResult Floor;
@@ -46,10 +46,26 @@ bool WarehouseHumanPhysics::DriveCapsule(ACharacter* Person,FVector DesiredVeloc
  const FVector FeetForce=Motor.GetClampedToMaxSize(Traction);
  Body->AddForceAtLocation(FeetForce,Floor.ImpactPoint);
  const FVector Omega=Body->GetPhysicsAngularVelocityInRadians();
- FVector Torque=FVector::CrossProduct(Body->GetUpVector(),FVector::UpVector)*600.f-Omega*120.f;
+ FVector BalanceDamping(120.f,120.f,20.f);
+ if (ExtraSupportedMassKg>0.f)
+ {
+  // A load held away from the torso adds rotational inertia. Match damping to
+  // that actual lever arm so the carrier does not rock while placing heavy cargo.
+  const FVector Inertia=Body->GetInertiaTensor()/10000.f+
+      FVector(FMath::Square(LoadOffsetCm.Y)+FMath::Square(LoadOffsetCm.Z),
+          FMath::Square(LoadOffsetCm.X)+FMath::Square(LoadOffsetCm.Z),
+          FMath::Square(LoadOffsetCm.X)+FMath::Square(LoadOffsetCm.Y))*(ExtraSupportedMassKg/10000.f);
+  BalanceDamping.X=FMath::Max(120.f,2.f*FMath::Sqrt(600.f*Inertia.X));
+  BalanceDamping.Y=FMath::Max(120.f,2.f*FMath::Sqrt(600.f*Inertia.Y));
+  BalanceDamping.Z=FMath::Max(20.f,2.f*FMath::Sqrt(60.f*Inertia.Z));
+ }
+ FVector Torque=FVector::CrossProduct(Body->GetUpVector(),FVector::UpVector)*600.f-Omega*BalanceDamping;
  Torque-=FVector::CrossProduct(Floor.ImpactPoint-Center,FeetForce)/10000.f;
- if (Person->GetController()) Torque.Z=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(Body->GetComponentRotation().Yaw,Person->GetControlRotation().Yaw))*60.f-Omega.Z*20.f;
- else Torque.Z=-Omega.Z*20.f;
+ // Anticipate the held load's gravity moment, just as a carrier shifts their stance.
+ // Keep the combined balance torque within the existing finite limit.
+ Torque+=FVector::CrossProduct(LoadOffsetCm,FVector(0,0,FMath::Max(0.f,ExtraSupportedMassKg)*980.f))/10000.f;
+ if (Person->GetController()) Torque.Z=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(Body->GetComponentRotation().Yaw,Person->GetControlRotation().Yaw))*60.f-Omega.Z*BalanceDamping.Z;
+ else Torque.Z=-Omega.Z*BalanceDamping.Z;
  Torque=Torque.GetClampedToMaxSize(BalanceTorqueNm)*10000.f;
  Body->AddTorqueInRadians(Torque);
  if (Support && Support->IsSimulatingPhysics(Floor.BoneName))
