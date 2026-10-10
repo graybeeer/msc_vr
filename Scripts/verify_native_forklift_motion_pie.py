@@ -193,13 +193,13 @@ def tick(dt):
             if now - at < 5:
                 return
             steady = [value for age, value in speed_samples if age > 4]
-            assert steady and -133 <= sum(steady) / len(steady) < -80, ('Native -130cm/s target not reached', steady)
-            assert min(value for _, value in speed_samples) >= -140, ('Excess native speed', speed_samples[-10:])
+            assert steady and -185 <= sum(steady) / len(steady) < -150, ('Native -180cm/s target not reached', steady)
+            assert min(value for _, value in speed_samples) >= -195, ('Excess native speed', speed_samples[-10:])
             before = body(rig).get_physics_linear_velocity()
             rig.set_remote_input(0, 0, 0)
             after = body(rig).get_physics_linear_velocity()
             assert (before - after).length() < .001, 'Brake command reset body velocity'
-            print('NATIVE_WHEEL_REVERSE_PASSED', 'command -130cm/s', 'steady', sum(steady) / len(steady), 'instantaneous brake velocity', after)
+            print('NATIVE_WHEEL_REVERSE_PASSED', 'command -180cm/s', 'steady', sum(steady) / len(steady), 'instantaneous brake velocity', after)
             at, deadman_at, phase = now, time.monotonic(), 6
             return
         if phase == 6:
@@ -217,9 +217,8 @@ def tick(dt):
             # tyre contact; measure the response after five physical seconds.
             if now - at < 5:
                 return
-            axle = next(c for c in rig.get_components_by_class(unreal.PhysicsConstraintComponent) if c.get_name() == 'PhysicalAxle_0')
-            print('NATIVE_STEERING_AXLE_DIAGNOSTIC', 'swing1', axle.get_current_swing1(),
-                'swing2', axle.get_current_swing2(), 'twist', axle.get_current_twist())
+            spindle = next(c for c in rig.get_components_by_class(unreal.PhysicsConstraintComponent) if c.get_name() == 'SteeringSpindleJoint')
+            print('NATIVE_STEERING_SPINDLE_DIAGNOSTIC', 'twist', spindle.get_current_twist())
             yaw_change = (rig.get_actor_rotation().yaw - yaw_before + 180) % 360 - 180
             assert yaw_change < -5, ('Reverse with positive curvature must decrease heading', yaw_change)
             print('NATIVE_WHEEL_STEERING_PASSED', yaw_change)

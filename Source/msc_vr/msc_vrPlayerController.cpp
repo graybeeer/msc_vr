@@ -165,7 +165,7 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 			.Text(FText::FromString(Label)).OnClicked_Lambda([Action]() { Action(); return FReply::Handled(); })];
 	};
 	Text(TEXT("물류창고 · 설정 / 관찰"));
-	Text(TEXT("F1: 메뉴  |  Shift: 달리기  |  Ctrl: 앉기  |  E: 집기 / 적재\nG: 바라보는 지게차를 스마트폰으로 원격 조작 / 종료\n원격: W/S 전후진 · A/D 조향 · R/F 포크 승강 · Space 제동\n메뉴와 관찰 중에도 창고 시뮬레이션은 계속됩니다."));
+	Text(TEXT("F1: 메뉴  |  Shift: 달리기  |  Ctrl: 앉기  |  E: 집기 / 적재\nG: 바라보는 지게차를 스마트폰으로 원격 조작 / 종료\n원격: W/S 전후진 · A/D 조향·자리 회전 · R/F 포크 승강 · Space 제동\n메뉴와 관찰 중에도 창고 시뮬레이션은 계속됩니다."));
 	Button(bObserverView ? TEXT("1인칭 캐릭터로 돌아가기") : TEXT("전지적 관찰 시점으로 전환"),[this]() { ToggleObserverView(); CloseWarehouseMenu(); });
 	Button(TEXT("창고 전체 보기"),[this]() { if (!bObserverView) ToggleObserverView(); SetObserverFloor(-1); CloseWarehouseMenu(); });
     for (int32 Floor=0; Floor<3; ++Floor)
@@ -353,8 +353,8 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
  if (MenuWidget.IsValid() || !PlayerCameraManager || !GetPawn()) return FText::GetEmpty();
  if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn()))
   if (auto* Vehicle=OperatorCharacter->GetRemoteForklift())
-   return FText::FromString(FString::Printf(TEXT("스마트폰 원격 조작 · %s\nW/S 전후진 · A/D 조향 · R/F 포크 승강 · Space 제동 · G 종료\n%s\n배터리 %.0f%% · 적재 %.0f / %.0f kg"),
-    *Vehicle->VehicleName,*Vehicle->Status,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
+   return FText::FromString(FString::Printf(TEXT("스마트폰 원격 조작 · %s\nW/S 전후진 · A/D 조향·자리 회전 · R/F 포크 승강 · Space 제동 · G 종료\n%s\n속도 %.2f m/s · 배터리 %.0f%% · 적재 %.0f / %.0f kg"),
+    *Vehicle->VehicleName,*Vehicle->Status,FMath::Abs(Vehicle->CurrentSpeedCm)*.01f,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
  if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn()))
  {
   if (auto* Cargo=Cast<AWarehouseCargo>(OperatorCharacter->GetHeldCargo())) return Cargo->GetCargoDescription();
@@ -373,9 +373,9 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
     return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\nE : 빈 팔레트 들기"),Pallet->PalletMassKg));
   if (!bObserverView && Hit.Distance<=300.f)
    if (auto* Vehicle=Cast<AWarehouseForklift>(Hit.GetActor()))
-    return FText::FromString(FString::Printf(TEXT("E : %s  |  G : 스마트폰 원격 조작\n%s\n배터리 %.0f%% · 적재 %.0f / %.0f kg"),
+    return FText::FromString(FString::Printf(TEXT("E : %s  |  G : 스마트폰 원격 조작\n%s\n속도 %.2f m/s · 배터리 %.0f%% · 적재 %.0f / %.0f kg"),
      Vehicle->bPowered ? TEXT("자율 운행 정지") : TEXT("자율 운행 시작 / 재개"),
-     *Vehicle->Status,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
+     *Vehicle->Status,FMath::Abs(Vehicle->CurrentSpeedCm)*.01f,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
  }
  return FText::GetEmpty();
 }

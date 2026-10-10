@@ -26,26 +26,35 @@ bool WarehouseHumanPhysics::DriveCapsule(ACharacter* Person,FVector DesiredVeloc
  if (GroundDistance) *GroundDistance=Ground ? Center.Z-Floor.ImpactPoint.Z : -1.f;
  if (!Ground || !SupportLegs) return false; // No air thrusters or world-anchored balance.
  const FVector Velocity=Body->GetPhysicsLinearVelocity();
+ auto* Support=Floor.GetComponent();
+ const FVector SupportVelocity=Support ? Support->GetPhysicsLinearVelocityAtPoint(Floor.ImpactPoint,Floor.BoneName) : FVector::ZeroVector;
+ const FVector RelativeVelocity=Velocity-SupportVelocity;
  const float Distance=Center.Z-Floor.ImpactPoint.Z;
  const float LegGoal=DesiredHalfHeight>0.f ? DesiredHalfHeight : Half;
- const float NormalForce=FMath::Clamp((Body->GetMass()+FMath::Max(0.f,ExtraSupportedMassKg))*980.f+(LegGoal+1.f-Distance)*8000.f-Velocity.Z*1600.f,0.f,180000.f);
+ const float NormalForce=FMath::Clamp((Body->GetMass()+FMath::Max(0.f,ExtraSupportedMassKg))*980.f+(LegGoal+1.f-Distance)*8000.f-RelativeVelocity.Z*1600.f,0.f,180000.f);
  const FVector LegForce(0,0,NormalForce);
  Body->AddForce(LegForce);
  // A feet force also creates a tipping moment; respect the finite balance torque.
- const float BalanceForce=20000.f/FMath::Max(.3f,Half/100.f);
+ const float BalanceTorqueNm=600.f;
+ const float BalanceForce=BalanceTorqueNm*100.f/FMath::Max(.3f,Half/100.f);
  const float Traction=FMath::Min3(MotorForceN*100.f,.7f*NormalForce,BalanceForce);
- const FVector Motor=((DesiredVelocity-FVector(Velocity.X,Velocity.Y,0))*Body->GetMass()*8.f).GetClampedToMaxSize(Traction);
- Body->AddForceAtLocation(Motor,Floor.ImpactPoint);
+ // Active steps brake against the floor, not air damping or a velocity reset.
+ // Limit feedback at low frame rates so one step cannot reverse its own error.
+ const float Response=FMath::Min(16.f,1.f/FMath::Max(Person->GetWorld()->GetDeltaSeconds(),SMALL_NUMBER));
+ const FVector PlanarVelocity=FVector::VectorPlaneProject(RelativeVelocity,Floor.ImpactNormal);
+ const FVector Motor=(FVector::VectorPlaneProject(DesiredVelocity,Floor.ImpactNormal)-PlanarVelocity)*Body->GetMass()*Response;
+ const FVector FeetForce=Motor.GetClampedToMaxSize(Traction);
+ Body->AddForceAtLocation(FeetForce,Floor.ImpactPoint);
  const FVector Omega=Body->GetPhysicsAngularVelocityInRadians();
  FVector Torque=FVector::CrossProduct(Body->GetUpVector(),FVector::UpVector)*600.f-Omega*120.f;
- Torque-=FVector::CrossProduct(Floor.ImpactPoint-Center,Motor)/10000.f;
+ Torque-=FVector::CrossProduct(Floor.ImpactPoint-Center,FeetForce)/10000.f;
  if (Person->GetController()) Torque.Z=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(Body->GetComponentRotation().Yaw,Person->GetControlRotation().Yaw))*60.f-Omega.Z*20.f;
  else Torque.Z=-Omega.Z*20.f;
- Torque=Torque.GetClampedToMaxSize(200.f)*10000.f;
+ Torque=Torque.GetClampedToMaxSize(BalanceTorqueNm)*10000.f;
  Body->AddTorqueInRadians(Torque);
- if (auto* Support=Floor.GetComponent(); Support && Support->IsSimulatingPhysics(Floor.BoneName))
+ if (Support && Support->IsSimulatingPhysics(Floor.BoneName))
  {
-  Support->AddForceAtLocation(-LegForce-Motor,Floor.ImpactPoint,Floor.BoneName);
+  Support->AddForceAtLocation(-LegForce-FeetForce,Floor.ImpactPoint,Floor.BoneName);
   Support->AddTorqueInRadians(-Torque,Floor.BoneName);
  }
  return true;

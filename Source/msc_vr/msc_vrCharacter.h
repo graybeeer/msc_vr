@@ -70,9 +70,12 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category="Remote") TObjectPtr<UStaticMeshComponent> RemoteWorldPhone;
 	UPROPERTY(VisibleAnywhere, Category="Remote") TObjectPtr<USkeletalMeshComponent> RemoteWorldMesh;
 	bool bRemoteHadViewportFocus = false;
+	UPROPERTY(Transient) TArray<TObjectPtr<UMaterialInterface>> RemoteCarryMaterials;
+	UPROPERTY(Transient) TArray<TObjectPtr<UMaterialInterface>> RemoteWorldMaterials;
 	bool bObserverPresentation = false;
 	void UpdateRemoteControl();
 	bool InitializeRemotePresentation();
+	void SetRemoteCharacterFade(bool Enabled);
 
 	UPROPERTY(EditDefaultsOnly, Category="Carry", meta=(ClampMin="0.05", ClampMax="1.0"))
 	float CarryOpacity = .3f;

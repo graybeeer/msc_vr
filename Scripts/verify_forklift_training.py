@@ -119,7 +119,7 @@ assert station and station.get_editor_property('assigned_vehicle')==vehicle
 assert abs(vehicle.get_battery_energy_wh()-4320*vehicle.get_editor_property('battery_percent')/100)<.01
 assert vehicle.get_editor_property('energy_consumed_wh')>0
 assert vehicle.get_editor_property('max_fork_height_cm')==160
-assert vehicle.get_editor_property('empty_travel_speed_cm')==130
+assert vehicle.get_editor_property('empty_travel_speed_cm')==180
 
 def advance_until(v, condition, limit=12000):
     for _ in range(limit):

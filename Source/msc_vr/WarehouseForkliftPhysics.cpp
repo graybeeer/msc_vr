@@ -6,6 +6,8 @@
 #include "PhysicsEngine/PhysicsConstraintComponent.h"
 #include "Engine/World.h"
 #include "CollisionQueryParams.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 void AWarehouseForklift::ConfigureWheelCollision(UStaticMesh* Mesh)
 {
@@ -35,15 +37,17 @@ void AWarehouseForklift::InitializePhysicalRig()
  for (auto* Part : Parts)
  {
   if (Part->GetName()==TEXT("Body")) ChassisBody=Part;
+  if (Part->GetName()==TEXT("DriveSteer")) SteeringBody=Part;
   if (Part->GetName()==TEXT("Carriage")) CarriageBody=Part;
  }
- if (!ChassisBody || !CarriageBody || !LiftStage || Wheels.Num()!=3)
+ if (!ChassisBody || !SteeringBody || !CarriageBody || !LiftStage || Wheels.Num()!=3)
  { SetMechanicalFailure(); return; }
  USceneComponent* PreviousRoot=RootComponent;
  ChassisBody->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
  SetRootComponent(ChassisBody);
  PreviousRoot->AttachToComponent(ChassisBody,FAttachmentTransformRules::KeepWorldTransform);
  CarriageBody->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+ SteeringBody->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
  LiftStage->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
  for (UStaticMeshComponent* Wheel : Wheels) Wheel->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
 
@@ -64,31 +68,33 @@ void AWarehouseForklift::InitializePhysicalRig()
  }
  ChassisBody->SetCollisionObjectType(ECC_Vehicle);
  ChassisBody->SetSimulatePhysics(true);
+ SteeringBody->SetSimulatePhysics(true);
  CarriageBody->SetSimulatePhysics(true); LiftStage->SetSimulatePhysics(true);
  for (UStaticMeshComponent* Wheel : Wheels) Wheel->SetSimulatePhysics(true);
 
  // Fixed equipment is welded, while lift and axle joints remain separate bodies.
  for (auto* Part : Parts)
  {
-  if (Part==ChassisBody || Part==CarriageBody || Part==LiftStage || Wheels.Contains(Part) || !Part->IsCollisionEnabled()) continue;
+  if (Part==ChassisBody || Part==SteeringBody || Part==CarriageBody || Part==LiftStage || Wheels.Contains(Part) || !Part->IsCollisionEnabled()) continue;
   UStaticMeshComponent* Parent=ChassisBody;
   if (Part->GetName().StartsWith(TEXT("Fork"))) Parent=CarriageBody;
   else if (Part->GetName()==TEXT("LiftRam") || Part->GetName()==TEXT("LiftPulley")) Parent=LiftStage;
   Part->AttachToComponent(Parent,FAttachmentTransformRules(EAttachmentRule::KeepWorld,true));
  }
  Carriage->AttachToComponent(CarriageBody,FAttachmentTransformRules::KeepWorldTransform);
- // One mass ledger: 830+80+50+20+10+10=1000kg, no duplicate payload mass.
+ // One mass ledger: 790+40+80+50+20+10+10=1000kg, no duplicate payload mass.
  const float Scale=FMath::Max(1.f,VehicleMassKg)/1000.f;
  // Chaos combines each welded member's mass; overrides remain per-member, not per-cluster.
  ChassisBody->SetMassOverrideInKg(NAME_None,790.f*Scale);
+ SteeringBody->SetMassOverrideInKg(NAME_None,40.f*Scale);
  CarriageBody->SetMassOverrideInKg(NAME_None,30.f*Scale);
  LiftStage->SetMassOverrideInKg(NAME_None,30.f*Scale);
  for (int32 I=0;I<Wheels.Num();++I) Wheels[I]->SetMassOverrideInKg(NAME_None,(I==0 ? 20.f : 10.f)*Scale);
  // Battery/counterweight distribution is a calibration assumption, exposed by the physics documentation.
  const FVector CurrentCOM=GetActorTransform().InverseTransformPosition(ChassisBody->GetCenterOfMass());
- ChassisBody->SetCenterOfMass((FVector(-45,0,38)-CurrentCOM)*(830.f/790.f));
+ ChassisBody->SetCenterOfMass(FVector(-45,0,38)-CurrentCOM);
 
- auto Joint=[&](const TCHAR* Name,UStaticMeshComponent* Moving,const FTransform& WorldFrame)
+ auto Joint=[&](const TCHAR* Name,UStaticMeshComponent* Moving,const FTransform& WorldFrame,UStaticMeshComponent* Mount=nullptr)
  {
   auto* Constraint=NewObject<UPhysicsConstraintComponent>(this,Name);
   AddInstanceComponent(Constraint); Constraint->RegisterComponent();
@@ -101,7 +107,7 @@ void AWarehouseForklift::InitializePhysicalRig()
   Constraint->SetLinearXLimit(LCM_Locked,0); Constraint->SetLinearYLimit(LCM_Locked,0); Constraint->SetLinearZLimit(LCM_Locked,0);
   Constraint->SetAngularTwistLimit(ACM_Locked,0); Constraint->SetAngularSwing1Limit(ACM_Locked,0); Constraint->SetAngularSwing2Limit(ACM_Locked,0);
   Constraint->SetLinearBreakable(true,25000000.f); Constraint->SetAngularBreakable(true,100000000.f);
-  Constraint->SetConstrainedComponents(ChassisBody,NAME_None,Moving,NAME_None);
+  Constraint->SetConstrainedComponents(Mount ? Mount : ChassisBody.Get(),NAME_None,Moving,NAME_None);
   return Constraint;
  };
  const float Range=FMath::Max(0.f,FMath::Min(160.f,MaxForkHeightCm)-9.5f);
@@ -129,19 +135,26 @@ void AWarehouseForklift::InitializePhysicalRig()
  InternalGuide->SetDisableCollision(true); InternalGuide->SetProjectionEnabled(false);
  InternalGuide->SetConstrainedComponents(LiftStage,NAME_None,CarriageBody,NAME_None);
 
+ // Separate the real steering spindle from rolling. SLERP's implicit motor
+ // supplies finite steering torque without damping the wheel's rolling axis.
+ const FQuat SpindleFrame=FRotationMatrix::MakeFromXZ(GetActorUpVector(),GetActorForwardVector()).ToQuat();
+ SteeringJoint=Joint(TEXT("SteeringSpindleJoint"),SteeringBody,FTransform(SpindleFrame,Wheels[0]->GetComponentLocation()));
+ SteeringJoint->SetAngularTwistLimit(ACM_Limited,90);
+ SteeringJoint->SetAngularSwing1Limit(ACM_Limited,.1f);
+ SteeringJoint->SetAngularSwing2Limit(ACM_Limited,.1f);
+ SteeringJoint->SetAngularDriveMode(EAngularDriveMode::SLERP);
+ SteeringJoint->SetOrientationDriveSLERP(true); SteeringJoint->SetAngularVelocityDriveSLERP(true);
+ SteeringJoint->SetAngularDriveAccelerationMode(false);
+ SteeringJoint->SetAngularDriveParams(20000000.f,2000000.f,5000000.f);
+ auto* WheelHousingExclusion=Joint(TEXT("DriveWheelChassisMount"),Wheels[0],Wheels[0]->GetComponentTransform());
+ WheelHousingExclusion->SetLinearXLimit(LCM_Free,0); WheelHousingExclusion->SetLinearYLimit(LCM_Free,0); WheelHousingExclusion->SetLinearZLimit(LCM_Free,0);
+ WheelHousingExclusion->SetAngularTwistLimit(ACM_Free,0); WheelHousingExclusion->SetAngularSwing1Limit(ACM_Free,0); WheelHousingExclusion->SetAngularSwing2Limit(ACM_Free,0);
+
  for (int32 I=0;I<Wheels.Num();++I)
  {
   const FQuat Axle=FRotationMatrix::MakeFromXZ(GetActorRightVector(),GetActorUpVector()).ToQuat();
-  auto* Constraint=Joint(*FString::Printf(TEXT("PhysicalAxle_%d"),I),Wheels[I],FTransform(Axle,Wheels[I]->GetComponentLocation()));
+  auto* Constraint=Joint(*FString::Printf(TEXT("PhysicalAxle_%d"),I),Wheels[I],FTransform(Axle,Wheels[I]->GetComponentLocation()),I==0 ? SteeringBody.Get() : nullptr);
   Constraint->SetAngularTwistLimit(ACM_Free,0);
-  if (I==0)
-  {
-   Constraint->SetAngularSwing1Limit(ACM_Limited,85);
-   Constraint->SetAngularDriveMode(EAngularDriveMode::TwistAndSwing);
-   Constraint->SetOrientationDriveTwistAndSwing(false,true);
-   Constraint->SetAngularDriveAccelerationMode(false);
-   Constraint->SetAngularDriveParams(15000000.f,1500000.f,2500000.f); // steering actuator, 250Nm
-  }
   WheelJoints.Add(Constraint);
  }
  DesiredLift=LiftMotorTarget=LiftOffset;
@@ -152,11 +165,11 @@ void AWarehouseForklift::InitializePhysicalRig()
 float AWarehouseForklift::GetPhysicalMassKg() const
 {
  if (!bPhysicsReady) return VehicleMassKg;
- float Mass=ChassisBody->GetMass()+CarriageBody->GetMass()+LiftStage->GetMass();
+ float Mass=ChassisBody->GetMass()+SteeringBody->GetMass()+CarriageBody->GetMass()+LiftStage->GetMass();
  for (UStaticMeshComponent* Wheel : Wheels) Mass+=Wheel->GetMass();
  return Mass;
 }
-void AWarehouseForklift::BrakeDrive() { DesiredDriveSpeed=0; DesiredCurvature=0; }
+void AWarehouseForklift::BrakeDrive() { DesiredDriveSpeed=0; DesiredTurnRate=0; }
 
 bool AWarehouseForklift::CommandDrive(float Speed,float Curvature,float Dt)
 {
@@ -165,8 +178,26 @@ bool AWarehouseForklift::CommandDrive(float Speed,float Curvature,float Dt)
  // turn a normal rolling contact into a predicted downward floor collision.
  const FVector Preview=GetActorForwardVector().GetSafeNormal2D()*Speed*FMath::Max(.008f,Dt);
  if (!ClearToMove(Preview,false)) { BrakeDrive(); return false; }
- DesiredDriveSpeed=Speed;
+ const float Limit=bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(180.f,EmptyTravelSpeedCm);
+ DesiredDriveSpeed=FMath::Clamp(Speed,-Limit,Limit);
+ DesiredTurnRate=0;
  DesiredCurvature=FMath::Clamp(Curvature,-1.f/FMath::Max(117.3f,MinimumTurningRadiusCm),1.f/FMath::Max(117.3f,MinimumTurningRadiusCm));
+ return true;
+}
+
+bool AWarehouseForklift::CommandTurn(float YawRate,float Dt)
+{
+ if (!bPhysicsReady || !FMath::IsFinite(YawRate) || !ClearToMove(FVector::ZeroVector,false)) { BrakeDrive(); return false; }
+ const float Limit=FMath::DegreesToRadians(bSupportingPallet ? 20.f : 30.f);
+ const float Rate=FMath::Clamp(YawRate,-Limit,Limit);
+ // The front load-wheel centre is the physical pivot. Check the body sweep,
+ // but leave all displacement and rotation to tyre contact and the motor.
+ const FVector Pivot=(Wheels[1]->GetComponentLocation()+Wheels[2]->GetComponentLocation())*.5f;
+ const FQuat Rotation(FVector::UpVector,Rate*FMath::Max(.008f,Dt));
+ const FVector Next=Pivot+Rotation.RotateVector(GetActorLocation()-Pivot);
+ if (!RemotePoseClear(FTransform(Rotation*GetActorQuat(),Next))) { StopFor(TEXT("OBSTACLE / TURN CLEARANCE")); return false; }
+ DesiredDriveSpeed=0;
+ DesiredTurnRate=Rate;
  return true;
 }
 
@@ -175,43 +206,65 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  if (!bPhysicsReady || Dt<=0) return;
  CurrentSpeedCm=FVector::DotProduct(ChassisBody->GetPhysicsLinearVelocity(),GetActorForwardVector());
  LiftOffset=GetActorTransform().InverseTransformPosition(Carriage->GetComponentLocation()).Z;
- if (GetActorUpVector().Z<.75f || CarriageJoint->IsBroken() || StageJoint->IsBroken() || WheelJoints.ContainsByPredicate([](UPhysicsConstraintComponent* Joint) { return Joint->IsBroken(); }))
+ if (GetActorUpVector().Z<.75f || SteeringJoint->IsBroken() || CarriageJoint->IsBroken() || StageJoint->IsBroken() || WheelJoints.ContainsByPredicate([](UPhysicsConstraintComponent* Joint) { return Joint->IsBroken(); }))
  {
   if (!bMechanicalFailure) SetMechanicalFailure();
  }
  if (!bPowered || bMechanicalFailure || !bEStopReleased || !bBrakeHealthy) BrakeDrive();
- DriveSpeedTarget=FMath::FInterpConstantTo(DriveSpeedTarget,DesiredDriveSpeed,Dt,50.f);
+ if (DesiredDriveSpeed*DriveSpeedTarget<0.f) DriveSpinIntegral=0;
+ DriveSpeedTarget=FMath::FInterpConstantTo(DriveSpeedTarget,DesiredDriveSpeed,Dt,180.f);
  const float Wheelbase=FMath::Abs((-74.f+7.f)*(215.f/282.55f));
- const float RequestedSteering=-FMath::Atan(Wheelbase*DesiredCurvature);
- if (bSteeringHealthy) SteeringAngle=FMath::FInterpConstantTo(SteeringAngle,RequestedSteering,Dt,FMath::DegreesToRadians(60.f));
- WheelJoints[0]->SetAngularOrientationTarget(FRotator(0,-FMath::RadiansToDegrees(SteeringAngle),0));
+ const bool Turning=!FMath::IsNearlyZero(DesiredTurnRate);
+ const float RequestedSteering=Turning ? -FMath::Sign(DesiredTurnRate)*PI*.5f : -FMath::Atan(Wheelbase*DesiredCurvature);
+ // A stop holds the steering position instead of straightening a rolling tyre.
+ if (bSteeringHealthy && (Turning || !FMath::IsNearlyZero(DesiredDriveSpeed)))
+  SteeringAngle=FMath::FInterpConstantTo(SteeringAngle,RequestedSteering,Dt,FMath::DegreesToRadians(120.f));
  auto* Drive=Wheels[0].Get();
  const FVector Axle=Drive->GetRightVector();
  const float Spin=FVector::DotProduct(Drive->GetPhysicsAngularVelocityInRadians()-ChassisBody->GetPhysicsAngularVelocityInRadians(),Axle);
  const float Radius=FMath::Max(1.f,float(Drive->GetStaticMesh()->GetBoundingBox().GetExtent().Z));
- const bool Braking=FMath::Abs(DesiredDriveSpeed)<.01f;
- const float DesiredSpin=Braking ? 0.f : DriveSpeedTarget/(Radius*FMath::Max(.2f,FMath::Cos(SteeringAngle)));
+ // The tyre's forward vector spins through vertical every revolution. Its
+ // axle stays perpendicular to the rolling plane and measures steering only.
+ const float ActualSteering=FMath::Atan2(-FVector::DotProduct(Axle,GetActorForwardVector()),FVector::DotProduct(Axle,GetActorRightVector()));
+ SteeringJoint->SetAngularOrientationTarget(FRotator(0,0,FMath::RadiansToDegrees(SteeringAngle)));
+ if (FMath::Abs(FMath::FindDeltaAngleRadians(ActualSteering,SteeringAngle))>.01f) SteeringBody->WakeAllRigidBodies();
+ const bool TurnReady=Turning && FMath::Abs(FMath::FindDeltaAngleRadians(ActualSteering,RequestedSteering))<FMath::DegreesToRadians(8.f) && ChassisBody->GetPhysicsLinearVelocity().Size2D()<30.f;
+ const bool Braking=Turning ? !TurnReady : FMath::Abs(DesiredDriveSpeed)<.01f;
+ // Wheel RPM alone cannot measure tyre slip. Close the travel loop on the
+ // actual chassis velocity as well, without adding a force to the chassis.
+ const float SpeedCorrection=FMath::Clamp((DriveSpeedTarget-CurrentSpeedCm)*2.f,-60.f,60.f);
+ const float DesiredSpin=Braking ? 0.f : (Turning ? FMath::Abs(DesiredTurnRate)*Wheelbase/Radius : (DriveSpeedTarget+SpeedCorrection)/(Radius*FMath::Max(.2f,FMath::Cos(SteeringAngle))));
  FHitResult Ground;
  FCollisionQueryParams GroundQuery(SCENE_QUERY_STAT(DriveTyreContact),false,this);
  const bool Grounded=GetWorld()->LineTraceSingleByChannel(Ground,Drive->GetComponentLocation(),Drive->GetComponentLocation()-FVector(0,0,Radius+2.f),ECC_Visibility,GroundQuery);
  const float Error=DesiredSpin-Spin;
  const float Limit=Braking ? 532.f : FMath::Min(266.f,2200.f/FMath::Max(1.f,FMath::Abs(Spin)));
- if (Braking || !Grounded) DriveSpinIntegral=0;
- else if (FMath::Abs(Error*35.f+DriveSpinIntegral*25.f)<Limit)
-  DriveSpinIntegral=FMath::Clamp(DriveSpinIntegral+Error*Dt,-10.64f,10.64f);
  const float WheelInertia=FMath::Max(.001f,float(Drive->BodyInstance.GetBodyInertiaTensor().Y/10000.));
- const float Gain=Grounded ? 35.f : FMath::Min(35.f,.8f*WheelInertia/FMath::Max(.008f,Dt));
- float TorqueNm=FMath::Clamp(Error*Gain+DriveSpinIntegral*25.f,-Limit,Limit);
+ const float GroundGain=Braking ? 180.f : 90.f;
+ const float Gain=Grounded ? GroundGain : FMath::Min(GroundGain,.8f*WheelInertia/FMath::Max(.008f,Dt));
+ constexpr float IntegralGain=80.f;
+ const float Control=Error*Gain+DriveSpinIntegral*IntegralGain;
+ if (Braking || !Grounded) DriveSpinIntegral=0;
+ else if (FMath::Abs(Control)<Limit || Control*Error<0.f)
+  DriveSpinIntegral=FMath::Clamp(DriveSpinIntegral+Error*Dt,-Limit/IntegralGain,Limit/IntegralGain);
+ float TorqueNm=FMath::Clamp(Error*Gain+DriveSpinIntegral*IntegralGain,-Limit,Limit);
+ if (FParse::Param(FCommandLine::Get(),TEXT("DriveDiagnostics")) &&
+     FMath::FloorToInt(GetWorld()->GetTimeSeconds()*2.f)!=FMath::FloorToInt((GetWorld()->GetTimeSeconds()-Dt)*2.f))
+  UE_LOG(LogTemp,Log,TEXT("AGV_DRIVE_DIAG Turn=%.3f SteerTarget=%.2f SteerActual=%.2f Swing1=%.2f Swing2=%.2f Twist=%.2f SpinTarget=%.3f Spin=%.3f Torque=%.2f Integral=%.3f Speed=%.2f Powered=%d"),
+   DesiredTurnRate,FMath::RadiansToDegrees(SteeringAngle),FMath::RadiansToDegrees(ActualSteering),WheelJoints[0]->GetCurrentSwing1(),WheelJoints[0]->GetCurrentSwing2(),WheelJoints[0]->GetCurrentTwist(),DesiredSpin,Spin,TorqueNm,DriveSpinIntegral,CurrentSpeedCm,bPowered);
  if (Braking && !bBrakeHealthy) TorqueNm=0; // A failed brake must physically coast.
  Drive->AddTorqueInRadians(Axle*TorqueNm*10000.f);
- ChassisBody->AddTorqueInRadians(-Axle*TorqueNm*10000.f);
+ SteeringBody->AddTorqueInRadians(-Axle*TorqueNm*10000.f);
  // Bearing resistance dissipates wheel motion and applies the opposite reaction to the chassis.
- for (UStaticMeshComponent* Wheel : Wheels)
+ for (int32 I=0; I<Wheels.Num(); ++I)
  {
+  auto* Wheel=Wheels[I].Get();
   const FVector Axis=Wheel->GetRightVector();
   const float W=FVector::DotProduct(Wheel->GetPhysicsAngularVelocityInRadians()-ChassisBody->GetPhysicsAngularVelocityInRadians(),Axis);
-  const FVector Resistance=Axis*(-FMath::Clamp(W*1.2f,-8.f,8.f)*10000.f);
-  Wheel->AddTorqueInRadians(Resistance); ChassisBody->AddTorqueInRadians(-Resistance);
+  // Free roller bearings are not service brakes. The former 8Nm per small
+  // roller consumed substantial drive power even on an empty vehicle.
+  const FVector Resistance=Axis*(-FMath::Clamp(W*.08f,-1.5f,1.5f)*10000.f);
+  Wheel->AddTorqueInRadians(Resistance); (I==0 ? SteeringBody.Get() : ChassisBody.Get())->AddTorqueInRadians(-Resistance);
  }
  if (bPowered && !bMechanicalFailure)
  {

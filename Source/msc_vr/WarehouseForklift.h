@@ -85,7 +85,7 @@ public:
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1")) float VehicleMassKg = 1000;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="10", ClampMax="160")) float MaxForkHeightCm = 160;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Training", meta=(ClampMin="12", ClampMax="160")) float TaskForkHeightCm = 20;
- UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1", ClampMax="130")) float EmptyTravelSpeedCm = 130;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1", ClampMax="180")) float EmptyTravelSpeedCm = 180;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1", ClampMax="100")) float LoadedTravelSpeedCm = 100;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Specification", meta=(ClampMin="1", ClampMax="30")) float ForkLeadingSpeedCm = 30;
  // Minimum curvature radius used by the autonomous pose graph planner.
@@ -99,11 +99,14 @@ public:
 private:
  // Commands are actuator targets. Telemetry and fork pose always come from Chaos.
  UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> ChassisBody;
+ UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> SteeringBody;
+ UPROPERTY(Transient) TObjectPtr<UPhysicsConstraintComponent> SteeringJoint;
  UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> CarriageBody;
  UPROPERTY(Transient) TObjectPtr<UPhysicsConstraintComponent> CarriageJoint;
  UPROPERTY(Transient) TObjectPtr<UPhysicsConstraintComponent> StageJoint;
  UPROPERTY(Transient) TArray<TObjectPtr<UPhysicsConstraintComponent>> WheelJoints;
  float DesiredDriveSpeed=0, DesiredCurvature=0, DriveSpeedTarget=0;
+ float DesiredTurnRate=0;
  float DesiredLift=0, LiftMotorTarget=0;
  float SteeringAngle=0;
  float DriveSpinIntegral=0;
@@ -111,6 +114,7 @@ private:
  void InitializePhysicalRig();
  void UpdatePhysicalRig(float Dt);
  bool CommandDrive(float Speed,float Curvature,float Dt);
+ bool CommandTurn(float YawRate,float Dt);
  void BrakeDrive();
  UPROPERTY(Transient) TObjectPtr<AActor> RemoteOperator;
  float RemoteForward=0,RemoteSteering=0,RemoteLift=0;

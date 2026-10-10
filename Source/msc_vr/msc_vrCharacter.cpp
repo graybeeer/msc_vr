@@ -117,6 +117,7 @@ Amsc_vrCharacter::Amsc_vrCharacter()
 		Screen->FirstPersonPrimitiveType=Body->FirstPersonPrimitiveType;
 		Screen->SetCastShadow(false);
 		Body->SetVisibility(false,true);
+		Body->SetAutoActivate(false);
 		if (OwnerView) RemotePhone=Body; else RemoteWorldPhone=Body;
 	}
 
@@ -293,6 +294,12 @@ void Amsc_vrCharacter::BeginPlay()
 	GetCapsuleComponent()->SetCollisionResponseToAllChannels(ECR_Block);
 	GetCapsuleComponent()->SetEnableGravity(true);
 	GetCapsuleComponent()->SetSimulatePhysics(true);
+	// The first-person copy and carry IK must receive a live locomotion pose,
+	// including when the third-person source is hidden from its owner.
+	GetMesh()->VisibilityBasedAnimTickOption=EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+	GetMesh()->AddTickPrerequisiteActor(this);
+	FirstPersonMesh->VisibilityBasedAnimTickOption=EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+	FirstPersonMesh->AddTickPrerequisiteComponent(GetMesh());
 	CarryGrip->BreakConstraint();
 }
 
@@ -314,6 +321,8 @@ void Amsc_vrCharacter::UpdatePhysicalMovement(float DeltaSeconds)
 	bPhysicalGround=WarehouseHumanPhysics::DriveCapsule(this,Input*Speed,500.f,JumpSupportDelay<=0.f,DesiredHalf,&GroundDistance,HeldMass);
 	auto* Movement=GetCharacterMovement();
 	Movement->Velocity=GetVelocity();
+	// Chaos owns displacement; retain the template's animation telemetry only.
+	Movement->UpdateProxyAcceleration();
 	Movement->MovementMode=bPhysicalGround ? MOVE_Walking : MOVE_Falling;
 	Movement->MaxWalkSpeed=Speed;
 	float ClearHalf=DesiredHalf;
@@ -347,6 +356,46 @@ bool Amsc_vrCharacter::InitializeRemotePresentation()
 	return true;
 }
 
+void Amsc_vrCharacter::SetRemoteCharacterFade(bool Enabled)
+{
+	for (int32 View=0; View<2; ++View)
+	{
+		auto* Phone=View==0 ? RemotePhone.Get() : RemoteWorldPhone.Get();
+		TArray<UMeshComponent*> Meshes;
+		Meshes.Add(View==0 ? CarryMesh.Get() : RemoteWorldMesh.Get());
+		Meshes.Add(Phone);
+		TArray<USceneComponent*> PhoneChildren;
+		Phone->GetChildrenComponents(true,PhoneChildren);
+		for (auto* Child : PhoneChildren) if (auto* RenderMesh=Cast<UMeshComponent>(Child)) Meshes.Add(RenderMesh);
+		auto& Originals=View==0 ? RemoteCarryMaterials : RemoteWorldMaterials;
+		if (Enabled && Originals.IsEmpty())
+		{
+			for (auto* RenderMesh : Meshes)
+			for (int32 Slot=0; Slot<RenderMesh->GetNumMaterials(); ++Slot)
+			{
+				auto* Original=RenderMesh->GetMaterial(Slot);
+				Originals.Add(Original);
+				if (!Original) continue;
+				const FString Path=TEXT("/Game/Warehouse/Materials/RemoteCharacter/MI_RemoteFade_")+Original->GetName();
+				if (auto* Fade=LoadObject<UMaterialInterface>(nullptr,*Path))
+				{
+					auto* Dynamic=UMaterialInstanceDynamic::Create(Fade,this);
+					Dynamic->SetScalarParameterValue(TEXT("RemoteCharacterOpacity"),.3f);
+					RenderMesh->SetMaterial(Slot,Dynamic);
+				}
+			}
+		}
+		else if (!Enabled)
+		{
+			int32 Index=0;
+			for (auto* RenderMesh : Meshes)
+			for (int32 Slot=0; Slot<RenderMesh->GetNumMaterials(); ++Slot)
+				if (Originals.IsValidIndex(Index)) RenderMesh->SetMaterial(Slot,Originals[Index++]);
+			Originals.Reset();
+		}
+	}
+}
+
 void Amsc_vrCharacter::ToggleRemoteControl()
 {
 	if (IsValid(RemoteForklift)) { EndRemoteControl(); return; }
@@ -373,11 +422,13 @@ bool Amsc_vrCharacter::BeginRemoteControl(AWarehouseForklift* Forklift)
 	if (!GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+FirstPersonCameraComponent->GetForwardVector()*300.f,ECC_Visibility,Params) || Hit.GetActor()!=Forklift) return false;
 	if (!InitializeRemotePresentation() || !Forklift->BeginRemoteControl(this)) return false;
 	RemoteForklift=Forklift;
+	SetRemoteCharacterFade(true);
 	StopJumping();
 	CarryMesh->SetComponentTickEnabled(true); CarryMesh->SetVisibility(true);
 	FirstPersonMesh->SetVisibility(false,false);
 	RemoteWorldMesh->SetComponentTickEnabled(true); RemoteWorldMesh->SetVisibility(true);
 	GetMesh()->SetVisibility(false,false);
+	RemotePhone->SetActive(true); RemoteWorldPhone->SetActive(true);
 	RemotePhone->SetVisibility(true,true); RemoteWorldPhone->SetVisibility(true,true);
 	FirstPersonCameraComponent->FirstPersonFieldOfView=90.f;
 	auto* Viewport=GetWorld()->GetGameViewport();
@@ -394,8 +445,10 @@ void Amsc_vrCharacter::EndRemoteControl()
 		RemoteForklift->EndRemoteControl(this);
 	}
 	RemoteForklift=nullptr;
+	SetRemoteCharacterFade(false);
 	bRemoteHadViewportFocus=false;
 	RemotePhone->SetVisibility(false,true); RemoteWorldPhone->SetVisibility(false,true);
+	RemotePhone->SetActive(false); RemoteWorldPhone->SetActive(false);
 	RemoteWorldMesh->SetVisibility(false); RemoteWorldMesh->SetComponentTickEnabled(false);
 	GetMesh()->SetVisibility(true,false);
 	if (!IsValid(HeldCargo))

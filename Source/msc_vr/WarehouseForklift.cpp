@@ -317,8 +317,8 @@ bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt)
  { StopFor(TEXT("ROUTE MISALIGNED")); return false; }
  const float Distance=FVector::DotProduct(Offset,GetActorForwardVector());
  if (FMath::Abs(Distance)<.5f) { BrakeDrive(); return FMath::Abs(CurrentSpeedCm)<1.f; }
- Speed=FMath::Min(Speed,Distance>0 ? FMath::Min(30.f,ForkLeadingSpeedCm) : (bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(130.f,EmptyTravelSpeedCm)));
- const float TargetSpeed=FMath::Sign(Distance)*FMath::Min(Speed,FMath::Sqrt(100.f*FMath::Abs(Distance)));
+ Speed=FMath::Min(Speed,bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(180.f,EmptyTravelSpeedCm));
+ const float TargetSpeed=FMath::Sign(Distance)*FMath::Min(Speed,FMath::Sqrt(240.f*FMath::Abs(Distance)));
  const float Lateral=FVector::DotProduct(Offset,GetActorRightVector());
  const float Curvature=FMath::Clamp(2.f*Lateral/FMath::Max(1600.f,Offset.SizeSquared2D()),-1.f/117.3f,1.f/117.3f);
  CommandDrive(FMath::Sign(Distance)*FMath::Min(FMath::Abs(TargetSpeed),FMath::Abs(Distance)*2.f),Curvature,Dt);

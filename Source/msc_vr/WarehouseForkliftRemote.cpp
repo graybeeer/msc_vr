@@ -78,7 +78,7 @@ void AWarehouseForklift::SetRemoteInput(float Forward,float Steering,float Lift)
  RemoteLift=FMath::Clamp(Lift,-1.f,1.f);
  LastRemoteInputTime=GetWorld()->GetRealTimeSeconds();
  // Releasing the drive button engages the brake; payload inertia stays physical.
- if (FMath::IsNearlyZero(RemoteForward)) BrakeDrive();
+ if (FMath::IsNearlyZero(RemoteForward) && FMath::IsNearlyZero(RemoteSteering)) BrakeDrive();
 }
 
 bool AWarehouseForklift::UpdateLoadSupport(float Dt)
@@ -193,20 +193,26 @@ void AWarehouseForklift::AdvanceRemote(float Dt)
     bSupportingPallet=false;
   }
  }
- if (!FMath::IsNearlyZero(RemoteForward))
+ if (!FMath::IsNearlyZero(RemoteForward) || !FMath::IsNearlyZero(RemoteSteering))
  {
   // Keep loads low during travel; lifting and driving are separate remote actions.
   if (LiftOffset>20) { StopFor(TEXT("LOWER FORKS TO TRAVEL HEIGHT")); return; }
-  const float Limit=RemoteForward>0 ? FMath::Min(30.f,ForkLeadingSpeedCm) :
-   (bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(130.f,EmptyTravelSpeedCm));
-  const float Distance=RemoteForward*Limit*Dt;
-  const float Angle=FMath::RadiansToDegrees(Distance*RemoteSteering/FMath::Max(117.3f,MinimumTurningRadiusCm));
-  FRotator Heading=GetActorRotation(); Heading.Yaw+=Angle;
-  if (!RemotePoseClear(FTransform(Heading,GetActorLocation()+GetActorForwardVector()*Distance)))
-  { StopFor(TEXT("OBSTACLE / TURN CLEARANCE")); return; }
-  if (!CommandDrive(RemoteForward*Limit,RemoteSteering/FMath::Max(117.3f,MinimumTurningRadiusCm),Dt)) return;
+  if (FMath::IsNearlyZero(RemoteForward))
+  {
+   if (!CommandTurn(RemoteSteering*FMath::DegreesToRadians(bSupportingPallet ? 20.f : 30.f),Dt)) return;
+  }
+  else
+  {
+   const float Limit=bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(180.f,EmptyTravelSpeedCm);
+   const float Distance=RemoteForward*Limit*Dt;
+   const float Angle=FMath::RadiansToDegrees(Distance*RemoteSteering/FMath::Max(117.3f,MinimumTurningRadiusCm));
+   FRotator Heading=GetActorRotation(); Heading.Yaw+=Angle;
+   if (!RemotePoseClear(FTransform(Heading,GetActorLocation()+GetActorForwardVector()*Distance)))
+   { StopFor(TEXT("OBSTACLE / TURN CLEARANCE")); return; }
+   if (!CommandDrive(RemoteForward*Limit,RemoteSteering/FMath::Max(117.3f,MinimumTurningRadiusCm),Dt)) return;
+  }
  }
  else BrakeDrive();
- if (!FMath::IsNearlyZero(RemoteForward) || !FMath::IsNearlyZero(RemoteLift))
+ if (!FMath::IsNearlyZero(RemoteForward) || !FMath::IsNearlyZero(RemoteSteering) || !FMath::IsNearlyZero(RemoteLift))
   SetStatus(TEXT("SMARTPHONE REMOTE / G: DISCONNECT"));
 }

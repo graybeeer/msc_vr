@@ -219,8 +219,8 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  const auto& Step=PlannedRoute[RouteIndex];
  const FVector Local=GetActorTransform().InverseTransformPosition(Step.Pose.GetLocation());
  const float Sign=Step.bReverse ? -1.f : 1.f;
- const float Limit=Step.bReverse ? (bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(130.f,EmptyTravelSpeedCm)) : FMath::Min(30.f,ForkLeadingSpeedCm);
- float Desired=FMath::Min(FMath::Min(Speed,Limit),FMath::Sqrt(100.f*Remaining));
+ const float Limit=bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(180.f,EmptyTravelSpeedCm);
+ float Desired=FMath::Min(FMath::Min(Speed,Limit),FMath::Sqrt(240.f*Remaining));
  if (Remaining<20.f) Desired=FMath::Min(Desired,Remaining*1.8f);
  float Curvature=2.f*Local.Y/FMath::Max(900.f,Local.SizeSquared2D());
  if (Remaining<40.f) Curvature+=Sign*HeadingError/40.f;
