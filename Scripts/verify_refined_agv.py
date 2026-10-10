@@ -23,11 +23,12 @@ for name in ('ForkL','ForkR'):
     assert abs(b.origin.z-b.box_extent.z-3.5)<.05
 for name,sign in (('LoadWheelL',1),('LoadWheelR',-1)):
     c=parts[name];b=c.static_mesh.get_bounds();loc=c.get_editor_property('relative_location')
-    assert abs(abs(loc.y)+b.box_extent.y-49.7)<.05
+    assert abs(loc.x-(-7*s))<.05
+    assert abs(loc.y-sign*45*s)<.05, 'Wheel must stay at its original chassis mount'
     assert abs(loc.z-b.box_extent.z)<.05
 assert parts['LiftRam'].get_attach_parent()==parts['LiftStage']
 assert parts['LiftPulley'].get_attach_parent()==parts['LiftStage']
 assert parts['LiftChains'].get_collision_enabled()==unreal.CollisionEnabled.NO_COLLISION
 assert not v.check_systems(),v.check_systems()
-print('REFINED_AGV_GEOMETRY_PASSED','uniform body, 215cm height, 99.4cm wheel envelope, 115cm forks, 12 PBR parts')
+print('REFINED_AGV_GEOMETRY_PASSED','uniform body, 215cm height, original wheel mounts, 115cm forks, 12 PBR parts')
 exec((Path(unreal.Paths.project_dir())/'Scripts/verify_mezzanine.py').read_text(encoding='utf-8'))

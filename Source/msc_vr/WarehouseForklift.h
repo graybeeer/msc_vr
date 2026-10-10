@@ -52,6 +52,8 @@ public:
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Perception") FVector PalletPositionBiasCm = FVector::ZeroVector;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Perception") float PalletYawBiasDegrees = 0;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Perception", meta=(ClampMin="100",ClampMax="1000")) float PalletDetectionRangeCm = 400;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Perception") int32 ObstacleCheckCount = 0;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Perception") double LastObstacleCheckSeconds = -1;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") EWarehouseAIState AIState = EWarehouseAIState::Off;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") FWarehouseWorkOrder ActiveJob;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") TArray<FWarehouseRoutePoint> PlannedRoute;
@@ -123,7 +125,7 @@ private:
  bool bReplanAfterRemote=false;
  bool bRemoteLoadFault=false;
  void AdvanceRemote(float Dt);
- bool RemotePoseClear(const FTransform& Pose) const;
+ bool RemotePoseClear(const FTransform& Pose);
  bool PalletClaimedByOther(AWarehousePallet* Pallet) const;
  bool UpdateLoadSupport(float Dt);
  bool BeginFloorTransfer(float TargetZ, EWarehouseAIState Resume);
@@ -176,6 +178,12 @@ private:
  float PalletContactLiftCm = 0;
  bool bSupportingPallet = false;
  bool ClearToMove(FVector Delta, bool LiftOnly);
+ // One sampling frame each game second; movement/route/turn/lift share that frame.
+ bool RefreshObstacleChecks();
+ uint64 ObstacleCheckFrame=MAX_uint64;
+ bool bMovementObstacleClear=true, bLiftObstacleClear=true;
+ bool bRouteObstacleClear=true, bTurnObstacleClear=true;
+ FString MovementObstacleReason, LiftObstacleReason;
  bool MoveVehicle(FVector Delta);
  bool MoveToLine(FVector Destination, float Speed, float Dt);
  bool BeginChargeTrip();

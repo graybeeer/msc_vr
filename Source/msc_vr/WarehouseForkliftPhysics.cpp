@@ -156,6 +156,15 @@ void AWarehouseForklift::InitializePhysicalRig()
   auto* Constraint=Joint(*FString::Printf(TEXT("PhysicalAxle_%d"),I),Wheels[I],FTransform(Axle,Wheels[I]->GetComponentLocation()),I==0 ? SteeringBody.Get() : nullptr);
   Constraint->SetAngularTwistLimit(ACM_Free,0);
   WheelJoints.Add(Constraint);
+  if (I>0)
+  {
+   // The replacement mesh's lowered fork heels overlap its original load rollers.
+   // Exclude this internal guide pair only, as for the nested mast guides above.
+   // No drive or attachment is added; both bodies still collide with external loads.
+   auto* Clearance=Joint(*FString::Printf(TEXT("ForkRollerClearance_%d"),I),Wheels[I],Wheels[I]->GetComponentTransform(),CarriageBody);
+   Clearance->SetLinearXLimit(LCM_Free,0); Clearance->SetLinearYLimit(LCM_Free,0); Clearance->SetLinearZLimit(LCM_Free,0);
+   Clearance->SetAngularTwistLimit(ACM_Free,0); Clearance->SetAngularSwing1Limit(ACM_Free,0); Clearance->SetAngularSwing2Limit(ACM_Free,0);
+  }
  }
  DesiredLift=LiftMotorTarget=LiftOffset;
  bPhysicsReady=true;

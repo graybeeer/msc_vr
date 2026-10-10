@@ -225,7 +225,8 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  float Curvature=2.f*Local.Y/FMath::Max(900.f,Local.SizeSquared2D());
  if (Remaining<40.f) Curvature+=Sign*HeadingError/40.f;
  const FVector Preview=GetActorLocation()+GetActorForwardVector()*Sign*Desired*Dt;
- if (!NavigationClear(FTransform(GetActorQuat(),Preview))) { StopFor(TEXT("OBSTACLE ON ROUTE")); return false; }
+ if (RefreshObstacleChecks()) bRouteObstacleClear=NavigationClear(FTransform(GetActorQuat(),Preview));
+ if (!bRouteObstacleClear) { StopFor(TEXT("OBSTACLE ON ROUTE")); return false; }
  if (!CommandDrive(Sign*Desired,Curvature,Dt)) return false;
  WaitSeconds=0;
  return false;

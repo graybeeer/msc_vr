@@ -39,6 +39,8 @@
 
 상자는 허리·아랫배 앞에서 양손으로 받친다. 기존 걷기 애니메이션에 양팔 IK를 적용하며 고개 방향이 물체의 운반 높이를 바꾸지 않는다. 들고 있는 물체는 원래 텍스처를 유지한 30% 디더 페이드로 표시한다. `CarryOpacity`와 `M_CarryTransparent`가 이 표현을 담당한다.
 
+운반용 1인칭 표시 모델의 목·머리는 숨겨 뒤통수가 시야를 가리지 않게 한다. 카메라가 따라가는 원본 메시와 외부에서 보이는 캐릭터의 머리는 유지하며, 내려놓으면 기본 1인칭 표시로 돌아간다.
+
 물체는 손 운반 중에도 중력·충돌·물리를 유지하며 제한된 힘의 양손 조인트로 받친다. 실제 물체가 벽이나 사람에 막히면 목표 자세를 따라가지 못할 수 있다. 내려놓으면 현재 운동량을 유지하며, 안전 좌표로 순간 이동하거나 속도를 지우지 않는다. 아래 받침 상자를 집으면 위 상자도 깨어나 중력에 반응한다.
 
 상자를 든 채 팔레트나 그 위 상자를 바라보고 E를 누르면 목표 잡기 위치를 서서히 받침면으로 이동한다. 실제 도착·속도·지지를 확인한 뒤 손을 놓는다. 거리·높이·네 방향 지지·외곽 넘침·이동 경로를 검사한다. 빈 팔레트는 세워서 들며 기본 질량은25kg이다. 손 운반 한계는30kg이고 실제 팔 도달 범위를 넘는 물체나 짐이 올라간 팔레트는 집을 수 없다.
@@ -55,6 +57,8 @@ G 전환 시 해당 차량의 자율 작업을 일시정지한다. 플레이어�
 
 F1 메뉴에서 마우스 감도·시야각·그래픽 품질·수직 동기화를 설정하고 저장한다. 관찰 모드는 캐릭터를 그대로 두고 위에서 창고를 내려다본다.
 
+F1은 메뉴 전용이다. 엔진에서 상속되던 와이어프레임 전환용 F1 디버그 바인딩은 `Config/DefaultInput.ini`에서 제거한다.
+
 - WASD: 평면 이동, 휠: 확대·축소, 우클릭 드래그: 회전.
 - Space / Ctrl: 축소·확대, Shift: 관찰 이동 가속.
 - 전체 보기 / 1·2·3층 선택: 선택 층 위의 구조와 화물을 렌더링에서 숨김.
@@ -65,7 +69,7 @@ F1 메뉴에서 마우스 감도·시야각·그래픽 품질·수직 동기화�
 
 ## 실측 공간 기준
 
-Unreal 1 unit = 1cm다. 메시 바운드를 측정하여 배치와 충돌을 함께 보정한다. **현재 지게차 모델은 약 212.4 × 99.4 × 215cm**다. 본체 비율을 보존한 수정 모델이므로 제조사 문서의 전체 길이 164.2cm와 다르다. 모델 보정은 [REFINED_AGV.md](REFINED_AGV.md), 제조사 수치와 게임 제한은 [VNSL14_SPEC.md](VNSL14_SPEC.md)를 확인한다.
+Unreal 1 unit = 1cm다. 메시 바운드를 측정하여 배치와 충돌을 함께 보정한다. 현재 지게차는 본체 비율을 보존하고 앞바퀴를 원본 장착 위치에 둔 수정 모델이다. 실측 치수와 모델 보정은 [REFINED_AGV.md](REFINED_AGV.md), 제조사 수치와 게임 제한은 [VNSL14_SPEC.md](VNSL14_SPEC.md)를 확인한다.
 
 | 대상 | 적용 기준 |
 | --- | --- |
@@ -172,12 +176,15 @@ Unreal 1 unit = 1cm다. 메시 바운드를 측정하여 배치와 충돌을 함
 | 저장 맵·실측·외부 | `verify_first_person_warehouse.py`, `verify_real_world_scale.py`, `verify_warehouse_exterior.py` |
 | 현재 2대·G 원격 | `verify_dual_forklifts_remote_pie.py` |
 | 손 운반·적재·관찰 | `verify_two_hand_carry.py`, `verify_warehouse_interaction_pie.py`, `verify_observer_view_pie.py` |
+| F1 표시·운반 중 머리 가림·원본 바퀴 연결 | `verify_view_and_wheel_fixes_pie.py` |
 | 온전한 상자·동적 팔레트·낙하 | `verify_cargo_pallet_physics_pie.py` |
 | 하중·파손·작업자 | `verify_warehouse_strength.py`, `verify_warehouse_strength_pie.py`, `verify_warehouse_workers.py` |
 | 트럭 내부 | `verify_truck_interior_pie.py` |
 | 자율 운반·층간 운반·최종 모델 | [AUTONOMY.md](AUTONOMY.md), [MEZZANINE.md](MEZZANINE.md), [REFINED_AGV.md](REFINED_AGV.md)의 검사 진입점 |
 
 위 파일은 `Scripts/`에 있다. 검사는 원본 맵에 테스트 상태를 저장하지 않는다. 실제 플레이·파손 검사는 각각 별도 에디터 세션에서 수행한다. Python 오류가 있어도 프로세스 종료 코드가 0일 수 있으므로 성공 문구와 오류 로그를 함께 확인한다.
+
+2026-10-10 `ViewAndWheelBuild2.log`에서 Editor 빌드를 통과했다. `ViewAndWheelPIE7.log`에서는 저장된 두 차량의 원본 앞바퀴 위치와 실측 크기, F1 디버그 바인딩 제거·메뉴 표시, 운반용 머리 숨김·카메라/외부 머리 유지·놓기 복귀를 확인했다. 별도 Entry 플레이 장면을 렌더링했고, 원본 축에서 실제 바퀴 회전·약1.8m/s 주행·약89° 자리 회전을 통과했다. 축 위치 오차는 최대0.002cm 이하였다. 이 검사는 OS 키 입력 자동화나 창고 전체 자율 운반의 재검증은 아니다.
 
 기존 검증 기록은 적용 시점의 검사 범위다. 2026-10-07 `CargoPalletPhysicsPIE11.log`에서 당시 359개 상자의 초기 적재·반복 놓기·CCD·팔레트 운반·지지 이탈을 확인했다. `DynamicForkliftTransferPIE5.log`는 동적 화물의 1→3층 이동, `DynamicForkliftUnloadPIE.log`는 이후 수정한 3층 하역 구간을 별도로 검사했다. 전체 층간 경로를 최종 변경 후 다시 반복한 것으로 해석하지 않는다. 모델의 2026-10-06 검증 기록은 [REFINED_AGV.md](REFINED_AGV.md)에 있다.
 

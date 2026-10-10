@@ -97,7 +97,7 @@ bool AWarehouseForklift::UpdateLoadSupport(float Dt)
  return LostSupportSeconds<=.5f;
 }
 
-bool AWarehouseForklift::RemotePoseClear(const FTransform& Pose) const
+bool AWarehouseForklift::RemotePoseClear(const FTransform& Pose)
 {
  FCollisionQueryParams FloorParams(SCENE_QUERY_STAT(RemoteFloor),false,this);
  FloorParams.AddIgnoredActors(GetPhysicalLoads());
@@ -108,6 +108,8 @@ bool AWarehouseForklift::RemotePoseClear(const FTransform& Pose) const
  // Linear movement uses ClearToMove's swept contact test. A snapshot overlap
  // cannot distinguish bearing contact from a jam on a continuously dynamic load.
  if (Pose.GetRotation().Equals(GetActorQuat(),1.e-5f)) return true;
+ if (!RefreshObstacleChecks()) return bTurnObstacleClear;
+ bTurnObstacleClear=false;
  FComponentQueryParams Params(SCENE_QUERY_STAT(RemoteTurn),this);
  Params.AddIgnoredComponent(Ground.GetComponent());
  TArray<UStaticMeshComponent*> Parts; GetComponents(Parts);
@@ -135,6 +137,7 @@ bool AWarehouseForklift::RemotePoseClear(const FTransform& Pose) const
    if (!SupportContact) return false;
   }
  }
+ bTurnObstacleClear=true;
  return true;
 }
 

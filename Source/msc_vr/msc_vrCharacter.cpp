@@ -269,6 +269,9 @@ bool Amsc_vrCharacter::InitializeCarryMesh()
 	for (FName Bone : {FName(TEXT("hand_l")),FName(TEXT("hand_r"))})
 		if (FirstPersonMesh->GetBoneIndex(Bone)==INDEX_NONE) return false;
 	CarryMesh->SetSkeletalMeshAsset(FirstPersonMesh->GetSkeletalMeshAsset());
+	// The leaning carry pose has its own head; the camera follows the source mesh.
+	// Hide only this owner's render copy, preserving the world body and camera socket.
+	CarryMesh->HideBoneByName(TEXT("neck_01"),PBO_None);
 	for (int I=0; I<FirstPersonMesh->GetNumMaterials(); ++I) CarryMesh->SetMaterial(I,FirstPersonMesh->GetMaterial(I));
 	CarryMesh->SetDisablePostProcessBlueprint(true);
 	CarryMesh->SetAnimInstanceClass(UWarehouseCarryAnimInstance::StaticClass());

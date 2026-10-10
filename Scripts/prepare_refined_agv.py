@@ -64,9 +64,6 @@ def build(rows):
         pivot=unreal.Vector()
         if name.startswith('Wheel_'):
             raw=row['center'];pivot=unreal.Vector(raw[1]*scale-origin_x,-raw[0]*scale,raw[2]*scale)
-            if name.startswith('Wheel_Support'):
-                # Keep round wheels at uniform scale. Their outer faces define the 99.4cm vehicle envelope.
-                pivot.y=(1 if name.endswith('_L') else -1)*(49.7-row['size'][0]*scale/2)
             wheel_pivots[group]=[pivot.x,pivot.y,pivot.z]
         chain_top=(row['center'][2]+row['size'][2]/2)*scale if name=='LiftChains' else 0
         chain_height=row['size'][2]*scale if name=='LiftChains' else 0
