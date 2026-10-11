@@ -69,7 +69,7 @@ bool AWarehouseInboundZone::SlotClear(int32 Index,AWarehousePallet* Pallet,const
 void AWarehouseInboundZone::ScanInbound()
 {
  auto* Strength=AWarehouseDamageSystem::Find(this);
- if (!Strength) { Status=TEXT("입고: 하중 검사 시스템 없음"); return; }
+ if (!Strength) { Status=TEXT("입고 대기 구역: 하중 검사 시스템 없음"); return; }
  for (int32 I=Reservations.Num()-1;I>=0;--I)
  {
   const auto& Entry=Reservations[I];
@@ -153,5 +153,5 @@ void AWarehouseInboundZone::ScanInbound()
   }
  }
  for (auto It=StableSince.CreateIterator();It;++It) if (!Present.Contains(It.Key())) { StablePose.Remove(It.Key()); It.RemoveCurrent(); }
- Status=FString::Printf(TEXT("입고 1 | 적재 대기 %d | 운반 중 %d | 완료 %d"),Loaded,Reservations.Num(),CompletedCount);
+ Status=FString::Printf(TEXT("입고 대기 구역 | 적재 대기 %d | 운반 중 %d | 완료 %d"),Loaded,Reservations.Num(),CompletedCount);
 }

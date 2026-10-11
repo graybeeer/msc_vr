@@ -21,6 +21,8 @@
 #include "WarehousePallet.h"
 #include "WarehouseCargo.h"
 #include "WarehouseForklift.h"
+#include "WarehouseComputer.h"
+#include "WarehouseUIStyle.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -53,25 +55,26 @@ void Amsc_vrPlayerController::BeginPlay()
 		CargoReadoutWidget=SAssignNew(CargoReadoutBox,SBox).HAlign(HAlign_Center).VAlign(VAlign_Bottom)
 			.Padding_Lambda([RemoteActive]() { return RemoteActive() ? FMargin(24,24,0,0) : FMargin(0,0,0,48); })
 			.Visibility(EVisibility::HitTestInvisible)
-			[SNew(SBorder).Padding(12).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-				.BorderBackgroundColor(FLinearColor(0.02f,0.03f,0.04f,.9f))
+			[SNew(SBorder).Padding(WarehouseUIStyle::PanelPadding).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+				.BorderBackgroundColor(WarehouseUIStyle::Panel)
 				.Visibility_Lambda([this]() { return GetCargoReadout().IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible; })
-				[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",28)).ColorAndOpacity(FLinearColor::White)
+				[SNew(STextBlock).Font_Lambda([RemoteActive]() { return WarehouseUIStyle::Font(RemoteActive() ? WarehouseUIStyle::BodySize : WarehouseUIStyle::ReadoutSize); })
+					.ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(680)
 					.Text_Lambda([this]() { return GetCargoReadout(); })]];
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(CargoReadoutWidget.ToSharedRef(),5);
 		EmergencyAlertWidget=SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Top).Padding(FMargin(24,24))
 			.Visibility(EVisibility::HitTestInvisible)
 			[SNew(SBox).WidthOverride(820)
-				[SNew(SBorder).Padding(18).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-					.BorderBackgroundColor(FLinearColor(.35f,.015f,.01f,.96f))
+				[SNew(SBorder).Padding(WarehouseUIStyle::PanelPadding).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+					.BorderBackgroundColor(WarehouseUIStyle::DangerPanel)
 					.Visibility_Lambda([this]() { return EmergencyAlertText.IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible; })
 					[SNew(SVerticalBox)
-						+SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Bold",30))
-							.ColorAndOpacity(FLinearColor(1,.8f,.25f)).Text(FText::FromString(TEXT("비상 · 지게차 끼임 / 이동 불가")))]
-						+SVerticalBox::Slot().AutoHeight().Padding(0,10)[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",23))
-							.ColorAndOpacity(FLinearColor::White).WrapTextAt(780).Text_Lambda([this]() { return FText::FromString(EmergencyAlertText); })]
-						+SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",20))
-							.ColorAndOpacity(FLinearColor::White).WrapTextAt(780).Text(FText::FromString(TEXT("주변 장애물을 제거하거나 G로 수동 탈출하세요. 해결 후 E로 재점검·재개합니다.")))]]]];
+						+SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::TitleSize,true))
+							.ColorAndOpacity(WarehouseUIStyle::Warning).Text(FText::FromString(TEXT("비상 · 지게차 끼임 / 이동 불가")))]
+						+SVerticalBox::Slot().AutoHeight().Padding(0,8)[SNew(STextBlock).Font(WarehouseUIStyle::Font())
+							.ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(780).Text_Lambda([this]() { return FText::FromString(EmergencyAlertText); })]
+						+SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font())
+							.ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(780).Text(FText::FromString(TEXT("주변 장애물을 제거하거나 G로 수동 탈출하세요. 해결 후 E로 재점검·재개합니다.")))]]]];
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(EmergencyAlertWidget.ToSharedRef(),200);
 	}
 
@@ -134,15 +137,19 @@ bool Amsc_vrPlayerController::ShouldUseTouchControls() const
 
 void Amsc_vrPlayerController::UpdateInputMode()
 {
-	const bool Locked=MenuWidget.IsValid() || bObserverView;
+	const bool Locked=IsWarehouseMenuOpen() || bObserverView;
 	if (Locked!=bWarehouseInputLocked)
 	{
 		SetIgnoreMoveInput(Locked); SetIgnoreLookInput(Locked);
 		bWarehouseInputLocked=Locked;
 		if (auto* PlayerCharacter=Cast<ACharacter>(GetPawn())) PlayerCharacter->GetCharacterMovement()->StopMovementImmediately();
 	}
-	bShowMouseCursor=MenuWidget.IsValid();
-	if (MenuWidget.IsValid())
+	bShowMouseCursor=IsWarehouseMenuOpen();
+	if (ComputerWidget.IsValid())
+	{
+		FInputModeUIOnly Mode;Mode.SetWidgetToFocus(ComputerWidget);SetInputMode(Mode);
+	}
+	else if (MenuWidget.IsValid())
 	{
 		FInputModeGameAndUI Mode;
 		Mode.SetHideCursorDuringCapture(false);
@@ -165,24 +172,26 @@ void Amsc_vrPlayerController::CloseWarehouseMenu()
 
 void Amsc_vrPlayerController::ToggleWarehouseMenu()
 {
+	if (ComputerWidget.IsValid()) { CloseWarehouseComputer(); return; }
 	if (!IsLocalController() || !GetWorld()->GetGameViewport()) return;
 	if (MenuWidget.IsValid()) { CloseWarehouseMenu(); return; }
 	if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn())) OperatorCharacter->EndRemoteControl();
 	static const FTextBlockStyle ButtonText=FTextBlockStyle(FCoreStyle::Get().GetWidgetStyle<FTextBlockStyle>("NormalText"))
-		.SetFont(FCoreStyle::GetDefaultFontStyle("Regular",20)).SetColorAndOpacity(FLinearColor::White);
+		.SetFont(WarehouseUIStyle::Font()).SetColorAndOpacity(WarehouseUIStyle::Text);
 	auto Panel=SNew(SVerticalBox);
 	auto Text=[&](const FString& Label)
 	{
-		Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",20))
-			.ColorAndOpacity(FLinearColor::White).Text(FText::FromString(Label)).AutoWrapText(true)];
+		Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font())
+			.ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(Label)).AutoWrapText(true)];
 	};
 	auto Button=[&](const FString& Label, TFunction<void()> Action)
 	{
 		Panel->AddSlot().AutoHeight().Padding(8,4)[SNew(SButton).IsFocusable(false).ContentPadding(10).TextStyle(&ButtonText)
 			.Text(FText::FromString(Label)).OnClicked_Lambda([Action]() { Action(); return FReply::Handled(); })];
 	};
-	Text(TEXT("물류창고 · 설정 / 관찰"));
-	Text(TEXT("F1: 메뉴  |  Shift: 달리기  |  Ctrl: 앉기  |  E: 집기 / 적재\nG: 바라보는 지게차를 스마트폰으로 원격 조작 / 종료\n원격: W/S 전후진 · A/D 조향·자리 회전 · R/F 포크 승강 · Space 제동\n메뉴와 관찰 중에도 창고 시뮬레이션은 계속됩니다."));
+	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::TitleSize,true))
+		.ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("물류창고 · 설정 / 관찰")))];
+	Text(TEXT("F1: 메뉴  |  Shift: 달리기  |  Ctrl: 앉기  |  E: 집기 / 적재\nG: 바라보는 지게차의 후방 3인칭 원격 조작 / 종료\n원격: W/S 전후진 · A/D 조향·자리 회전 · R/F 포크 승강 · Space 제동\n마우스: 지게차 주변 보기 · 종료하면 플레이어 1인칭 복귀\n메뉴와 관찰 중에도 창고 시뮬레이션은 계속됩니다."));
 	Button(bObserverView ? TEXT("1인칭 캐릭터로 돌아가기") : TEXT("전지적 관찰 시점으로 전환"),[this]() { ToggleObserverView(); CloseWarehouseMenu(); });
 	Button(TEXT("창고 전체 보기"),[this]() { if (!bObserverView) ToggleObserverView(); SetObserverFloor(-1); CloseWarehouseMenu(); });
     for (int32 Floor=0; Floor<3; ++Floor)
@@ -204,8 +213,8 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 	MenuWidget=SNew(SBorder).HAlign(HAlign_Center).VAlign(VAlign_Center)
 		.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(0,0,0,.72f))
 		[SNew(SBox).WidthOverride(680).MaxDesiredHeight(760)
-			[SNew(SBorder).Padding(18).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-				.BorderBackgroundColor(FLinearColor(.025f,.035f,.05f,1))
+			[SNew(SBorder).Padding(WarehouseUIStyle::PanelPadding).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+				.BorderBackgroundColor(WarehouseUIStyle::Panel)
 				[SNew(SScrollBox)+SScrollBox::Slot()[Panel]]]];
 	GetWorld()->GetGameViewport()->AddViewportWidgetContent(MenuWidget.ToSharedRef(),100);
 	UpdateInputMode();
@@ -213,6 +222,7 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 
 void Amsc_vrPlayerController::ToggleObserverView()
 {
+	if (ComputerWidget.IsValid()) CloseWarehouseComputer();
 	if (!GetPawn()) return;
 	if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn())) OperatorCharacter->EndRemoteControl();
 	if (!bObserverView)
@@ -326,6 +336,7 @@ void Amsc_vrPlayerController::UpdateObserverCamera()
 void Amsc_vrPlayerController::PlayerTick(float Dt)
 {
 	Super::PlayerTick(Dt);
+	if (ComputerWidget.IsValid() && (!IsValid(ActiveComputer) || !ActiveComputer->CanUse())) CloseWarehouseComputer();
 	UpdateEmergencyAlerts(Dt);
 	if (CargoReadoutBox.IsValid())
 	{
@@ -368,16 +379,24 @@ void Amsc_vrPlayerController::PlayerTick(float Dt)
 
 FText Amsc_vrPlayerController::GetCargoReadout() const
 {
- if (MenuWidget.IsValid() || !PlayerCameraManager || !GetPawn()) return FText::GetEmpty();
+ if (IsWarehouseMenuOpen() || !PlayerCameraManager || !GetPawn()) return FText::GetEmpty();
  if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn()))
   if (auto* Vehicle=OperatorCharacter->GetRemoteForklift())
-   return FText::FromString(FString::Printf(TEXT("스마트폰 원격 조작 · %s\nW/S 전후진 · A/D 조향·자리 회전 · R/F 포크 승강 · Space 제동 · G 종료\n%s\n속도 %.2f m/s · 배터리 %.0f%% · 적재 %.0f / %.0f kg"),
+   return FText::FromString(FString::Printf(TEXT("지게차 후방 시점 · 스마트폰 원격 조작 · %s\nW/S 전후진 · A/D 조향·자리 회전 · R/F 포크 승강 · Space 제동\n마우스 주변 보기 · G 종료 / 플레이어 1인칭 복귀\n%s\n속도 %.2f m/s · 배터리 %.0f%% · 적재 %.0f / %.0f kg"),
     *Vehicle->VehicleName,*Vehicle->Status,FMath::Abs(Vehicle->CurrentSpeedCm)*.01f,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
  if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn()))
  {
   if (auto* Cargo=Cast<AWarehouseCargo>(OperatorCharacter->GetHeldCargo())) return Cargo->GetCargoDescription();
   if (auto* Pallet=Cast<AWarehousePallet>(OperatorCharacter->GetHeldCargo()))
    return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\nE : 안전한 곳에 내려놓기"),Pallet->PalletMassKg));
+  if (!bObserverView)
+   if (Cast<AWarehouseComputer>(OperatorCharacter->GetInteractionTarget()))
+    return FText::FromString(TEXT("E : 관제 컴퓨터 접속\n실시간 재고 · 운반 작업 · 지게차 관리"));
+  if (!bObserverView)
+   if (auto* Vehicle=Cast<AWarehouseForklift>(OperatorCharacter->GetInteractionTarget()))
+    return FText::FromString(FString::Printf(TEXT("E : %s  |  G : 스마트폰 원격 조작\n%s\n속도 %.2f m/s · 배터리 %.0f%% · 적재 %.0f / %.0f kg"),
+     Vehicle->bPowered ? TEXT("자율 운행 정지") : TEXT("자율 운행 시작 / 재개"),
+     *Vehicle->Status,FMath::Abs(Vehicle->CurrentSpeedCm)*.01f,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
  }
  const FVector Eye=PlayerCameraManager->GetCameraLocation();
  FHitResult Hit;
@@ -389,17 +408,13 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
   if (!bObserverView && Hit.Distance<=250.f)
    if (auto* Pallet=Cast<AWarehousePallet>(Hit.GetActor()))
     return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\nE : 빈 팔레트 들기"),Pallet->PalletMassKg));
-  if (!bObserverView && Hit.Distance<=300.f)
-   if (auto* Vehicle=Cast<AWarehouseForklift>(Hit.GetActor()))
-    return FText::FromString(FString::Printf(TEXT("E : %s  |  G : 스마트폰 원격 조작\n%s\n속도 %.2f m/s · 배터리 %.0f%% · 적재 %.0f / %.0f kg"),
-     Vehicle->bPowered ? TEXT("자율 운행 정지") : TEXT("자율 운행 시작 / 재개"),
-     *Vehicle->Status,FMath::Abs(Vehicle->CurrentSpeedCm)*.01f,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
  }
  return FText::GetEmpty();
 }
 
 void Amsc_vrPlayerController::EndPlay(const EEndPlayReason::Type Reason)
 {
+	CloseWarehouseComputer();
 	if (EmergencyAudio) { EmergencyAudio->Stop(); EmergencyAudio->DestroyComponent(); }
 	if (EmergencyAlertWidget.IsValid() && GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(EmergencyAlertWidget.ToSharedRef());
 	EmergencyAlertWidget.Reset(); EmergencyAudio=nullptr; EmergencyTone=nullptr;

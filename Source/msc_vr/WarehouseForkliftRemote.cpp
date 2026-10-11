@@ -40,7 +40,11 @@ bool AWarehouseForklift::PalletClaimedByOther(AWarehousePallet* Pallet) const
 
 bool AWarehouseForklift::BeginRemoteControl(AActor* Operator)
 {
- if (!IsValid(Operator) || FVector::Dist(Operator->GetActorLocation(),GetActorLocation())>350) return false;
+ if (!IsValid(Operator)) return false;
+ FVector Center,Extent;GetActorBounds(true,Center,Extent);
+ // The character selects the visible vehicle outline, not its origin behind
+ // the forks. Use the same physical extent for the remote proximity guard.
+ if (FVector::Dist(Operator->GetActorLocation(),FBox(Center-Extent,Center+Extent).GetClosestPointTo(Operator->GetActorLocation()))>350) return false;
  if (IsRemoteControlled()) return RemoteOperator==Operator;
  if (!CheckSystems().IsEmpty()) { SetStatus(TEXT("REMOTE UNAVAILABLE: ")+CheckSystems()); return false; }
  if (bFloorTransfer || (IsValid(Elevator) && Elevator->ReservedVehicle==this))

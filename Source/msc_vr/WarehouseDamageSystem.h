@@ -53,7 +53,8 @@ public:
  // Actual native collision bounds, including every skeletal body and each welded body once.
  // Returns an invalid box when the actor has no live collidable physics representation.
  UFUNCTION(BlueprintPure, Category="Physics") static FBox GetPhysicalBounds(AActor* Actor);
- UFUNCTION(BlueprintCallable, Category="Strength") TArray<AActor*> GetSupportedActors(AActor* Object);
+ // Bulk inventory reads reuse one support snapshot instead of rescanning the scene for every pallet.
+ UFUNCTION(BlueprintCallable, Category="Strength") TArray<AActor*> GetSupportedActors(AActor* Object,bool Refresh=true);
  static AWarehouseDamageSystem* Find(const AActor* Context);
 private:
  struct FBodyMotion

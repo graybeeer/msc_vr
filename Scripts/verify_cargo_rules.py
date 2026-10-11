@@ -43,7 +43,8 @@ level=unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 assert level.load_level('/Game/FirstPerson/Lvl_FirstPerson')
 actors=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 loads=[a for a in actors.get_all_level_actors() if isinstance(a,unreal.WarehouseCargo)]
-assert len(loads)==311
+assert loads
+assert len({str(a.get_editor_property('cargo_id')) for a in loads})==len(loads)
 for actor in loads:
     r=actor.get_editor_property('packing');assert r.valid,actor.get_actor_label()
     assert values(generate(r.delivery_seed,r.item_index,r.product_index,

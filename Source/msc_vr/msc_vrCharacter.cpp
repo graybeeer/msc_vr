@@ -22,8 +22,10 @@
 #include "WarehouseCargo.h"
 #include "WarehousePallet.h"
 #include "msc_vrPlayerController.h"
+#include "msc_vrCameraManager.h"
 #include "Engine/Engine.h"
 #include "WarehouseChargingStation.h"
+#include "WarehouseComputer.h"
 #include "WarehouseCarryAnimInstance.h"
 #include "WarehouseWorker.h"
 #include "WarehousePhysics.h"
@@ -238,29 +240,56 @@ void Amsc_vrCharacter::ToggleCarry()
 		return;
 	}
 
-	const FVector Eye = FirstPersonCameraComponent->GetComponentLocation();
-	const FVector Forward = FirstPersonCameraComponent->GetForwardVector();
-	FHitResult Hit;
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(Interact), true, this);
-	if (!GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye + Forward * 250.f, ECC_Visibility, Params)) return;
-	if (AWarehouseForklift* Forklift = Cast<AWarehouseForklift>(Hit.GetActor()))
+	AActor* Target=GetInteractionTarget();
+	if (auto* Computer=Cast<AWarehouseComputer>(Target))
+	{
+		if (auto* PC=Cast<Amsc_vrPlayerController>(Controller)) PC->OpenWarehouseComputer(Computer);
+		return;
+	}
+	if (AWarehouseForklift* Forklift = Cast<AWarehouseForklift>(Target))
 	{
 		Forklift->TogglePower();
 		return;
 	}
-	if (auto* Station=Cast<AWarehouseChargingStation>(Hit.GetActor()))
+	if (auto* Station=Cast<AWarehouseChargingStation>(Target))
 	{
 		Station->RequestManualCharge();
 		return;
 	}
-	if (auto* Pallet=Cast<AWarehousePallet>(Hit.GetActor())) { TryPickupPallet(Pallet); return; }
-	AWarehouseCargo* Best = Cast<AWarehouseCargo>(Hit.GetActor());
+	if (auto* Pallet=Cast<AWarehousePallet>(Target)) { TryPickupPallet(Pallet); return; }
+	AWarehouseCargo* Best = Cast<AWarehouseCargo>(Target);
 	if (!Best)
 	{
 		return;
 	}
 
 	TryPickupCargo(Best);
+}
+
+AActor* Amsc_vrCharacter::GetInteractionTarget(float RangeCm) const
+{
+ const FVector Eye=FirstPersonCameraComponent->GetComponentLocation();
+ const FVector End=Eye+FirstPersonCameraComponent->GetForwardVector()*FMath::Clamp(RangeCm,0.f,400.f);
+ FCollisionQueryParams Params(SCENE_QUERY_STAT(WarehouseInteraction),false,this);
+ FHitResult Hit;
+ const bool Blocking=GetWorld()->LineTraceSingleByChannel(Hit,Eye,End,ECC_Visibility,Params);
+ if (Blocking && (Cast<AWarehouseForklift>(Hit.GetActor()) || Cast<AWarehouseCargo>(Hit.GetActor()) ||
+     Cast<AWarehousePallet>(Hit.GetActor()) || Cast<AWarehouseChargingStation>(Hit.GetActor()) || Cast<AWarehouseComputer>(Hit.GetActor()))) return Hit.GetActor();
+ // A forklift's visible outline includes gaps between the mast and sensor
+ // poles. Select that outline without adding any fake physical collider.
+ AWarehouseForklift* Best=nullptr;float Nearest=1.f;
+ for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
+ {
+  FVector Center,Extent,Point,Normal;float Enter,Reverse;
+  It->GetActorBounds(true,Center,Extent);
+  const FBox Box(Center-Extent,Center+Extent);
+  if (!FMath::LineExtentBoxIntersection(Box,Eye,End,FVector::ZeroVector,Point,Normal,Enter) ||
+      !FMath::LineExtentBoxIntersection(Box,End,Eye,FVector::ZeroVector,Point,Normal,Reverse)) continue;
+  // A wall or rack on the sight line before the rear of the outline blocks selection.
+  if (Blocking && Hit.Time<1.f-Reverse-.001f) continue;
+  if (Enter<Nearest) { Best=*It;Nearest=Enter; }
+ }
+ return Best ? Best : Hit.GetActor();
 }
 
 bool Amsc_vrCharacter::InitializeCarryMesh()
@@ -323,7 +352,7 @@ void Amsc_vrCharacter::UpdatePhysicalMovement(float DeltaSeconds)
 	const float DesiredHalf=bPhysicalCrouchRequested ? 58.f : 96.f;
 	const float HeldMass=IsValid(HeldCargo) ? CarryBody(HeldCargo)->GetMass() : 0.f;
 	const FVector LoadOffset=IsValid(HeldCargo) ? CarryBody(HeldCargo)->GetCenterOfMass()-GetCapsuleComponent()->GetCenterOfMass() : FVector::ZeroVector;
-	bPhysicalGround=WarehouseHumanPhysics::DriveCapsule(this,Input*Speed,500.f,JumpSupportDelay<=0.f,DesiredHalf,&GroundDistance,HeldMass,LoadOffset);
+	bPhysicalGround=WarehouseHumanPhysics::DriveCapsule(this,Input*Speed,650.f,JumpSupportDelay<=0.f,DesiredHalf,&GroundDistance,HeldMass,LoadOffset);
 	auto* Movement=GetCharacterMovement();
 	Movement->Velocity=GetVelocity();
 	// Chaos owns displacement; retain the template's animation telemetry only.
@@ -404,11 +433,7 @@ void Amsc_vrCharacter::SetRemoteCharacterFade(bool Enabled)
 void Amsc_vrCharacter::ToggleRemoteControl()
 {
 	if (IsValid(RemoteForklift)) { EndRemoteControl(); return; }
-	FHitResult Hit;
-	const FVector Eye=FirstPersonCameraComponent->GetComponentLocation();
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(RemoteInteract),true,this);
-	if (GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+FirstPersonCameraComponent->GetForwardVector()*300.f,ECC_Visibility,Params))
-		BeginRemoteControl(Cast<AWarehouseForklift>(Hit.GetActor()));
+	BeginRemoteControl(Cast<AWarehouseForklift>(GetInteractionTarget()));
 }
 
 bool Amsc_vrCharacter::BeginRemoteControl(AWarehouseForklift* Forklift)
@@ -421,10 +446,7 @@ bool Amsc_vrCharacter::BeginRemoteControl(AWarehouseForklift* Forklift)
 	}
 	if (bPhysicalRagdoll || PlacementTime>=0 || bObserverPresentation || (Controller && Controller->IsMoveInputIgnored())) return false;
 	if (auto* PC=Cast<Amsc_vrPlayerController>(Controller); PC && (PC->IsObserverView() || PC->IsWarehouseMenuOpen())) return false;
-	const FVector Eye=FirstPersonCameraComponent->GetComponentLocation();
-	FHitResult Hit;
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(RemoteSight),true,this);
-	if (!GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+FirstPersonCameraComponent->GetForwardVector()*300.f,ECC_Visibility,Params) || Hit.GetActor()!=Forklift) return false;
+	if (GetInteractionTarget()!=Forklift) return false;
 	if (!InitializeRemotePresentation() || !Forklift->BeginRemoteControl(this)) return false;
 	RemoteForklift=Forklift;
 	SetRemoteCharacterFade(true);
@@ -439,11 +461,17 @@ bool Amsc_vrCharacter::BeginRemoteControl(AWarehouseForklift* Forklift)
 	auto* Viewport=GetWorld()->GetGameViewport();
 	bRemoteHadViewportFocus=Viewport && Viewport->Viewport && Viewport->Viewport->HasFocus();
 	UpdateCarryPose(0.f);
+	if (auto* PC=Cast<APlayerController>(Controller))
+	{
+		if (auto* Camera=Cast<Amsc_vrCameraManager>(PC->PlayerCameraManager)) Camera->ResetRemoteCamera();
+		PC->SetViewTargetWithBlend(Forklift,.2f,VTBlend_Cubic,0.f,true);
+	}
 	return true;
 }
 
 void Amsc_vrCharacter::EndRemoteControl()
 {
+	const bool HadRemote=IsValid(RemoteForklift) || RemotePhone->IsActive();
 	if (IsValid(RemoteForklift))
 	{
 		RemoteForklift->SetRemoteInput(0,0,0);
@@ -464,13 +492,15 @@ void Amsc_vrCharacter::EndRemoteControl()
 		FirstPersonMesh->SetVisibility(true,false);
 		FirstPersonCameraComponent->FirstPersonFieldOfView=NormalFirstPersonFOV;
 	}
+	if (HadRemote)
+		if (auto* PC=Cast<APlayerController>(Controller)) PC->SetViewTargetWithBlend(this,.15f,VTBlend_Cubic,0.f,true);
 }
 
 void Amsc_vrCharacter::UpdateRemoteControl()
 {
 	if (!IsValid(RemoteForklift))
 	{
-		if (RemotePhone->IsVisible()) EndRemoteControl();
+		if (RemotePhone->IsActive()) EndRemoteControl();
 		return;
 	}
 	auto* PC=Cast<Amsc_vrPlayerController>(Controller);
@@ -903,6 +933,10 @@ void Amsc_vrCharacter::LookInput(const FInputActionValue& Value)
 void Amsc_vrCharacter::DoAim(float Yaw, float Pitch)
 {
 	if (auto* PC=Cast<Amsc_vrPlayerController>(Controller)) { Yaw*=PC->MouseSensitivity; Pitch*=PC->MouseSensitivity; }
+	if (IsValid(RemoteForklift))
+		if (auto* PC=Cast<APlayerController>(Controller))
+			if (auto* Camera=Cast<Amsc_vrCameraManager>(PC->PlayerCameraManager))
+			{ Camera->AimRemoteCamera(Yaw,Pitch);return; }
 	if (GetController())
 	{
 		// pass the rotation inputs

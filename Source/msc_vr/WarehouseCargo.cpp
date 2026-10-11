@@ -49,6 +49,7 @@ FWarehouseCargoRecipe AWarehouseCargo::GenerateCargoRecipe(int32 DeliverySeed, i
  FRandomStream Random(static_cast<int32>(Seed));
  const int32 Selected = Random.RandRange(0, GetCargoProfileCount()-1);
  Result.ProductIndex = ProductIndex < 0 ? Selected : ProductIndex;
+ Result.RuleVersion = 2;
  const FCargoProfile& Profile = CargoProfiles[Result.ProductIndex];
  Result.DeliverySeed = DeliverySeed;
  Result.ItemIndex = ItemIndex;
@@ -57,9 +58,11 @@ FWarehouseCargoRecipe AWarehouseCargo::GenerateCargoRecipe(int32 DeliverySeed, i
  Result.ProductKind = FText::FromString(Profile.Kind);
  Result.bFragile = Profile.Fragile;
  Result.PackedDensityKgM3 = Profile.PackedDensity * Random.FRandRange(.92f,1.08f);
- const double MaxFactor = FMath::Min(1.25, (MaxSizeCm / Profile.ShapeCm).GetMin());
+ const double LegacyFactor = FMath::Min(1.25, (MaxSizeCm / Profile.ShapeCm).GetMin());
+ // Default parcels keep their original distribution. Only larger quantities unlock the larger envelope.
+ const double MaxFactor = FMath::Min(AmountScale>1.f ? 1.5625 : 1.25, (MaxSizeCm / Profile.ShapeCm).GetMin());
  const double ReferenceVolume = Profile.ShapeCm.X * Profile.ShapeCm.Y * Profile.ShapeCm.Z / 1000000.;
- const double AvailableNetMass = Result.PackedDensityKgM3 * ReferenceVolume * FMath::Pow(MaxFactor,3.);
+ const double AvailableNetMass = Result.PackedDensityKgM3 * ReferenceVolume * FMath::Pow(LegacyFactor,3.);
  const double DesiredNetMass = FMath::Min(22.,AvailableNetMass) * Random.FRandRange(.45f,1.f) * AmountScale;
  // When space is limited reduce the contents as well as the box, never shrink a fixed-mass package.
  const double Factor = FMath::Min(MaxFactor,FMath::Pow(DesiredNetMass / (Result.PackedDensityKgM3 * ReferenceVolume),1./3.));
@@ -75,7 +78,7 @@ FWarehouseCargoRecipe AWarehouseCargo::GenerateCargoRecipe(int32 DeliverySeed, i
 
 bool AWarehouseCargo::ApplyCargoRecipe(const FWarehouseCargoRecipe& Recipe)
 {
- if (!Recipe.bValid || Recipe.RuleVersion != 1 || Recipe.SizeCm.ContainsNaN() || Recipe.SizeCm.GetMin() <= 0 ||
+ if (!Recipe.bValid || Recipe.RuleVersion < 1 || Recipe.RuleVersion > 2 || Recipe.SizeCm.ContainsNaN() || Recipe.SizeCm.GetMin() <= 0 ||
      !FMath::IsFinite(Recipe.GrossMassKg) || Recipe.GrossMassKg < .1f || !Body->GetStaticMesh() || GetAttachParentActor()) return false;
  if (HasActorBegunPlay() && Body->IsSimulatingPhysics()) return false;
  const FVector MeshSize = Body->GetStaticMesh()->GetBoundingBox().GetSize();

@@ -4,6 +4,8 @@ from pathlib import Path
 import unreal
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from apply_real_world_scale import fit
+from warehouse_staging_layout import (INBOUND, STAGING_ZONES, PALLET_POSES,
+    VEHICLE_POSES, OUTBOUND_PALLETS, RELOCATED_POSES, NAVIGATION_ANCHORS)
 
 LEVEL='/Game/FirstPerson/Lvl_FirstPerson'
 RACK_CENTRES=[(2620,y) for y in (-1600,-950,-300,350)]
@@ -22,7 +24,8 @@ def configure_inbound_area():
         named[label]=a
         return a
     def clone(label,template):
-        if label in named:return named[label]
+        if label in named:
+            named[label].modify();return named[label]
         a=setup(actors.spawn_actor_from_class(unreal.StaticMeshActor,template.get_actor_location(),template.get_actor_rotation()),label)
         part=a.static_mesh_component; source=template.static_mesh_component
         part.set_static_mesh(source.static_mesh)
@@ -46,9 +49,11 @@ def configure_inbound_area():
         if label.startswith('EXT_FrontJoint_1350_'):
             c,e=a.get_actor_bounds(False);fit(a,(2100,2*e.y,2*e.z),(1750,c.y,c.z))
         if label.startswith('EXT_FrontMullion_1350_') and 'InboundExpanded' not in [str(t) for t in a.tags]:
+            a.modify()
             p=a.get_actor_location();a.set_actor_location(unreal.Vector(700+(p.x-700)*2100/1300,p.y,p.z),False,False)
             a.tags=list(a.tags)+[unreal.Name('InboundExpanded')]
         if label.startswith(('EXT_SideCladding_1','EXT_SideBlueBand_1','EXT_SideWindow_1','EXT_SideMullion_1_','EXT_SideParapet_1')) and 'InboundExpanded' not in [str(t) for t in a.tags]:
+            a.modify()
             a.set_actor_location(a.get_actor_location()+unreal.Vector(800,0,0),False,False)
             a.tags=list(a.tags)+[unreal.Name('InboundExpanded')]
     c,e=named['EXT_FrontParapet'].get_actor_bounds(False)
@@ -64,6 +69,7 @@ def configure_inbound_area():
     for y in (-1600,-650,300,1250):
         label=f'WH_InboundLight_{y}'
         light=named.get(label) or setup(actors.spawn_actor_from_class(unreal.PointLight,unreal.Vector(2300,y,1000)),label)
+        light.modify()
         part=light.point_light_component
         part.set_mobility(unreal.ComponentMobility.MOVABLE)
         part.set_editor_property('intensity_units',unreal.LightUnits.LUMENS)
@@ -112,39 +118,41 @@ def configure_inbound_area():
                     pose=unreal.Transform(location=unreal.Vector(x,y+offset,z),rotation=unreal.Rotator()),
                     clear_height_cm=110 if z==20 else 100,capacity_kg=reference.level_capacity_kg))
     line_template=named['WH_TrainingLine_650']
-    for index,(cx,cy,hx,hy) in enumerate(((2350,-1640,190,270),(2350,-1080,190,210)),1):
+    for index,(cx,cy,hx,hy) in enumerate(STAGING_ZONES,1):
         for side,center,size in [('W',(cx-hx,cy,.12),(8,2*hy, .2)),('E',(cx+hx,cy,.12),(8,2*hy,.2)),
                                  ('S',(cx,cy-hy,.12),(2*hx,8,.2)),('N',(cx,cy+hy,.12),(2*hx,8,.2))]:
             a=clone(f'WH_InboundZone{index}_Paint_{side}',line_template);fit(a,size,center)
             a.static_mesh_component.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION)
         label=f'WH_InboundZone{index}_Label'
         sign=named.get(label) or setup(actors.spawn_actor_from_class(unreal.TextRenderActor,unreal.Vector(cx,cy,1)),label)
+        sign.modify()
         sign.set_actor_location(unreal.Vector(cx,cy,1),False,False)
         sign.set_actor_rotation(unreal.Rotator(pitch=90,yaw=-90),False)
         text=sign.get_component_by_class(unreal.TextRenderComponent)
-        text.set_text('1  INBOUND > RACK' if index==1 else '2  BUFFER')
+        text.set_text('INBOUND WAIT' if index==1 else 'OUTBOUND WAIT')
+        text.set_horizontal_alignment(unreal.HorizTextAligment.EHTA_CENTER)
         text.set_world_size(22);text.set_text_render_color(unreal.Color(r=255,g=190,b=20,a=255))
         sign.set_actor_enable_collision(False)
     fleet=[named['WH_AutonomousForklift'],named['WH_AutonomousForklift_02']]
     canonical=unreal.load_asset('/Game/Warehouse/Physics/SM_Pallet_110')
-    for index,(vehicle,pallet_label,cargo_label,y) in enumerate(zip(fleet,['WH_TrainingPallet','WH_TrainingPallet_02'],['MZ_TransferCargo','WH_TransferCargo_02'],[-1662.5,-1537.5])):
+    for vehicle,pallet_label,cargo_label in zip(fleet,['WH_TrainingPallet','WH_TrainingPallet_02'],['MZ_TransferCargo','WH_TransferCargo_02']):
         pallet=named[pallet_label]; cargo=named[cargo_label]
-        if 'InboundStraight' not in [str(t) for t in pallet.tags]:
-            old=pallet.get_actor_location();pallet.set_actor_location(unreal.Vector(2445,y,.1),False,False)
+        pallet.modify();cargo.modify();vehicle.modify()
+        if 'DockSideStaging' not in [str(t) for t in pallet.tags]:
+            old=pallet.get_actor_location();pallet.set_actor_location(unreal.Vector(*PALLET_POSES[pallet_label]),False,False)
             pallet.set_actor_rotation(unreal.Rotator(),False)
             cargo.set_actor_location(cargo.get_actor_location()+pallet.get_actor_location()-old,False,False)
-            pallet.tags=list(pallet.tags)+[unreal.Name('InboundStraight')]
+            pallet.tags=list(pallet.tags)+[unreal.Name('DockSideStaging')]
         vehicle.set_editor_property('pending_jobs',[]);vehicle.set_editor_property('target_pallet',None)
-        if 'InboundStraight' not in [str(t) for t in vehicle.tags]:
-            vehicle.set_actor_location(unreal.Vector(2225,-1537.5 if index==0 else -1662.5,0),False,False)
+        if 'DockSideStaging' not in [str(t) for t in vehicle.tags]:
+            vehicle.set_actor_location(unreal.Vector(*VEHICLE_POSES[vehicle.get_actor_label()]),False,False)
             vehicle.set_actor_rotation(unreal.Rotator(),False)
-            vehicle.tags=list(vehicle.tags)+[unreal.Name('InboundStraight')]
+            vehicle.tags=list(vehicle.tags)+[unreal.Name('DockSideStaging')]
         vehicle.set_editor_property('auto_start',True)
         anchors=[unreal.Transform(location=unreal.Vector(x,y,0),rotation=unreal.Rotator(yaw=yaw))
-                 for x,y,yaw in [(2225,-1790,0),(2225,-1490,0),(2110,-1000,-90),(2250,-650,90),
-                    (2250,-200,90),(2250,300,90),(2110,-1300,-90),(1650,-1790,0),(1100,-1790,0)]]
-        vehicle.set_editor_property('navigation_anchors',list(vehicle.get_editor_property('navigation_anchors'))+[
-            p for p in anchors if not any((p.translation-a.translation).length()<1 for a in vehicle.get_editor_property('navigation_anchors'))])
+                 for x,y,yaw in NAVIGATION_ANCHORS]
+        vehicle.set_editor_property('navigation_anchors',anchors+[
+            p for p in vehicle.get_editor_property('navigation_anchors') if not any((p.translation-a.translation).length()<1 for a in anchors)])
     # A third empty pallet remains available for the player's first new inbound load.
     label='WH_InboundPallet_Empty'
     pallet=named.get(label)
@@ -153,14 +161,40 @@ def configure_inbound_area():
         pallet.get_component_by_class(unreal.StaticMeshComponent).set_static_mesh(canonical)
         specs.append(unreal.WarehouseStrength(name=label,members=[pallet],physics_meshes=[canonical],failure=unreal.WarehouseFailure.CRUSH,
             mass_kg=25,rated_load_kg=1500,impact_yield_j=120,impact_failure_j=900,overload_seconds=10))
-    if 'InboundStraight' not in [str(t) for t in pallet.tags]:
-        pallet.set_actor_location(unreal.Vector(2445,-1840,.1),False,False)
-        pallet.tags=list(pallet.tags)+[unreal.Name('InboundStraight')]
+    if 'DockSideStaging' not in [str(t) for t in pallet.tags]:
+        pallet.modify()
+        pallet.set_actor_location(unreal.Vector(*PALLET_POSES[label]),False,False)
+        pallet.tags=list(pallet.tags)+[unreal.Name('DockSideStaging')]
+    # Keep parcel appearance, mass and stacking offsets when moving a loaded pallet.
+    for label,position in RELOCATED_POSES.items():
+        a=named[label]
+        if 'DockSideStaging' in [str(t) for t in a.tags]:continue
+        a.modify();delta=unreal.Vector(*position)-a.get_actor_location()
+        a.set_actor_location(unreal.Vector(*position),False,False)
+        a.tags=list(a.tags)+[unreal.Name('DockSideStaging')]
+        if label=='WH_Drop_Pallet':
+            cargo=named['WH_Drop_Box'];cargo.modify()
+            cargo.set_actor_location(cargo.get_actor_location()+delta,False,False)
+    for label,position in OUTBOUND_PALLETS.items():
+        if label in named:continue
+        pallet=setup(actors.spawn_actor_from_class(unreal.WarehousePallet,unreal.Vector(*position)),label)
+        pallet.get_component_by_class(unreal.StaticMeshComponent).set_static_mesh(canonical)
+        pallet.tags=list(pallet.tags)+[unreal.Name('DockSideStaging')]
+        specs.append(unreal.WarehouseStrength(name=label,members=[pallet],physics_meshes=[canonical],failure=unreal.WarehouseFailure.CRUSH,
+            mass_kg=25,rated_load_kg=1500,impact_yield_j=120,impact_failure_j=900,overload_seconds=10))
+    # Trim the old training paint at the new staging edge; pedestrian crossing stays in the central opening.
+    for x in (650,1350):resize(f'WH_TrainingLine_{x}',(6,2000,.4),(x,-300,.2))
+    resize('WH_TrainingEnd_-1600',(700,6,.4),(1000,-1300,.2))
+    for i in range(12):resize(f'WH_Crosswalk_{i}',(120,12,.4),(0,-1900+i*25,.3))
     zone=named.get('WH_InboundDispatch') or setup(actors.spawn_actor_from_class(unreal.WarehouseInboundZone,unreal.Vector(2350,-1640,0)),'WH_InboundDispatch')
-    zone.set_actor_location(unreal.Vector(2350,-1640,0),False,False)
-    zone.set_editor_property('half_size_cm',unreal.Vector(190,270,80));zone.set_editor_property('fleet',fleet);zone.set_editor_property('rack_slots',slots)
+    zone.modify()
+    cx,cy,hx,hy=INBOUND
+    zone.set_actor_location(unreal.Vector(cx,cy,0),False,False)
+    zone.set_editor_property('half_size_cm',unreal.Vector(hx,hy,80));zone.set_editor_property('fleet',fleet);zone.set_editor_property('rack_slots',slots)
     system.modify();system.set_editor_property('objects',specs)
-    print('INBOUND_AREA_CONFIGURED','48x40m, 2 yellow zones, 3 staging pallets, 4 racks / 16 slots, 2 AGVs')
+    from configure_area_labels import configure_area_labels
+    configure_area_labels()
+    print('INBOUND_AREA_CONFIGURED','dock-side inbound/outbound waiting, 3 inbound + 3 outbound pallets, 4 racks / 16 slots, 2 AGVs')
     return zone
 
 if __name__=='__main__':

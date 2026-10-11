@@ -1,6 +1,6 @@
 # 화물 생성 규칙
 
-기존 배치와 향후 트럭 입고 화물의 **상품·상자 비율·포장 밀도·질량·재현 규칙**을 정의한다. 구현은 `Source/msc_vr/WarehouseCargo.cpp`의 `CargoProfiles`, `GenerateCargoRecipe`, `ApplyCargoRecipe`이며 현재 규칙 버전은 **1**이다. 값은 교육용 가정이다.
+기존 배치와 향후 트럭 입고 화물의 **상품·상자 비율·포장 밀도·질량·재현 규칙**을 정의한다. 구현은 `Source/msc_vr/WarehouseCargo.cpp`의 `CargoProfiles`, `GenerateCargoRecipe`, `ApplyCargoRecipe`이며 신규 생성 규칙 버전은 **2**이다. 저장된 버전 1의 전체 Recipe도 적용할 수 있다. 값은 교육용 가정이다.
 
 에셋 설치는 [TEAM_ASSETS.md](TEAM_ASSETS.md), 집기·낙하·손상 물리는 [WAREHOUSE.md](WAREHOUSE.md), 트럭의 입고·출고 방문과 교대는 [TRUCK_LOGISTICS_DESIGN.md](TRUCK_LOGISTICS_DESIGN.md)를 확인한다.
 
@@ -35,6 +35,14 @@
 
 모양은 Fab 원본 V1·V2에서 만든 온전한 닫힌 상자 2종(`SM_Carton_Intact_1/2`)만 사용한다. 찌그러진 V3·V4는 배치하지 않는다. 생성 규칙은 원본 에셋 자체를 변형하지 않고 게임용 메시의 크기와 질량을 함께 적용한다.
 
+### 큰 박스 크기 범위
+
+`AmountScale<=1`의 기존 상자 크기 분포와 하한은 유지한다. 더 많은 물량을 담는 `AmountScale>1`은 상품 기준 비율의 최대 배율을 1.25에서 1.5625로 늘린다. 실제 박스는 호출자가 전달한 공간 제한을 넘지 않으며, 부피가 늘면 내용물·포장재 무게도 함께 계산한다.
+
+`Scripts/expand_large_cargo.py`는 저장 맵의 부피 상위 30% 박스에 한해 현재 각 변의 최대 25% 확대를 시도한다. 최소 크기를 가진 박스와 작은 박스는 유지하고, 쌓임·주변 상자·랙 등 충돌 메시의 공간을 확인하여 확대 폭을 줄인다. 상품·화물 ID·기존 온전한 모델은 유지하며, 아래 박스가 커지면 같은 열의 위 박스 위치를 다시 맞춘다. 하중 관리 질량도 실제 박스 무게로 갱신한다.
+
+적용 전후 크기·위치와 변경 목록은 `Saved/Testing/LargeCargoExpansion.json`에 기록하고, 다시 실행해도 누적 확대하지 않는다. 전체 화물 재생성이나 수동 배치 변경 이후에는 기존 보고서와 적용 상태를 먼저 확인해야 한다. 원상복구 기준은 `Saved/Backups/LargeCargo_20261011`의 맵과 외부 액터 백업이다.
+
 ## 향후 트럭 입고 연결
 
 1. 배송 묶음에 저장 가능한 정수 `DeliverySeed`를 부여하고 화물마다 고유한 0 이상의 `ItemIndex`를 정한다. 실제 시각이나 생성 호출 횟수에 의존하지 않는다.
@@ -52,11 +60,16 @@
 | `Scripts/configure_cargo_variety.py` | 로드된 맵의 화물 전체에 규칙을 다시 적용. 액터 이름으로 안정적인 순번을 만들고 `Saved/CargoManifest.json` 생성 |
 | `Scripts/configure_truck_interior.py` | 트럭 초기 적재용 규칙과 48개 배치를 적용. 트럭 내부도 재구성 |
 | `Scripts/configure_dual_forklifts.py` | 기존 1호 화물은 보존하고 2호용 화물 1개에 고정 배송 시드 적용 |
+| `Scripts/expand_large_cargo.py` | 작은 박스를 유지하고 기존 큰 박스의 크기·질량·쌓임만 확대 적용 |
 
 규칙 재적용은 이미 저장한 상품·질량·배치를 바꿀 수 있으므로 일반 설치에서 반복하지 않는다. `CargoManifest.json`은 생성 당시 기록이며 맵 편집과 자동 동기화되는 재고 데이터베이스가 아니다.
 
 ## 검증
 
 `Scripts/verify_cargo_rules.py`는 배송 재현성, 상품별 크기/질량 관계, 공간 제한, 포장 무게, 잘못된 입력과 저장된 맵의 치수를 검사한다. `Scripts/verify_cargo_variety_pie.py`는 실제 Chaos 질량, 팔레트 하중 전달, 초기 적재 안정성을 검사한다. 검사 스크립트는 테스트 변경을 저장하지 않는다.
+
+2026-10-11 `LargeCargoBuild1.log`에서 Editor 빌드를 통과했다. `LargeCargoApply1.log`에서 360개 중 큰 박스 109개를 확대하고 251개의 크기·무게를 유지해 저장했다. 축별 최대 길이는 X 55.414→69.267cm, Y 39.560→49.450cm, Z 36.943→46.178cm로 증가했으며 각 축의 최소 길이는 그대로다. 축별 극값은 서로 다른 박스에서 나올 수 있다.
+
+새 에디터의 `LargeCargoPIE1.log`에서 재적용 없이 저장된 치수·위치, 작은 박스와 최솟값 보존, 상품/ID/모델 보존, 확대 Recipe의 재현성과 부피/밀도/무게 일치를 확인했다. 실제 PIE에서는 360개 박스의 물리 활성·질량, 확대 박스의 하중 관리 질량·파손 없음·초기 6초 적재 안정성을 통과했다. 이 검사에서는 차량 자동 시동만 일시 해제했으며 차량·물체의 물리는 유지했다. 검사 변경은 저장하지 않았고 전체 지게차 운반·손 운반·반복 낙하를 다시 검사한 범위는 아니다. 진입점은 `Scripts/verify_large_cargo_pie.py`다.
 
 과거 검증 기록: **2026-10-01, 당시 311개 화물**. `Saved/Logs/CargoRulesVerify.log`에서 재현성·상품별 크기/질량·공간 제한·입력 거부를, `CargoRulesPIE4.log`에서 초기 이탈 0개·Chaos 질량·팔레트 하중 전달·실행 중 적용/복원·정보 표시를 확인했다. 이 기록의 수량과 약 0.38~22.25kg 범위는 당시 배치에 대한 값이다. 현재 배치의 실제 수치와 물리 검사는 새 검사 로그로 판단한다.

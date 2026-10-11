@@ -1,4 +1,6 @@
 #include "WarehouseWorker.h"
+#include "WarehouseAreaLabel.h"
+#include "EngineUtils.h"
 #include "WarehousePhysics.h"
 #include "WarehouseDamageSystem.h"
 #include "msc_vrPlayerController.h"
@@ -37,10 +39,10 @@ bool WarehouseHumanPhysics::DriveCapsule(ACharacter* Person,FVector DesiredVeloc
  // A feet force also creates a tipping moment; respect the finite balance torque.
  const float BalanceTorqueNm=600.f;
  const float BalanceForce=BalanceTorqueNm*100.f/FMath::Max(.3f,Half/100.f);
- const float Traction=FMath::Min3(MotorForceN*100.f,.7f*NormalForce,BalanceForce);
+ const float Traction=FMath::Min3(MotorForceN*100.f,.8f*NormalForce,BalanceForce);
  // Active steps brake against the floor, not air damping or a velocity reset.
  // Limit feedback at low frame rates so one step cannot reverse its own error.
- const float Response=FMath::Min(16.f,1.f/FMath::Max(Person->GetWorld()->GetDeltaSeconds(),SMALL_NUMBER));
+ const float Response=FMath::Min(32.f,1.f/FMath::Max(Person->GetWorld()->GetDeltaSeconds(),SMALL_NUMBER));
  const FVector PlanarVelocity=FVector::VectorPlaneProject(RelativeVelocity,Floor.ImpactNormal);
  const FVector Motor=(FVector::VectorPlaneProject(DesiredVelocity,Floor.ImpactNormal)-PlanarVelocity)*Body->GetMass()*Response;
  const FVector FeetForce=Motor.GetClampedToMaxSize(Traction);
@@ -146,11 +148,11 @@ void WarehouseHumanPhysics::StartRagdoll(ACharacter* Person,float MassKg)
 
 TSharedRef<SWidget> UWarehouseRoleWidget::RebuildWidget()
 {
- return SNew(SBorder).Padding(FMargin(12,5)).HAlign(HAlign_Center).VAlign(VAlign_Center)
+ return SNew(SBorder).Padding(WarehouseUIStyle::LabelPadding).HAlign(HAlign_Center).VAlign(VAlign_Center)
   .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-  .BorderBackgroundColor(FLinearColor(.02f,.035f,.05f,.9f))
-  [SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Bold",22))
-   .ColorAndOpacity(FLinearColor::White).Text_Lambda([this]() { return Label; })];
+  .BorderBackgroundColor_Lambda([this]() { return BackgroundColor; })
+  [SNew(STextBlock).Font_Lambda([this]() { return WarehouseUIStyle::Font(FontSize,true); })
+   .ColorAndOpacity_Lambda([this]() { return FSlateColor(TextColor); }).Text_Lambda([this]() { return Label; })];
 }
 
 AWarehouseWorker::AWarehouseWorker()
@@ -171,6 +173,7 @@ AWarehouseWorker::AWarehouseWorker()
  RoleLabel->SetRelativeLocation(FVector(0,0,120));
  RoleLabel->SetWidgetSpace(EWidgetSpace::Screen);
  RoleLabel->SetDrawSize(FVector2D(260,42));
+ RoleLabel->SetDrawAtDesiredSize(true);
  RoleLabel->SetPivot(FVector2D(.5f,1.f));
  RoleLabel->SetCollisionEnabled(ECollisionEnabled::NoCollision);
  RoleLabel->SetWidgetClass(UWarehouseRoleWidget::StaticClass());
@@ -210,6 +213,7 @@ void AWarehouseWorker::BeginPlay()
  GetCapsuleComponent()->SetCollisionResponseToAllChannels(ECR_Block);
  GetCapsuleComponent()->SetEnableGravity(true);
  GetCapsuleComponent()->SetSimulatePhysics(true);
+ RoleLabel->SetDrawAtDesiredSize(true);
  RoleLabel->InitWidget();
  if (auto* Widget=Cast<UWarehouseRoleWidget>(RoleLabel->GetUserWidgetObject())) Widget->Label=RoleName;
 }
@@ -249,8 +253,18 @@ void AWarehouseWorker::Tick(float DeltaSeconds)
  const auto* WarehousePC=Cast<Amsc_vrPlayerController>(PC);
  const float NameDistance=WarehousePC && WarehousePC->IsObserverView() ? 20000.f : 2500.f;
  FHitResult Hit;
- const bool Visible=FVector::DistSquared(Eye,Head)<=FMath::Square(NameDistance) &&
+ const bool MatchingFloor=!WarehousePC || !WarehousePC->IsObserverView() || WarehousePC->ObserverFloor<0 ||
+  FMath::FloorToInt(FMath::Max(0.f,GetActorLocation().Z-GetCapsuleComponent()->GetScaledCapsuleHalfHeight())/400.f)==WarehousePC->ObserverFloor;
+ bool Visible=MatchingFloor && !(WarehousePC && WarehousePC->IsWarehouseMenuOpen()) && !PC->HiddenActors.Contains(this) &&
+  FVector::DistSquared(Eye,Head)<=FMath::Square(NameDistance) &&
   !GetWorld()->LineTraceSingleByChannel(Hit,Eye,Head,ECC_Visibility,Params);
+ if (auto* Widget=Cast<UWarehouseRoleWidget>(RoleLabel->GetUserWidgetObject()))
+ {
+  Widget->Label=RoleName;
+  Widget->FontSize=WarehousePC && WarehousePC->IsObserverView() ? WarehouseUIStyle::CompactSize : WarehouseUIStyle::LabelSize;
+  if (Visible && WarehousePC && WarehousePC->IsObserverView())
+   for (TActorIterator<AWarehouseAreaLabel> Area(GetWorld());Area;++Area)
+    if (Area->ReplacesWorkerLabel(Head)) { Visible=false; break; }
+ }
  RoleLabel->SetVisibility(Visible);
- if (auto* Widget=Cast<UWarehouseRoleWidget>(RoleLabel->GetUserWidgetObject())) Widget->Label=RoleName;
 }

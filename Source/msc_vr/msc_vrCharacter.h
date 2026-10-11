@@ -130,6 +130,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Remote") void EndRemoteControl();
 	UFUNCTION(BlueprintPure, Category="Remote") AWarehouseForklift* GetRemoteForklift() const { return RemoteForklift; }
 	UFUNCTION(BlueprintPure, Category="Remote") bool HasHeldCargo() const { return IsValid(HeldCargo); }
+	UFUNCTION(BlueprintPure, Category="Input") AActor* GetInteractionTarget(float RangeCm=300.f) const;
 	USkeletalMeshComponent* GetRemoteWorldMesh() const { return RemoteWorldMesh; }
 	FQuat GetHandFacing(int Index) const;
 	UFUNCTION(BlueprintCallable, Category="Carry")
@@ -173,6 +174,7 @@ protected:
 	virtual void DoJumpEnd();
 
 	/** Pick up or drop a nearby tagged box or crate. */
+	UFUNCTION(BlueprintCallable, Category="Input")
 	void ToggleCarry();
 
 protected:

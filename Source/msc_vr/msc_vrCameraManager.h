@@ -19,4 +19,10 @@ public:
 
 	/** Constructor */
 	Amsc_vrCameraManager();
+	void ResetRemoteCamera() { RemoteYaw=0.f;RemotePitch=-15.f; }
+	void AimRemoteCamera(float Yaw,float Pitch);
+
+protected:
+	virtual void UpdateViewTarget(FTViewTarget& OutVT,float DeltaTime) override;
+	float RemoteYaw=0.f,RemotePitch=-15.f;
 };

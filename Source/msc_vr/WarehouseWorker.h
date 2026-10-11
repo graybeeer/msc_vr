@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "Blueprint/UserWidget.h"
+#include "WarehouseUIStyle.h"
 #include "WarehouseWorker.generated.h"
 
 /** Screen-space text uses the runtime font fallback, including Korean glyphs. */
@@ -12,6 +13,9 @@ class MSC_VR_API UWarehouseRoleWidget : public UUserWidget
  GENERATED_BODY()
 public:
  FText Label;
+ FLinearColor BackgroundColor=WarehouseUIStyle::Panel;
+ FLinearColor TextColor=WarehouseUIStyle::Text;
+ int32 FontSize=WarehouseUIStyle::LabelSize;
 protected:
  virtual TSharedRef<SWidget> RebuildWidget() override;
 };

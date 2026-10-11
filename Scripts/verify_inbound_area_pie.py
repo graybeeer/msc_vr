@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from configure_inbound_area import configure_inbound_area,RACK_CENTRES
 from apply_real_world_scale import fit
+from warehouse_staging_layout import PALLET_POSES,VEHICLE_POSES
 
 SAVED='-inboundsavedmap' in unreal.SystemLibrary.get_command_line().lower()
 CAPTURE='-inboundcapture' in unreal.SystemLibrary.get_command_line().lower()
@@ -23,13 +24,21 @@ assert len(zone.get_editor_property('fleet'))==2
 for n,a in named.items():
     if '_Paint_' in n and n.startswith('WH_InboundZone'):
         assert a.static_mesh_component.get_collision_enabled()==unreal.CollisionEnabled.NO_COLLISION
-configure_inbound_area()
-named={a.get_actor_label():a for a in actors.get_all_level_actors()}
-count=len(named);profiles=len(named['WH_DamageSystem'].get_editor_property('objects'))
-configure_inbound_area()
-assert len(actors.get_all_level_actors())==count
-assert len(named['WH_DamageSystem'].get_editor_property('objects'))==profiles
-print('INBOUND_LAYOUT_IDEMPOTENCE_PASSED')
+if not SAVED or '-saveinboundbeforepie' in unreal.SystemLibrary.get_command_line().lower():
+    configure_inbound_area()
+    named={a.get_actor_label():a for a in actors.get_all_level_actors()}
+    count=len(named);profiles=len(named['WH_DamageSystem'].get_editor_property('objects'))
+    configure_inbound_area()
+    assert len(actors.get_all_level_actors())==count
+    assert len(named['WH_DamageSystem'].get_editor_property('objects'))==profiles
+    print('INBOUND_LAYOUT_IDEMPOTENCE_PASSED')
+else:
+    # Read the disk state as shipped. Reapplying layout here used to conceal
+    # actor transforms that were never marked dirty and therefore never saved.
+    for label,(x,y,_) in {**PALLET_POSES,**VEHICLE_POSES}.items():
+        point=named[label].get_actor_location()
+        assert abs(point.x-x)<.1 and abs(point.y-y)<.1,('Saved inbound actor misplaced',label,point)
+    print('INBOUND_DISK_STAGING_PASSED')
 if SAVED and '-saveinboundbeforepie' in unreal.SystemLibrary.get_command_line().lower():
     assert level.save_current_level()
     assert unreal.EditorLoadingAndSavingUtils.save_dirty_packages(True,True)

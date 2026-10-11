@@ -11,7 +11,12 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
-| 창고 확장·노란 입고 구역·적재 감지·빈 랙 자동 배정 | `Source/msc_vr/WarehouseInboundZone.h/.cpp`, `Scripts/configure_inbound_area.py`, `Scripts/verify_inbound_area_pie.py` | 맵/조작은 `WAREHOUSE.md`, 작업 예약은 `AUTONOMY.md`, 보 지지와 실제 운반은 `WarehouseForkliftAI.cpp`, 공통 형상 예측은 `WarehouseForkliftRemote.cpp`의 `PhysicalPoseClear` |
+| 입구 관제 컴퓨터·E 접속/복귀·실시간 재고·출고 작업 지시·차량 관리 | `WarehouseComputer.h/.cpp`, `WarehouseComputerUI.cpp`, `Scripts/configure_warehouse_computer.py`, `Scripts/verify_warehouse_computer_pie.py` | 화면/입력 연결은 `msc_vrPlayerController`·`msc_vrCharacter`, 실제 지시는 `WarehouseForkliftAI.cpp`의 `SubmitJob`, 접촉 재고는 `WarehouseDamageSystem::GetSupportedActors`, 사용·한계는 `WAREHOUSE.md` |
+| 작은 박스·최소 크기 유지, 큰 박스 상한 확대 | `Scripts/expand_large_cargo.py`, `Scripts/verify_large_cargo_pie.py`, `WarehouseCargo.cpp`의 수량별 상한 | `CARGO_RULES.md`, 적용 전후 기록 `Saved/Testing/LargeCargoExpansion.json`; 전체 물품 재생성은 `configure_cargo_variety.py` |
+| 구역 위치 한글 UI·층별 표시·메뉴/이름표/안내의 공통 스타일 | `WarehouseAreaLabel.h/.cpp`, `WarehouseUIStyle.h`, `Scripts/configure_area_labels.py`, `Scripts/verify_area_labels_pie.py` | 작업자 이름표는 `WarehouseWorker.h/.cpp`, HUD·설정·비상 안내는 `msc_vrPlayerController.cpp`, 배치와 사용 규칙은 `WAREHOUSE.md` |
+| 원격 지게차 후방 TPS·마우스 둘러보기·카메라 벽 충돌·1인칭 복귀 | `msc_vrCameraManager.h/.cpp`의 `UpdateViewTarget`, `msc_vrCharacter.cpp`의 원격 연결/해제·`DoAim`, `verify_interaction_movement_pie.py`의 `-RemoteTPSChecks` | 원격 조작은 `AUTONOMY.md`, 화면 캡처는 `-RemoteTPSCapture` |
+| 지게차 E/G·안내문 인식, 저장된 입고 배치, 보행 정지·방향 전환 | `msc_vrCharacter.cpp`의 `GetInteractionTarget`, `WarehouseWorker.cpp`의 `DriveCapsule`, `Scripts/verify_interaction_movement_pie.py` | `msc_vrPlayerController.cpp`의 `GetCargoReadout`, `configure_inbound_area.py`의 액터 `modify`와 저장, `AUTONOMY.md`, `PHYSICS.md` |
+| 입구 입고/출고 대기 구역·노란 선·팔레트/충전소 재배치·적재 자동 배정 | `Scripts/warehouse_staging_layout.py`, `Scripts/configure_inbound_area.py`, `Scripts/verify_shipping_staging_pie.py`, `WarehouseInboundZone.h/.cpp` | 한글 표지는 `configure_area_labels.py`, 맵은 `WAREHOUSE.md`, 예약은 `AUTONOMY.md`, 전체 운반 검사는 `verify_inbound_area_pie.py`, 경로·지지는 `WarehouseForkliftAI.cpp` |
 | 공통 충돌·마찰·관성·실제 강체 구동 | `PHYSICS.md`, `WarehousePhysics.h/.cpp`, `WarehouseForkliftPhysics.cpp`, `WarehouseWorker.cpp`, `msc_vrCharacter.cpp` | `WarehouseDamageSystem`, `WarehouseElevator`, `Config/DefaultEngine.ini`, `Scripts/prepare_warehouse_dynamics.py`, `Scripts/verify_warehouse_contact_physics.py` |
 | 실제 Chaos 물리·주행·운반·손상 검증 | `PHYSICS.md`의 검증 표, `Scripts/verify_native_forklift_motion_pie.py`, `Scripts/verify_warehouse_contact_physics.py`, `Scripts/verify_native_damage_pie.py` | 승강기 호출은 `Scripts/verify_native_elevator_pie.py`, 저장된 창고 시작 상태는 `Scripts/verify_dynamic_warehouse_startup.py`; 과거 동기식 검사는 현재 강체 검증에 쓰지 않음 |
 | 창고 작업자·역할 이름표·배치 | `Source/msc_vr/WarehouseWorker.h/.cpp`, `Scripts/configure_warehouse_workers.py`, `Scripts/verify_warehouse_workers.py` | `WAREHOUSE.md`의 역할별 작업자, 기본 플레이어 전신 메시 |
@@ -93,6 +98,7 @@ msc_vr/
     build_agv_motion_test.py
     build_first_person_warehouse.py
     build_warehouse_exterior.py
+    configure_area_labels.py
     configure_cargo_variety.py
     configure_carryable_cargo.py
     configure_dual_forklifts.py
@@ -102,11 +108,13 @@ msc_vr/
     configure_mezzanine.py
     configure_observer_view.py
     configure_truck_interior.py
+    configure_warehouse_computer.py
     configure_warehouse_strength.py
     configure_warehouse_workers.py
     convert_agv_original5_cm.py
     convert_agv_refined_cm.py
     download_cargo_assets.ps1
+    expand_large_cargo.py
     import_agv_original5.py
     import_agv_refined.py
     import_boxes_pallets_pack.py
@@ -128,6 +136,7 @@ msc_vr/
     verify_agv_navigation.py
     verify_agv_safety.py
     verify_agv_warehouse.py
+    verify_area_labels_pie.py
     verify_cargo_pallet_physics_pie.py
     verify_cargo_rules.py
     verify_cargo_variety_pie.py
@@ -142,6 +151,8 @@ msc_vr/
     verify_forklift_recovery_pie.py
     verify_forklift_training.py
     verify_inbound_area_pie.py
+    verify_interaction_movement_pie.py
+    verify_large_cargo_pie.py
     verify_mezzanine.py
     verify_mezzanine_pie.py
     verify_native_damage_pie.py
@@ -152,15 +163,18 @@ msc_vr/
     verify_real_world_scale.py
     verify_refined_agv.py
     verify_refined_agv_pie.py
+    verify_shipping_staging_pie.py
     verify_truck_interior_pie.py
     verify_two_hand_carry.py
     verify_view_and_wheel_fixes_pie.py
+    verify_warehouse_computer_pie.py
     verify_warehouse_contact_physics.py
     verify_warehouse_exterior.py
     verify_warehouse_interaction_pie.py
     verify_warehouse_strength.py
     verify_warehouse_strength_pie.py
     verify_warehouse_workers.py
+    warehouse_staging_layout.py
   Source/
     msc_vr.Target.cs
     msc_vrEditor.Target.cs
@@ -176,6 +190,8 @@ msc_vr/
       msc_vrGameMode.h
       msc_vrPlayerController.cpp
       msc_vrPlayerController.h
+      WarehouseAreaLabel.cpp
+      WarehouseAreaLabel.h
       WarehouseAutonomyTypes.h
       WarehouseCargo.cpp
       WarehouseCargo.h
@@ -183,6 +199,9 @@ msc_vr/
       WarehouseCarryAnimInstance.h
       WarehouseChargingStation.cpp
       WarehouseChargingStation.h
+      WarehouseComputer.cpp
+      WarehouseComputer.h
+      WarehouseComputerUI.cpp
       WarehouseDamageSystem.cpp
       WarehouseDamageSystem.h
       WarehouseElevator.cpp
@@ -199,6 +218,7 @@ msc_vr/
       WarehousePallet.h
       WarehousePhysics.cpp
       WarehousePhysics.h
+      WarehouseUIStyle.h
       WarehouseWorker.cpp
       WarehouseWorker.h
       Agv/

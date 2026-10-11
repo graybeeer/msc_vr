@@ -422,10 +422,10 @@ void AWarehouseDamageSystem::ShowDamage(int32 Index)
  Text->SetText(FText::FromString(FString::Printf(TEXT("%s\n%s %.0f%% | %.0f / %.0f kg"),*Spec.Name,Spec.bFailed ? TEXT("FAILED") : TEXT("DAMAGE"),Spec.Damage*100,Spec.SupportedKg,Spec.RatedLoadKg)));
 }
 
-TArray<AActor*> AWarehouseDamageSystem::GetSupportedActors(AActor* Object)
+TArray<AActor*> AWarehouseDamageSystem::GetSupportedActors(AActor* Object,bool Refresh)
 {
  if (!bInitialized) InitializeStrength();
- UpdateLoads();
+ if (Refresh) UpdateLoads();
  TArray<AActor*> Result;
  TArray<int32> Stack;
  const int32 Root=IndexOf(Object);

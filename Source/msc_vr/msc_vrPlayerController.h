@@ -13,6 +13,7 @@ class SBox;
 class ACameraActor;
 class UAudioComponent;
 class USoundWaveProcedural;
+class AWarehouseComputer;
 
 /**
  *  Simple first person Player Controller
@@ -36,7 +37,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Settings") void SetObserverFloor(int32 Floor);
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Settings") int32 ObserverFloor=-1;
 	UFUNCTION(BlueprintPure, Category="Settings") bool IsObserverView() const { return bObserverView; }
-	UFUNCTION(BlueprintPure, Category="Settings") bool IsWarehouseMenuOpen() const { return MenuWidget.IsValid(); }
+	UFUNCTION(BlueprintPure, Category="Settings") bool IsWarehouseMenuOpen() const { return MenuWidget.IsValid() || ComputerWidget.IsValid(); }
+	UFUNCTION(BlueprintCallable, Category="Console") bool OpenWarehouseComputer(AWarehouseComputer* Computer);
+	UFUNCTION(BlueprintCallable, Category="Console") void CloseWarehouseComputer();
+	UFUNCTION(BlueprintPure, Category="Console") bool IsWarehouseComputerOpen() const { return ComputerWidget.IsValid(); }
 	virtual void PlayerTick(float DeltaTime) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Alerts") FString EmergencyAlertText;
@@ -92,6 +96,8 @@ protected:
 	float ObserverDistance = 6000.f;
 	float ObserverVisibilityElapsed = 0;
 	TSharedPtr<SWidget> MenuWidget;
+	TSharedPtr<SWidget> ComputerWidget;
+	UPROPERTY(Transient) TObjectPtr<AWarehouseComputer> ActiveComputer;
 	UPROPERTY(Transient) TObjectPtr<ACameraActor> ObserverCamera;
 	bool bObserverView = false;
 	bool bWarehouseInputLocked = false;
