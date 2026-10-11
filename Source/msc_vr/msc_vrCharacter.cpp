@@ -981,6 +981,9 @@ void Amsc_vrCharacter::DoMove(float Right, float Forward)
 void Amsc_vrCharacter::DoJumpStart()
 {
 	if (bPhysicalRagdoll || !bPhysicalGround || bIsCrouched || IsValid(RemoteForklift) || PlacementTime>=0.f || (Controller && Controller->IsMoveInputIgnored())) return;
+	// Input callbacks may run twice before the next physics/movement tick.
+	// Consume the supported state now so one take-off adds only one impulse.
+	bPhysicalGround=false;
 	GetCapsuleComponent()->AddImpulse(FVector(0,0,GetCapsuleComponent()->GetMass()*360.f));
 	JumpSupportDelay=.35f;
 }

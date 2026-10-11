@@ -11,6 +11,10 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
+| 관찰 시점 같은 층 드래그·다중 선택·랙/벽 스냅·내용물 이동·승강기 개구부 | `WarehouseLayoutEditor.h/.cpp`, `WarehouseLayoutSnap.h/.cpp`, `WarehouseElevatorLayout.h/.cpp`, `Scripts/configure_warehouse_layout.py`, `Scripts/verify_layout_editor_pie.py` | Slate 포인터/선택 윤곽과 메뉴는 `msc_vrPlayerController`, 슬롯은 `WarehouseInboundZone`, 경로 갱신은 `WarehouseForkliftAI`, 사용 기준은 `WAREHOUSE.md` |
+| 1/2/4배 시뮬레이션·같은 물리 간격·실효 배속 | `WarehouseSimulationClock.h/.cpp`, `msc_vrPlayerController`, `Scripts/verify_simulation_speed_pie.py` | 물리/시간 기준은 `PHYSICS.md`, 작업 시간 UI는 `WarehouseComputerUI.cpp` |
+| 트럭 3대 동시 접안·도크 확대 | `Scripts/configure_multi_truck_docks.py`, `Scripts/verify_multi_truck_docks.py` | 기존 트럭 내부·외부 설치는 `WAREHOUSE.md`, 자동 트럭 교대는 미구현 계획 |
+| 현재 이동 알고리즘 도식·실제 산업 AGV/FMS 비교 | `FLEET_ALGORITHM_COMPARISON.md` | 구현은 `WarehouseForkliftAI`, `WarehouseFleetCoordinator`, 실행 검증은 `AUTONOMY.md` |
 | 중앙 관제 통로 예약·우회·후퇴·양보·구간 폐쇄·운반 시간 측정 | `WarehouseFleetCoordinator.h/.cpp`, `WarehouseForkliftAI.cpp`, `WarehouseForkliftRecovery.cpp`, `Scripts/configure_fleet_corridors.py`, `Scripts/verify_fleet_workflow_pie.py`, `Scripts/verify_fleet_traffic_pie.py` | 물리 주행은 `WarehouseForkliftPhysics.cpp`, 중앙 관제 설계·검증은 `AUTONOMY.md` |
 | 입구 관제 컴퓨터·E 접속/복귀·실시간 재고·출고 작업 지시·차량 관리 | `WarehouseComputer.h/.cpp`, `WarehouseComputerUI.cpp`, `Scripts/configure_warehouse_computer.py`, `Scripts/verify_warehouse_computer_pie.py` | 화면/입력 연결은 `msc_vrPlayerController`·`msc_vrCharacter`, 실제 지시는 `WarehouseForkliftAI.cpp`의 `SubmitJob`, 접촉 재고는 `WarehouseDamageSystem::GetSupportedActors`, 사용·한계는 `WAREHOUSE.md` |
 | 작은 박스·최소 크기 유지, 큰 박스 상한 확대 | `Scripts/expand_large_cargo.py`, `Scripts/verify_large_cargo_pie.py`, `WarehouseCargo.cpp`의 수량별 상한 | `CARGO_RULES.md`, 적용 전후 기록 `Saved/Testing/LargeCargoExpansion.json`; 전체 물품 재생성은 `configure_cargo_variety.py` |
@@ -72,6 +76,7 @@ msc_vr/
   AGENTS.md
   AUTONOMY.md
   CARGO_RULES.md
+  FLEET_ALGORITHM_COMPARISON.md
   MEZZANINE.md
   msc_vr.uproject
   PHYSICS.md
@@ -108,9 +113,11 @@ msc_vr/
     configure_forklift_autonomy.py
     configure_inbound_area.py
     configure_mezzanine.py
+    configure_multi_truck_docks.py
     configure_observer_view.py
     configure_truck_interior.py
     configure_warehouse_computer.py
+    configure_warehouse_layout.py
     configure_warehouse_strength.py
     configure_warehouse_workers.py
     convert_agv_original5_cm.py
@@ -157,8 +164,10 @@ msc_vr/
     verify_inbound_area_pie.py
     verify_interaction_movement_pie.py
     verify_large_cargo_pie.py
+    verify_layout_editor_pie.py
     verify_mezzanine.py
     verify_mezzanine_pie.py
+    verify_multi_truck_docks.py
     verify_native_damage_pie.py
     verify_native_elevator_pie.py
     verify_native_forklift_motion_pie.py
@@ -168,6 +177,7 @@ msc_vr/
     verify_refined_agv.py
     verify_refined_agv_pie.py
     verify_shipping_staging_pie.py
+    verify_simulation_speed_pie.py
     verify_truck_interior_pie.py
     verify_two_hand_carry.py
     verify_view_and_wheel_fixes_pie.py
@@ -210,6 +220,8 @@ msc_vr/
       WarehouseDamageSystem.h
       WarehouseElevator.cpp
       WarehouseElevator.h
+      WarehouseElevatorLayout.cpp
+      WarehouseElevatorLayout.h
       WarehouseFleetCoordinator.cpp
       WarehouseFleetCoordinator.h
       WarehouseForklift.cpp
@@ -220,10 +232,16 @@ msc_vr/
       WarehouseForkliftRemote.cpp
       WarehouseInboundZone.cpp
       WarehouseInboundZone.h
+      WarehouseLayoutEditor.cpp
+      WarehouseLayoutEditor.h
+      WarehouseLayoutSnap.cpp
+      WarehouseLayoutSnap.h
       WarehousePallet.cpp
       WarehousePallet.h
       WarehousePhysics.cpp
       WarehousePhysics.h
+      WarehouseSimulationClock.cpp
+      WarehouseSimulationClock.h
       WarehouseUIStyle.h
       WarehouseWorker.cpp
       WarehouseWorker.h

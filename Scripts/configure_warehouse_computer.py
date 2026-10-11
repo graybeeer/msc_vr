@@ -5,23 +5,23 @@ import unreal
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from warehouse_staging_layout import OUTBOUND
 LEVEL='/Game/FirstPerson/Lvl_FirstPerson'
-COMPUTER_POSITION=(545,-2090,0)
+COMPUTER_POSITION=(1050,-2065,0)
 DESTINATIONS=[(-800,-1570,0),(-800,-1395,0)]
 
 def configure_computer():
     actors=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
     named={a.get_actor_label():a for a in actors.get_all_level_actors()}
     label='WH_ManagementComputer'
-    computer=named.get(label) or actors.spawn_actor_from_class(unreal.WarehouseComputer,unreal.Vector(*COMPUTER_POSITION),unreal.Rotator(yaw=-90))
+    computer=named.get(label) or actors.spawn_actor_from_class(unreal.WarehouseComputer,unreal.Vector(*COMPUTER_POSITION),unreal.Rotator(yaw=90))
     assert isinstance(computer,unreal.WarehouseComputer)
     computer.modify();computer.set_actor_label(label);computer.set_folder_path('Warehouse/Management')
     computer.set_editor_property('is_spatially_loaded',False)
     computer.set_actor_location(unreal.Vector(*COMPUTER_POSITION),False,False)
-    computer.set_actor_rotation(unreal.Rotator(yaw=-90),False)
+    computer.set_actor_rotation(unreal.Rotator(yaw=90),False)
     computer.set_editor_property('outbound_centre',unreal.Vector(*OUTBOUND[:2],0))
     computer.set_editor_property('outbound_half_size',unreal.Vector(OUTBOUND[2],OUTBOUND[3],80))
     computer.set_editor_property('outbound_destinations',[unreal.Transform(location=unreal.Vector(*p),rotation=unreal.Rotator(yaw=180)) for p in DESTINATIONS])
-    computer.tags=[unreal.Name('WarehouseFloor0')]
+    computer.tags=list(dict.fromkeys(list(computer.tags)+[unreal.Name('WarehouseFloor0')]))
     # Mark truck inventory without relying on editor-only labels in a packaged game.
     for name,a in named.items():
         if name.startswith('TRK_Cargo_') and not a.actor_has_tag('TruckCargo'):

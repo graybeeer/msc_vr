@@ -4,6 +4,8 @@
 
 이 문서의 정지·일시정지는 제한된 제동력을 요청하는 상태다. 실제 위치·속도는 Chaos 접촉과 관성으로 계산하며, 브레이크 고장이나 외력에 의한 잔류 운동까지 즉시 지우지 않는다. 구동·접촉의 공통 기준은 [PHYSICS.md](PHYSICS.md)를 따른다.
 
+차량·중앙 관제의 실제 코드 흐름 도식과 산업 시스템 비교는 [FLEET_ALGORITHM_COMPARISON.md](FLEET_ALGORITHM_COMPARISON.md), 명령 접수부터 완료까지의 시간 이력과 배치 실험 조작은 [WAREHOUSE.md](WAREHOUSE.md)를 따른다.
+
 ## 기본 흐름
 
 1. POWER ON → SELF CHECK → READY
@@ -118,13 +120,19 @@ Details의 Self Check에서 Safety Scanner, E-Stop, Brake, Steering, Fork/Mast S
 
 ## 구현과 검증 진입점
 
+2026-10-12 `SimulationToolsBuild18.log` 빌드 후 `SimulationFleetFinalPIE2.log`의 `FLEET_WORKFLOW_PASSED`를 통과했다. 저장된 창고를 배치 재설정 없이 새 PIE로 불러와 두 차량의 입고2건, 관제 컴퓨터의 입구 팔레트→출고1건, 실제 랙→출고1건과 플레이어의25kg 팔레트 집기·보행·쌓기를 완료했다. 주변360개 화물·185개 팔레트의 동적 물리를 유지했다. 중앙 관제의2호 양보·1호 대기와 통과·2호 재개도 실제 로그로 확인했다. 운행 중 차량·짐의 좌표나 속도를 보정하거나 물리를 끄지 않았다. 플레이어 접근·시선·E 상호작용은 키에 연결된 native 함수를 사용했으므로 실제 OS 입력 검사와 구분한다.
+
+이 검사의 작업 수락→완료 보고 시간은 입고87.93/140.37초(2건 평균114.15초), 랙→출고160.53초, 입구 팔레트→출고231.30초였다. 주행·정렬·상하역·관제 대기를 포함한 시뮬레이션 시간이며 같은 동선의 소수 작업 결과다. 전체 검사는 시뮬레이션433.13초·실제379.09초로, NullRHI에서 요청4배에 대해 실효 약1.143배였다. 기록은 `Saved/Testing/FleetWorkflow/FullReport.json`의 `ok=true`와 완료4건을 따른다. 화면 렌더링·3층 전체 운반·자동 충전·정격1400kg 안정성·다른 배치의 평균 처리량을 검증한 결과는 아니다. 조향 준비 후 가속 수정과 첫 실패의 원인은 [PHYSICS.md](PHYSICS.md), 실제 OS 메뉴·드래그 검사는 [WAREHOUSE.md](WAREHOUSE.md)를 따른다.
+
+아래2026-10-12의 `FleetRepairsBuild*`·`FleetFullRepair24.log`·`FleetFullRepeat10.log` 기록은 배속 도입 전 당시 코드와 처리 시간이다. 현재30Hz/120Hz 설정의 전체 창고 완료 근거는 위 `SimulationFleetFinalPIE2.log`이며, 서로 다른 설정의 소요를 합산하지 않는다.
+
 2026-10-12 `FleetRepairsBuild28b.log`에서 중앙 양보 재계획을 포함한 Development Editor 빌드를 통과했다. `FleetParkedRender3.log`의 `FLEET_PARKED_TRANSPORT_PASSED`는 저장 창고를 불러온 뒤 검증 시작 위치만 설정하여, 적재 팔레트 운반 중 정차한2호의 실제 양보 이동·정지,1호 통과,2호 복귀와1호 하역·포크 인출·완료 보고를 확인한 렌더링 PIE 검사다. 주변360개 화물·185개 팔레트의 동적 물리를 유지하고 이동 중 위치·속도·부착 상태를 조작하지 않았다. 전체 입고·출고 연속 작업은 별도 검증하며 이 기록만으로 완료를 보장하지 않는다.
 
 같은 날 `FleetRepairsBuild30.log` 빌드와 `FleetBlockedStart5.log`의 창고 렌더링 PIE를 통과했다. 이전 정체 위치(-631,-1574cm)·방향(-166°)에서2호를 시작시켜 실제 접촉 정지,60cm 직선 분리,퇴로 재계획,1호 통과·하역 완료와2호 작업 복귀를 확인했다. `FLEET_CONTACT_SEPARATE`, `FLEET_SEPARATED_REPLAN`, `FLEET_RESUME`, `FLEET_PARKED_TRANSPORT_PASSED`를 기록했다. 시작 배치만 만든 별도 사례이며, 저장 맵의 연속 입고·출고 성공 여부는 아래 후속 기록을 따른다. `FleetBlockedStart4.log`는 접촉 분리 단계 적용 전 실패 기록이다.
 
 `FleetFullRepair24.log`의 `FLEET_WORKFLOW_PASSED`는 저장된 창고의 배치를 다시 설정하지 않고 입고2건, 관제 컴퓨터의 입구 팔레트 출고1건, 실제 랙에 적재된 상품의 출고1건과 플레이어의 E 팔레트 집기·보행·쌓기를 이어서 완료한 렌더링 PIE 검사다. 모든 주변 화물의 물리를 유지했다. 시간은 작업 수락부터 완료 보고까지 게임 월드 시계로 측정하여 입고95.77/170.38초(평균133.08초), 랙→출고169.39초, 입구 팔레트→출고222.23초였다. 주행·정렬·상하역·관제 대기를 포함하며, 역방향은 아직1건이므로 전체 창고의 평균 처리량으로 일반화하지 않는다. 실제 OS 키 입력·3층 전체 운반·정격 최대 하중의 검증 결과는 아니다. 반복·안전 사례 검증은 별도로 기록한다.
 
-같은 날 최종 적재 코드의 `FleetTrafficFinal3.log`, `FleetTrafficClosed3.log`, `FleetTrafficNoEscape3.log`를 각각 새 Entry PIE에서 통과했다. 실제 차량·팔레트 리그를 사용하여 양보 이동 후 우선 차량 통과·대기 작업 재개, 폐쇄 구간 우회·명시적 재개방, 퇴로 불가 때 양쪽 차량 정지·비상 안내·경고음 이벤트 발생을 검사했다. NullRHI 사례 검사이므로 창고 전체 배치·화면·실제 OS 키 검증으로 해석하지 않는다. 폐쇄 사례의 삽입 접촉은 정상 복구 단계를 거쳐 재시도했으며 충돌을 끄지 않았다.
+같은 날 배속 도입 전 적재 코드의 `FleetTrafficFinal3.log`, `FleetTrafficClosed3.log`, `FleetTrafficNoEscape3.log`를 각각 새 Entry PIE에서 통과했다. 실제 차량·팔레트 리그를 사용하여 양보 이동 후 우선 차량 통과·대기 작업 재개, 폐쇄 구간 우회·명시적 재개방, 퇴로 불가 때 양쪽 차량 정지·비상 안내·경고음 이벤트 발생을 검사했다. NullRHI 사례 검사이므로 창고 전체 배치·화면·실제 OS 키 검증으로 해석하지 않는다. 폐쇄 사례의 삽입 접촉은 정상 복구 단계를 거쳐 재시도했으며 충돌을 끄지 않았다.
 
 `FleetFullRepeat10.log`에서도 같은 저장 창고의4개 운반 작업과 E 팔레트 보행 적재를 새 프로세스에서 완료했다. 첫 전체 검사와 합산한 시간은 입고4건 평균128.54초(95.77~170.38초), 랙→출고2건 평균180.10초(169.39~190.81초), 입구 팔레트→출고2건 평균223.85초였다. 같은 동선·소수 작업의 게임 시계 측정이며 모든 랙·품목의 운영 평균은 아니다. 배터리 충전·3층 전체 운반·정격1400kg 안정성은 이번 반복 검사의 범위에 포함하지 않는다. 이 반복은 최종 `FleetRepairsBuild32.log` 이후이며 상세 기록은 `Saved/Testing/FleetWorkflow/Full24Report.json`과 `FullRepeat10Report.json`에 있다.
 

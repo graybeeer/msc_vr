@@ -23,6 +23,10 @@
 #include "WarehouseForklift.h"
 #include "WarehouseComputer.h"
 #include "WarehouseUIStyle.h"
+#include "WarehouseLayoutEditor.h"
+#include "WarehouseSimulationClock.h"
+#include "Misc/App.h"
+#include "HAL/PlatformTime.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -32,19 +36,95 @@
 #include "Widgets/Input/SSlider.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Widgets/SLeafWidget.h"
+#include "Rendering/DrawElements.h"
 #include "Components/AudioComponent.h"
 #include "Sound/SoundWaveProcedural.h"
 #include "Kismet/GameplayStatics.h"
+
+namespace
+{
+// Slate keeps the actual down/move/up positions even if a short mouse gesture
+// falls between paused world ticks. The toolbar remains above this canvas.
+class SWarehouseLayoutCanvas:public SLeafWidget
+{
+public:
+ SLATE_BEGIN_ARGS(SWarehouseLayoutCanvas) {}
+  SLATE_ARGUMENT(AWarehouseLayoutEditor*,Layout)
+  SLATE_ARGUMENT(APlayerController*,Controller)
+  SLATE_EVENT(FSimpleDelegate,OnEnded)
+ SLATE_END_ARGS()
+ void Construct(const FArguments& Args) { Layout=Args._Layout;Controller=Args._Controller;OnEnded=Args._OnEnded; }
+ virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D::ZeroVector; }
+ FVector2D ViewportPoint(const FGeometry& Geometry,const FPointerEvent& Event) const
+ {
+  int32 Width=0,Height=0;if (Controller.IsValid()) Controller->GetViewportSize(Width,Height);
+  const FVector2D Size=Geometry.GetLocalSize(),Local=Geometry.AbsoluteToLocal(Event.GetScreenSpacePosition());
+  return Local*FVector2D(Width/FMath::Max(1.,Size.X),Height/FMath::Max(1.,Size.Y));
+ }
+ virtual FReply OnMouseButtonDown(const FGeometry& Geometry,const FPointerEvent& Event) override
+ {
+  if (Event.GetEffectingButton()!=EKeys::LeftMouseButton || !Layout.IsValid() || !Controller.IsValid()) return FReply::Unhandled();
+  Layout->PointerDown(Controller.Get(),ViewportPoint(Geometry,Event),Event.IsControlDown());
+  return FReply::Handled().CaptureMouse(SharedThis(this));
+ }
+ virtual FReply OnMouseMove(const FGeometry& Geometry,const FPointerEvent& Event) override
+ {
+  if (!HasMouseCapture() || !Layout.IsValid() || !Controller.IsValid()) return FReply::Unhandled();
+  Layout->PointerMove(Controller.Get(),ViewportPoint(Geometry,Event));return FReply::Handled();
+ }
+ virtual FReply OnMouseButtonUp(const FGeometry& Geometry,const FPointerEvent& Event) override
+ {
+  if (Event.GetEffectingButton()!=EKeys::LeftMouseButton || !HasMouseCapture()) return FReply::Unhandled();
+  if (Layout.IsValid() && Controller.IsValid()) { Layout->PointerMove(Controller.Get(),ViewportPoint(Geometry,Event));Layout->PointerUp(); }
+  OnEnded.ExecuteIfBound();return FReply::Handled().ReleaseMouseCapture();
+ }
+ virtual void OnMouseCaptureLost(const FCaptureLostEvent&) override
+ { if (Layout.IsValid()) Layout->PointerUp(false); }
+ virtual int32 OnPaint(const FPaintArgs&,const FGeometry& Geometry,const FSlateRect&,FSlateWindowElementList& Elements,int32 Layer,const FWidgetStyle&,bool) const override
+ {
+  if (!Layout.IsValid() || !Controller.IsValid()) return Layer;
+  int32 Width=0,Height=0;Controller->GetViewportSize(Width,Height);if (Width<=0 || Height<=0) return Layer;
+  const FVector2D Factor=Geometry.GetLocalSize()/FVector2D(Width,Height);
+  auto Outline=[&](FVector2D A,FVector2D B,FLinearColor Color)
+  {
+   A*=Factor;B*=Factor;
+   TArray<FVector2D> Points{A,FVector2D(B.X,A.Y),B,FVector2D(A.X,B.Y),A};
+   FSlateDrawElement::MakeLines(Elements,Layer+1,Geometry.ToPaintGeometry(),Points,ESlateDrawEffect::None,Color,true,2);
+  };
+  for (AActor* Selected:Layout->GetSelection())
+  {
+   const FBox Bounds=Layout->GetSelectionBounds(Selected);if (!Bounds.IsValid) continue;
+   FBox2D Screen(ForceInit);
+   for (int32 Corner=0;Corner<8;++Corner)
+   {
+    FVector2D Point;const FVector World(Corner&1 ? Bounds.Max.X:Bounds.Min.X,Corner&2 ? Bounds.Max.Y:Bounds.Min.Y,Corner&4 ? Bounds.Max.Z:Bounds.Min.Z);
+    if (Controller->ProjectWorldLocationToScreen(World,Point)) Screen+=Point;
+   }
+   if (Screen.bIsValid) Outline(Screen.Min,Screen.Max,WarehouseUIStyle::Accent);
+  }
+  if (Layout->bMarqueeSelecting) Outline(Layout->MarqueeStart,Layout->MarqueeEnd,FLinearColor(.3f,.8f,1.f,1.f));
+  return Layer+1;
+ }
+private:
+ TWeakObjectPtr<AWarehouseLayoutEditor> Layout;
+ TWeakObjectPtr<APlayerController> Controller;
+ FSimpleDelegate OnEnded;
+};
+}
 
 Amsc_vrPlayerController::Amsc_vrPlayerController()
 {
 	// set the player camera manager class
 	PlayerCameraManagerClass = Amsc_vrCameraManager::StaticClass();
+	PrimaryActorTick.bTickEvenWhenPaused=true;
+	bShouldPerformFullTickWhenPaused=true;
 }
 
 void Amsc_vrPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
+	if (IsLocalPlayerController()) { LayoutEditor=AWarehouseLayoutEditor::Find(this);SimulationClock=AWarehouseSimulationClock::Find(this); }
 	if (IsLocalPlayerController() && GetWorld()->GetGameViewport())
 	{
 		auto RemoteActive=[this]()
@@ -76,6 +156,38 @@ void Amsc_vrPlayerController::BeginPlay()
 						+SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font())
 							.ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(780).Text(FText::FromString(TEXT("주변 장애물을 제거하거나 G로 수동 탈출하세요. 해결 후 E로 재점검·재개합니다.")))]]]];
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(EmergencyAlertWidget.ToSharedRef(),200);
+		auto Tools=SNew(SVerticalBox);
+		LayoutCanvas=SNew(SWarehouseLayoutCanvas).Layout(LayoutEditor).Controller(this)
+			.OnEnded_Lambda([this]() { SetObserverRoofVisibility(false);SetObserverRoofVisibility(true); })
+			.Visibility_Lambda([this]() { return bObserverView && LayoutEditor && LayoutEditor->bEditing && !IsWarehouseMenuOpen() ? EVisibility::Visible:EVisibility::Collapsed; });
+		GetWorld()->GetGameViewport()->AddViewportWidgetContent(LayoutCanvas.ToSharedRef(),10);
+		auto Row=SNew(SHorizontalBox);
+		const TCHAR* Labels[]={TEXT("1 랙"),TEXT("2 지게차"),TEXT("3 승강기"),TEXT("4 입출고 구역"),TEXT("5 기타 물건")};
+		for (int32 I=0;I<5;++I)
+			Row->AddSlot().AutoWidth().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+				.OnClicked_Lambda([this,I]() { SetLayoutCategory(I);return FReply::Handled(); })
+				[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity_Lambda([this,I]() { return LayoutEditor && int32(LayoutEditor->Category)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(Labels[I]))]];
+		Tools->AddSlot().AutoHeight()[Row];
+		auto SelectionRow=SNew(SHorizontalBox);
+		SelectionRow->AddSlot().AutoWidth().Padding(3)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Accent)
+			.Text_Lambda([this]() { return FText::FromString(FString::Printf(TEXT("선택 %d개 그룹"),LayoutEditor ? LayoutEditor->SelectionCount:0)); })];
+		SelectionRow->AddSlot().AutoWidth().Padding(8,0)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			.OnClicked_Lambda([this]() { if (LayoutEditor) LayoutEditor->ClearSelection();return FReply::Handled(); })
+			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text(FText::FromString(TEXT("선택 해제")))]];
+		SelectionRow->AddSlot().AutoWidth().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			.OnClicked_Lambda([this]() { if (LayoutEditor) LayoutEditor->bEdgeSnapEnabled=!LayoutEditor->bEdgeSnapEnabled;return FReply::Handled(); })
+			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text_Lambda([this]() { return FText::FromString(LayoutEditor && LayoutEditor->bEdgeSnapEnabled ? TEXT("스냅 켜짐"):TEXT("스냅 꺼짐")); })]];
+		Tools->AddSlot().AutoHeight()[SelectionRow];
+		Tools->AddSlot().AutoHeight().Padding(3,8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(740)
+			.Text_Lambda([this]() { return FText::FromString(LayoutEditor ? LayoutEditor->Status : FString()); })];
+		Tools->AddSlot().AutoHeight()[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			.OnClicked_Lambda([this]() { ToggleLayoutEditing();return FReply::Handled(); })
+			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(TEXT("재배치 종료 · 시뮬레이션 재개")))]
+			];
+		LayoutToolbar=SNew(SBox).HAlign(HAlign_Left).VAlign(VAlign_Top).Padding(20)
+			.Visibility_Lambda([this]() { return bObserverView && LayoutEditor && LayoutEditor->bEditing && !IsWarehouseMenuOpen() ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed; })
+			[SNew(SBorder).Padding(WarehouseUIStyle::PanelPadding).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(WarehouseUIStyle::Panel)[Tools]];
+		GetWorld()->GetGameViewport()->AddViewportWidgetContent(LayoutToolbar.ToSharedRef(),20);
 	}
 
 	
@@ -102,8 +214,8 @@ void Amsc_vrPlayerController::BeginPlay()
 void Amsc_vrPlayerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
-	InputComponent->BindKey(EKeys::F1,IE_Pressed,this,&Amsc_vrPlayerController::ToggleWarehouseMenu);
-	InputComponent->BindKey(EKeys::Escape,IE_Pressed,this,&Amsc_vrPlayerController::ToggleWarehouseMenu);
+	InputComponent->BindKey(EKeys::F1,IE_Pressed,this,&Amsc_vrPlayerController::ToggleWarehouseMenu).bExecuteWhenPaused=true;
+	InputComponent->BindKey(EKeys::Escape,IE_Pressed,this,&Amsc_vrPlayerController::ToggleWarehouseMenu).bExecuteWhenPaused=true;
 
 	// only add IMCs for local player controllers
 	if (IsLocalPlayerController())
@@ -144,20 +256,22 @@ void Amsc_vrPlayerController::UpdateInputMode()
 		bWarehouseInputLocked=Locked;
 		if (auto* PlayerCharacter=Cast<ACharacter>(GetPawn())) PlayerCharacter->GetCharacterMovement()->StopMovementImmediately();
 	}
-	bShowMouseCursor=IsWarehouseMenuOpen();
+	bShowMouseCursor=IsWarehouseMenuOpen() || (LayoutEditor && LayoutEditor->bEditing);
 	if (ComputerWidget.IsValid())
 	{
 		FInputModeUIOnly Mode;Mode.SetWidgetToFocus(ComputerWidget);SetInputMode(Mode);
 	}
-	else if (MenuWidget.IsValid())
+	else if (MenuWidget.IsValid() || (LayoutEditor && LayoutEditor->bEditing))
 	{
 		FInputModeGameAndUI Mode;
 		Mode.SetHideCursorDuringCapture(false);
 		SetInputMode(Mode);
+		if (GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->SetMouseCaptureMode(EMouseCaptureMode::NoCapture);
 	}
 	else
 	{
 		SetInputMode(FInputModeGameOnly());
+		if (GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->SetMouseCaptureMode(EMouseCaptureMode::CapturePermanently_IncludingInitialMouseDown);
 		if (FSlateApplication::IsInitialized()) FSlateApplication::Get().SetAllUserFocusToGameViewport();
 	}
 }
@@ -172,6 +286,7 @@ void Amsc_vrPlayerController::CloseWarehouseMenu()
 
 void Amsc_vrPlayerController::ToggleWarehouseMenu()
 {
+	if (LayoutEditor && LayoutEditor->bDragging) LayoutEditor->EndDrag(false);
 	if (ComputerWidget.IsValid()) { CloseWarehouseComputer(); return; }
 	if (!IsLocalController() || !GetWorld()->GetGameViewport()) return;
 	if (MenuWidget.IsValid()) { CloseWarehouseMenu(); return; }
@@ -196,6 +311,10 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 	Button(TEXT("창고 전체 보기"),[this]() { if (!bObserverView) ToggleObserverView(); SetObserverFloor(-1); CloseWarehouseMenu(); });
     for (int32 Floor=0; Floor<3; ++Floor)
         Button(FString::Printf(TEXT("%d층 관찰 (위층 구조 숨기기)"),Floor+1),[this,Floor]() { SetObserverFloor(Floor); CloseWarehouseMenu(); });
+	Button(LayoutEditor && LayoutEditor->bEditing ? TEXT("재배치 종료 · 시뮬레이션 재개") : TEXT("현재 층 배치 편집 · 시뮬레이션 일시정지"),[this]() { ToggleLayoutEditing();CloseWarehouseMenu(); });
+	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Accent)
+		.Text_Lambda([this]() { return FText::FromString(FString::Printf(TEXT("시뮬레이션 배속: %d배 · 실제 처리 %.2f배 · 같은 물리 정확도"),SimulationClock ? SimulationClock->RequestedSpeed : 1,SimulationClock ? SimulationClock->AchievedSpeed : 1.f)); }).AutoWrapText(true)];
+	for (int32 Speed:{1,2,4}) Button(FString::Printf(TEXT("시뮬레이션 %d배"),Speed),[this,Speed]() { SetSimulationSpeed(Speed); });
 	Text(TEXT("관찰: WASD 평면 이동 · 휠 확대/축소 · 우클릭 드래그 회전\nSpace/Ctrl 축소/확대 · Shift 가속\n지붕은 관찰 중 투명해집니다. F1 메뉴에서 1인칭으로 복귀하세요."));
 	Text(TEXT("마우스 감도 (0.2 ~ 3.0)"));
 	Panel->AddSlot().AutoHeight().Padding(12)[SNew(SSlider).IsFocusable(false).Value((MouseSensitivity-.2f)/2.8f)
@@ -248,6 +367,7 @@ void Amsc_vrPlayerController::ToggleObserverView()
 	}
 	else
 	{
+		if (LayoutEditor && LayoutEditor->bEditing) LayoutEditor->SetEditing(false,ObserverFloor);
 		bObserverView=false;
 		SetObserverRoofVisibility(false);
 		SetViewTarget(GetPawn());
@@ -298,10 +418,23 @@ void Amsc_vrPlayerController::SetObserverFloor(int32 Floor)
  if (!bObserverView) ToggleObserverView();
  SetObserverRoofVisibility(false);
  ObserverFloor=Floor;
+ if (LayoutEditor && LayoutEditor->bEditing) LayoutEditor->SetEditing(Floor>=0,Floor);
  SetObserverRoofVisibility(true);
  FrameWarehouse();
  if (Floor>=0) { ObserverFocus.Z=Floor*400.f+100.f; UpdateObserverCamera(); }
 }
+
+bool Amsc_vrPlayerController::SetSimulationSpeed(int32 Multiplier)
+{ return SimulationClock && SimulationClock->SetSpeed(Multiplier); }
+void Amsc_vrPlayerController::ToggleLayoutEditing()
+{
+ if (!LayoutEditor) return;
+ if (LayoutEditor->bEditing) LayoutEditor->SetEditing(false,ObserverFloor);
+ else { if (!bObserverView || ObserverFloor<0) SetObserverFloor(0);LayoutEditor->SetEditing(true,ObserverFloor); }
+ UpdateInputMode();
+}
+void Amsc_vrPlayerController::SetLayoutCategory(int32 CategoryIndex)
+{ if (LayoutEditor && CategoryIndex>=0 && CategoryIndex<5) LayoutEditor->SetCategory(EWarehouseLayoutCategory(CategoryIndex)); }
 
 void Amsc_vrPlayerController::SetObserverRoofVisibility(bool Hide)
 {
@@ -343,6 +476,9 @@ void Amsc_vrPlayerController::UpdateObserverCamera()
 void Amsc_vrPlayerController::PlayerTick(float Dt)
 {
 	Super::PlayerTick(Dt);
+	const double ObserverNow=FPlatformTime::Seconds();
+	const float CameraDt=ObserverLastWall>0 ? float(FMath::Clamp(ObserverNow-ObserverLastWall,0.,.05)) : 1.f/60.f;
+	ObserverLastWall=ObserverNow;
 	if (ComputerWidget.IsValid() && (!IsValid(ActiveComputer) || !ActiveComputer->CanUse())) CloseWarehouseComputer();
 	UpdateEmergencyAlerts(Dt);
 	if (CargoReadoutBox.IsValid())
@@ -367,6 +503,7 @@ void Amsc_vrPlayerController::PlayerTick(float Dt)
     }
 	ObserverCamera->GetCameraComponent()->SetFieldOfView(ViewFOV);
 	if (MenuWidget.IsValid() || !GetWorld()->GetGameViewport() || !GetWorld()->GetGameViewport()->Viewport || !GetWorld()->GetGameViewport()->Viewport->HasFocus()) return;
+	// Layout gestures are handled by the Slate canvas, including while paused.
 	float X=0,Y=0; GetInputMouseDelta(X,Y);
 	if (IsInputKeyDown(EKeys::RightMouseButton))
 	{
@@ -379,8 +516,8 @@ void Amsc_vrPlayerController::PlayerTick(float Dt)
 	const float Speed=FMath::Clamp(ObserverDistance*.35f,450.f,3500.f)*(IsInputKeyDown(EKeys::LeftShift) ? 3.f : 1.f);
 	const FRotator Flat(0,ObserverRotation.Yaw,0);
 	const FVector Direction=Flat.Vector()*Forward+FRotationMatrix(Flat).GetUnitAxis(EAxis::Y)*Right;
-	ObserverFocus+=Direction.GetClampedToMaxSize(1.f)*Dt*Speed;
-	ObserverDistance=FMath::Clamp((ObserverDistance+Zoom*Dt*Speed)*FMath::Pow(.85f,GetInputAnalogKeyState(EKeys::MouseWheelAxis)),700.f,18000.f);
+	ObserverFocus+=Direction.GetClampedToMaxSize(1.f)*CameraDt*Speed;
+	ObserverDistance=FMath::Clamp((ObserverDistance+Zoom*CameraDt*Speed)*FMath::Pow(.85f,GetInputAnalogKeyState(EKeys::MouseWheelAxis)),700.f,18000.f);
 	UpdateObserverCamera();
 }
 
@@ -422,6 +559,11 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
 
 void Amsc_vrPlayerController::EndPlay(const EEndPlayReason::Type Reason)
 {
+	if (LayoutEditor && LayoutEditor->bEditing) LayoutEditor->SetEditing(false,ObserverFloor);
+	if (LayoutToolbar.IsValid() && GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(LayoutToolbar.ToSharedRef());
+	LayoutToolbar.Reset();
+	if (LayoutCanvas.IsValid() && GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(LayoutCanvas.ToSharedRef());
+	LayoutCanvas.Reset();
 	CloseWarehouseComputer();
 	if (EmergencyAudio) { EmergencyAudio->Stop(); EmergencyAudio->DestroyComponent(); }
 	if (EmergencyAlertWidget.IsValid() && GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(EmergencyAlertWidget.ToSharedRef());

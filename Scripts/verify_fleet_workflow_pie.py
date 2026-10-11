@@ -6,6 +6,7 @@ level=unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 editor=unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 actors=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 hands_only='-fleethandsonly' in unreal.SystemLibrary.get_command_line().lower()
+simulation_speed=4 if '-fleetsimulationspeed4' in unreal.SystemLibrary.get_command_line().lower() else 1
 assert level.load_level('/Game/FirstPerson/Lvl_FirstPerson')
 unreal.get_default_object(unreal.load_class(None,'/Script/UnrealEd.EditorPerformanceSettings')).set_editor_property('bThrottleCPUWhenNotForeground',False)
 if hands_only:
@@ -13,7 +14,7 @@ if hands_only:
         if isinstance(a,unreal.WarehouseForklift):a.set_editor_property('auto_start',False)
 root=Path('C:/msc_UnrealProject/msc_vr/Saved/Testing/FleetWorkflow');root.mkdir(exist_ok=True)
 started=time.monotonic();phase='start';at=0;game=None;live=None;pc=None;pawn=None;clock=0;walk_points=[];next_phase=None;walk_at=0;sample_at=-10;job_id=None;rack_job_id=None;held=None;base=None;base_start=None;done_at=None
-report={'hands_only':hands_only,'events':[],'samples':[]};failure_detail=None
+report={'hands_only':hands_only,'requested_speed':simulation_speed,'events':[],'samples':[]};failure_detail=None
 
 def pos(v):return [round(v.x,2),round(v.y,2),round(v.z,2)]
 def event(name,**data):
@@ -57,6 +58,8 @@ def tick(dt):
         if live is None:
             live={a.get_actor_label():a for a in unreal.GameplayStatics.get_all_actors_of_class(game,unreal.Actor)}
             pawn=unreal.GameplayStatics.get_player_character(game,0);pc=unreal.GameplayStatics.get_player_controller(game,0)
+            clocks=unreal.GameplayStatics.get_all_actors_of_class(game,unreal.WarehouseSimulationClock)
+            assert len(clocks)==1 and clocks[0].set_speed(simulation_speed),'Simulation speed setup rejected'
             unreal.SystemLibrary.execute_console_command(game,'DisableAllScreenMessages',pc)
             (root/'ActorNames.json').write_text(json.dumps({a.get_name():label for label,a in live.items()},ensure_ascii=False),encoding='utf-8')
             event('startup',cargo=len(unreal.GameplayStatics.get_all_actors_of_class(game,unreal.WarehouseCargo)),pallets=len(unreal.GameplayStatics.get_all_actors_of_class(game,unreal.WarehousePallet)))
@@ -74,7 +77,7 @@ def tick(dt):
             if clock<2:return
             shot('Start')
             if hands_only:enter('start_hands')
-            else:walk([(545,-1880,0)],'computer_aim')
+            else:walk([(545,-2150,0),(1050,-2275,0)],'computer_aim')
             return
         if phase=='walk':
             if held:assert pawn.get_held_cargo()==held,'Pallet grip slipped while walking/turning'
@@ -104,7 +107,7 @@ def tick(dt):
             job_id=[t.job_id for t in comp.get_editor_property('tasks') if t.job_id.startswith('CONSOLE-')][-1]
             event('outbound_accepted',job=job_id);pc.close_warehouse_computer()
             assert not pc.is_move_input_ignored() and pc.get_view_target()==pawn,'Console did not restore player'
-            walk([(780,-1200,0)],'observe');return
+            walk([(545,-2200,0),(545,-1880,0),(780,-1200,0)],'observe');return
         if phase=='observe':
             pc.toggle_observer_view();pc.set_observer_floor(0);enter('jobs');return
         if phase=='jobs':

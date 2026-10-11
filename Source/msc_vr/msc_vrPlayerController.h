@@ -14,6 +14,8 @@ class ACameraActor;
 class UAudioComponent;
 class USoundWaveProcedural;
 class AWarehouseComputer;
+class AWarehouseLayoutEditor;
+class AWarehouseSimulationClock;
 
 /**
  *  Simple first person Player Controller
@@ -35,6 +37,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Settings") void ToggleObserverView();
 	UFUNCTION(BlueprintCallable, Category="Settings") void FrameWarehouse();
 	UFUNCTION(BlueprintCallable, Category="Settings") void SetObserverFloor(int32 Floor);
+	UFUNCTION(BlueprintCallable, Category="Simulation") bool SetSimulationSpeed(int32 Multiplier);
+	UFUNCTION(BlueprintCallable, Category="Layout") void ToggleLayoutEditing();
+	UFUNCTION(BlueprintCallable, Category="Layout") void SetLayoutCategory(int32 CategoryIndex);
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Settings") int32 ObserverFloor=-1;
 	UFUNCTION(BlueprintPure, Category="Settings") bool IsObserverView() const { return bObserverView; }
 	UFUNCTION(BlueprintPure, Category="Settings") bool IsWarehouseMenuOpen() const { return MenuWidget.IsValid() || ComputerWidget.IsValid(); }
@@ -95,10 +100,15 @@ protected:
 	FRotator ObserverRotation = FRotator(-70,90,0);
 	float ObserverDistance = 6000.f;
 	float ObserverVisibilityElapsed = 0;
+	double ObserverLastWall=0;
 	TSharedPtr<SWidget> MenuWidget;
 	TSharedPtr<SWidget> ComputerWidget;
 	UPROPERTY(Transient) TObjectPtr<AWarehouseComputer> ActiveComputer;
 	UPROPERTY(Transient) TObjectPtr<ACameraActor> ObserverCamera;
+	UPROPERTY(Transient) TObjectPtr<AWarehouseLayoutEditor> LayoutEditor;
+	UPROPERTY(Transient) TObjectPtr<AWarehouseSimulationClock> SimulationClock;
+	TSharedPtr<SWidget> LayoutToolbar;
+	TSharedPtr<SWidget> LayoutCanvas;
 	bool bObserverView = false;
 	bool bWarehouseInputLocked = false;
 };

@@ -145,6 +145,15 @@ void AWarehouseDamageSystem::RegisterPhysicalContacts(AActor* Actor)
  TArray<UPrimitiveComponent*> Parts; Actor->GetComponents(Parts);
  for (auto* Part : Parts) RegisterContact(Part);
 }
+void AWarehouseDamageSystem::RefreshLayoutBindings()
+{
+ Lookup.Reset();
+ for (int32 I=0;I<Objects.Num();++I)
+  for (AActor* Actor:Objects[I].Members) if (IsValid(Actor)) Lookup.Add(Actor,I);
+ Supports.SetNum(Objects.Num());Bounds.SetNum(Objects.Num());
+ UpdateLoads();
+}
+
 void AWarehouseDamageSystem::InitializeStrength()
 {
  Lookup.Reset();

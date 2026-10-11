@@ -44,6 +44,8 @@ public:
  virtual void Tick(float DeltaSeconds) override;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Strength") TArray<FWarehouseStrength> Objects;
  UFUNCTION(BlueprintCallable, Category="Strength") void InitializeStrength();
+ // Rebind layout floor replacements without resetting any mass, damage or body motion.
+ void RefreshLayoutBindings();
  // Call after a runtime physics activation (for example a humanoid ragdoll). No mass/profile changes.
  UFUNCTION(BlueprintCallable, Category="Strength") void RegisterPhysicalContacts(AActor* Actor);
  UFUNCTION(BlueprintCallable, Category="Strength") void AdvanceStrength(float Seconds);

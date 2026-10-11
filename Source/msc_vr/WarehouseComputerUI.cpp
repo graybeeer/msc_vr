@@ -88,7 +88,8 @@ public:
   Text(TEXT("차량 상태 · 실시간"));
   Right->AddSlot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
    .Text_Lambda([this]() { return FText::FromString(FleetText()); }).AutoWrapText(true)];
-  Text(TEXT("최근 작업 · 완료 보고"));
+  Text(TEXT("작업 이력 · 소요 시간"));
+  Text(TEXT("시뮬레이션 시간 기준 · 지시 접수부터 완료까지 대기·정지 포함\n진행 작업 전체와 최근 완료·취소 200건을 기록합니다."),WarehouseUIStyle::CompactSize);
   Right->AddSlot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
    .Text_Lambda([this]() { return FText::FromString(TasksText()); }).AutoWrapText(true)];
   ChildSlot[SNew(SBorder).Padding(24).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.012f,.022f,.035f,1.f))
@@ -179,10 +180,14 @@ private:
  {
   if (!Computer.IsValid() || Computer->Tasks.IsEmpty()) return TEXT("아직 등록된 작업이 없습니다.");
   FString Value;const auto& Tasks=Computer->Tasks;
-  for (int32 I=Tasks.Num()-1;I>=FMath::Max(0,Tasks.Num()-8);--I)
+  for (int32 I=Tasks.Num()-1;I>=0;--I)
   {
-   const auto& Task=Tasks[I];Value+=FString::Printf(TEXT("%s → %s\n%s · %s\n\n"),*Task.Source,*Task.Destination,
+   const auto& Task=Tasks[I];Value+=FString::Printf(TEXT("%s → %s\n%s · %s\n"),*Task.Source,*Task.Destination,
     IsValid(Task.Vehicle) ? *Task.Vehicle->VehicleName : TEXT("차량 없음"),*Task.State);
+   if (Task.bSubmissionTimeKnown)
+    Value+=FString::Printf(TEXT("접수 %.1f초 · %s %.1f초\n\n"),Task.SubmittedSimulationSeconds,
+     Task.bCompleted ? TEXT("완료 소요") : Task.bCancelled ? TEXT("취소까지") : TEXT("현재 경과"),Computer->GetTaskElapsedSeconds(Task.JobId));
+   else Value+=TEXT("접수 시각 미기록 · 소요 시간 계산 제외\n\n");
   }
   return Value;
  }

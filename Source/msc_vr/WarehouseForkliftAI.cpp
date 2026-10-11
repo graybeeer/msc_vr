@@ -1,5 +1,6 @@
 #include "WarehouseForklift.h"
 #include "WarehouseFleetCoordinator.h"
+#include "WarehouseComputer.h"
 #include "WarehousePallet.h"
 #include "WarehouseCargo.h"
 #include "WarehouseDamageSystem.h"
@@ -84,13 +85,29 @@ bool AWarehouseForklift::SubmitJob(const FWarehouseWorkOrder& Job)
  if (!ActiveJob.JobId.IsEmpty() && ActiveJob.Pallet==Job.Pallet) return false;
  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) if (*It!=this)
  {
-  if (It->ActiveJob.JobId==Job.JobId || It->ActiveJob.Pallet==Job.Pallet ||
+  if (It->CompletedJobIds.Contains(Job.JobId) || It->ActiveJob.JobId==Job.JobId || It->ActiveJob.Pallet==Job.Pallet ||
       (It->bSupportingPallet && It->TargetPallet==Job.Pallet)) return false;
   for (const auto& Other : It->PendingJobs)
    if (Other.JobId==Job.JobId || Other.Pallet==Job.Pallet) return false;
  }
  PendingJobs.Add(Job);
+ for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) It->RecordJobSubmitted(this,Job);
  return true;
+}
+void AWarehouseForklift::RefreshAfterLayout()
+{
+ if (FleetCoordinator) FleetCoordinator->Release(this);
+ PlannedRoute.Reset();RouteIndex=0;bRouteStarted=false;
+ LastObstacleCheckSeconds=-1;ObstacleCheckFrame=MAX_uint64;
+ ProgressLocation=GetActorLocation();StalledSeconds=0;WaitSeconds=0;
+ if (IsValid(TargetPallet)) ObservedPallet=TargetPallet->GetActorTransform();
+ if (!ActiveJob.JobId.IsEmpty() && IsValid(ActiveJob.Pallet))
+ {
+  const auto Next=bSupportingPallet ? EWarehouseAIState::PlanDelivery : EWarehouseAIState::PlanPickup;
+  ResumeAI=Next;
+  if (bPowered && AIState!=EWarehouseAIState::Fault && !bFloorTransfer) TransitionAI(Next,TEXT("LAYOUT UPDATED / REPLAN"));
+ }
+ else if (bChargePending && bPowered && !bFloorTransfer) TransitionAI(EWarehouseAIState::PlanCharge,TEXT("LAYOUT UPDATED / CHARGER REPLAN"));
 }
 FTransform AWarehouseForklift::PalletApproach(const FTransform& Pose,float Distance) const
 {
@@ -326,6 +343,7 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
 bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
 {
  if (PlannedRoute.IsEmpty()) { BrakeDrive(); return true; }
+ const float HeadingTolerance=FMath::DegreesToRadians(AIState==EWarehouseAIState::AlignUnload ? .5f : 1.f);
  if (FleetCoordinator && !FleetCoordinator->Permit(this)) return false;
  RouteIndex=FMath::Min(RouteIndex,PlannedRoute.Num()-1);
  if (PlannedRoute[RouteIndex].bPivot)
@@ -336,7 +354,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
   // actor origin moves around the load-wheel axle during a physical turn.
   if (!bRouteTurning && FMath::Abs(CurrentSpeedCm)>1.f) return false;
   bRouteTurning=true;
-  if (FMath::Abs(Angle)>FMath::DegreesToRadians(1.f))
+  if (FMath::Abs(Angle)>HeadingTolerance)
   { CommandTurn(FMath::Sign(Angle)*FMath::Clamp(FMath::Abs(Angle)*2.f,.02f,.15f),Dt);return false; }
   if (FMath::Abs(CurrentSpeedCm)>1.f) return false;
   if (ChassisBody && FMath::Abs(ChassisBody->GetPhysicsAngularVelocityInDegrees().Z)>.5f) return false;
@@ -354,6 +372,8 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  const FTransform GoalPose=Goal.Pose;
  const float Remaining=FVector::Dist2D(GetActorLocation(),Goal.Pose.GetLocation());
  const float HeadingError=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,Goal.Pose.Rotator().Yaw));
+ // Tighten heading for the loaded pallet's lever arm while retaining enough
+ // position margin for nonholonomic steering. Final pallet acceptance stays 2cm.
  const float PositionTolerance=AIState==EWarehouseAIState::AlignUnload ? 1.5f : 5.f;
  if (Remaining<80.f && Wheels.Num()>=3 && AIState!=EWarehouseAIState::AlignUnload)
  {
@@ -403,7 +423,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
   bEndpointOrienting=true;bEndpointDriving=false;BrakeDrive();
   if (!bRouteTurning && FMath::Abs(CurrentSpeedCm)>=1.f) return false;
   bRouteTurning=true;
-  if (FMath::Abs(HeadingError)>=FMath::DegreesToRadians(1.f))
+  if (FMath::Abs(HeadingError)>=HeadingTolerance)
   { CommandTurn(FMath::Sign(HeadingError)*FMath::Clamp(FMath::Abs(HeadingError)*2.f,.02f,.2f),Dt);return false; }
   if (FMath::Abs(CurrentSpeedCm)>=1.f) return false;
   if (ChassisBody && FMath::Abs(ChassisBody->GetPhysicsAngularVelocityInDegrees().Z)>=.5f) return false;
@@ -417,7 +437,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
   BrakeDrive();
   if (!bRouteTurning && FMath::Abs(CurrentSpeedCm)>=1.f) return false;
   bRouteTurning=true;
-  if (FMath::Abs(HeadingError)<FMath::DegreesToRadians(1.f))
+  if (FMath::Abs(HeadingError)<HeadingTolerance)
   {
    if (FMath::Abs(CurrentSpeedCm)>=1.f || (ChassisBody && FMath::Abs(ChassisBody->GetPhysicsAngularVelocityInDegrees().Z)>=.5f)) return false;
    bRouteTurning=false;
@@ -736,7 +756,11 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    RouteIndex=0;bRouteStarted=true;
   }
   if (FollowRoute(10,Dt))
+  {
+   UE_LOG(LogTemp,Log,TEXT("UNLOAD_BEFORE_LOWER pallet=%s yaw=%.2f target=%s"),
+    *TargetPallet->GetActorLocation().ToString(),TargetPallet->GetActorRotation().Yaw,*ActiveJob.Destination.GetLocation().ToString());
    Next(EWarehouseAIState::LowerLoad,TEXT("LOWER LOAD ONTO SUPPORT"));
+  }
   break;
  }
  case EWarehouseAIState::LowerLoad:
@@ -773,6 +797,8 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    }
    // Clear the complete rack approach envelope before planning another job,
    // including its normal travel margin, rather than stopping inside it.
+   UE_LOG(LogTemp,Log,TEXT("UNLOAD_BEFORE_WITHDRAW pallet=%s yaw=%.2f"),
+    *TargetPallet->GetActorLocation().ToString(),TargetPallet->GetActorRotation().Yaw);
    RetractLocation=GetActorLocation()-GetActorForwardVector()*FMath::Max(130.f,FVector::Dist2D(GetActorLocation(),PalletApproach(ActiveJob.Destination,220).GetLocation())); Next(EWarehouseAIState::WithdrawFork,TEXT("FORK WITHDRAW"));
   }
   break;

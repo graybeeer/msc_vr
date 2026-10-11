@@ -31,6 +31,7 @@ public:
  UFUNCTION(BlueprintPure, Category="Remote") bool IsRemoteControlled() const { return IsValid(RemoteOperator); }
  UFUNCTION(BlueprintPure, Category="Remote") AActor* GetRemoteOperator() const { return RemoteOperator; }
  UFUNCTION(BlueprintPure, Category="Remote") float GetForkHeightCm() const { return LiftOffset+9.5f; }
+ UFUNCTION(BlueprintPure, Category="Layout") AWarehousePallet* GetSupportedPallet() const { return bSupportingPallet ? TargetPallet.Get() : nullptr; }
  UFUNCTION(BlueprintCallable, Category="Editor") static void RebuildEditedMesh(UStaticMesh* Mesh);
  UFUNCTION(BlueprintCallable, Category="Editor") static void ConfigureForkCollision(UStaticMesh* Mesh);
  UFUNCTION(BlueprintCallable, Category="Editor") static void ConfigureWheelCollision(UStaticMesh* Mesh);
@@ -68,6 +69,7 @@ public:
  UPROPERTY(BlueprintAssignable, Category="Autonomy") FWarehouseReportEvent OnJobReport;
  UFUNCTION(BlueprintCallable, Category="Autonomy") bool SubmitJob(const FWarehouseWorkOrder& Job);
  UFUNCTION(BlueprintCallable, Category="Autonomy") bool PlanAutonomousRoute(const FTransform& Goal);
+ UFUNCTION(BlueprintCallable, Category="Layout") void RefreshAfterLayout();
  UFUNCTION(BlueprintPure, Category="Autonomy") FString CheckSystems() const;
 
  UFUNCTION(BlueprintCallable, Category="Strength") void SetMechanicalFailure();

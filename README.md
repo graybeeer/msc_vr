@@ -15,6 +15,7 @@ Unreal Engine 5.8 기반 PC 프로젝트다. 물류창고에서 무인 지게차
 | [WAREHOUSE.md](WAREHOUSE.md) | 현재 맵·플레이어 조작·건축/작업자·물리 범위 |
 | [PHYSICS.md](PHYSICS.md) | 강체·접촉·사람/차량 구동·손 운반·질량·마찰·손상 가정과 실행 검증 |
 | [AUTONOMY.md](AUTONOMY.md) | 지게차 2대의 작업 큐·중앙 교통 관제·점검·자율 운반·G 원격 조작 |
+| [FLEET_ALGORITHM_COMPARISON.md](FLEET_ALGORITHM_COMPARISON.md) | 현재 차량·중앙 이동 알고리즘 도식과 실제 산업 시스템 비교 |
 | [VNSL14_SPEC.md](VNSL14_SPEC.md) | 장비 공개 사양·게임 설정·배터리 모델의 가정 |
 | [REFINED_AGV.md](REFINED_AGV.md) | 현재 지게차 모델·치수 보정·기계 리그 |
 | [MEZZANINE.md](MEZZANINE.md) | 3층 복층·승강기 규격·층간 이동 인터록 |

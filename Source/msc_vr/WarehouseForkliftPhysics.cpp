@@ -228,7 +228,6 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
   if (!bMechanicalFailure) SetMechanicalFailure();
  }
  if (!bPowered || bMechanicalFailure || !bEStopReleased || !bBrakeHealthy) BrakeDrive();
- DriveSpeedTarget=FMath::FInterpConstantTo(DriveSpeedTarget,DesiredDriveSpeed,Dt,FMath::Max(1.f,DriveAccelerationCm));
  const float Wheelbase=FMath::Abs((-74.f+7.f)*(215.f/282.55f));
  const bool Turning=!FMath::IsNearlyZero(DesiredTurnRate);
  // Hold the tyre sideways and reverse its rolling direction to reverse yaw.
@@ -253,7 +252,10 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  const bool TurnReady=Turning && SteeringError<FMath::DegreesToRadians(5.f) && ChassisBody->GetPhysicsLinearVelocity().Size2D()<30.f;
  // Finish steering before applying drive torque; a sideways tyre otherwise
  // translates the chassis during a pivot or when resuming straight travel.
- const bool Braking=Turning ? !TurnReady : FMath::Abs(DesiredDriveSpeed)<.01f || SteeringError>FMath::DegreesToRadians(10.f);
+ const bool Braking=Turning ? !TurnReady : FMath::Abs(DesiredDriveSpeed)<.01f || SteeringError>FMath::DegreesToRadians(3.f);
+ // Begin the acceleration ramp only after steering is ready. Building a
+ // full-speed target under the brake caused a sideways launch after a pivot.
+ DriveSpeedTarget=FMath::FInterpConstantTo(DriveSpeedTarget,Braking ? 0.f : DesiredDriveSpeed,Dt,FMath::Max(1.f,DriveAccelerationCm));
  // The implicit joint brake opposes rolling with finite torque each substep.
  // An explicit RPM-zero motor can reverse a locked tyre between game ticks.
  // Wheel RPM alone cannot measure tyre slip. Close the travel loop on the
