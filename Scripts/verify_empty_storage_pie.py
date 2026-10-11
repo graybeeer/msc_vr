@@ -1,4 +1,4 @@
-"""Real PIE check: saved empty storage stacks and E-driven pallet placement. Saves nothing."""
+"""Real PIE: saved empty stacks and native pallet/carton placement. Saves nothing."""
 import unreal,time,traceback,sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
@@ -13,7 +13,7 @@ assert level.load_level('/Engine/Maps/Entry' if PLACEMENT_ONLY else '/Game/First
 world=unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
 # Use an engine-provided 0.1s test frame. On the large headless map, wall-clock
 # frames can exceed MaxPhysicsDeltaTime and falsely make grip timeouts outrun physics.
-unreal.SystemLibrary.execute_console_command(world,'t.OverrideFPS 10')
+if not PLACEMENT_ONLY:unreal.SystemLibrary.execute_console_command(world,'t.OverrideFPS 10')
 named={a.get_actor_label():a for a in actors.get_all_level_actors()}
 if PLACEMENT_ONLY:
     unreal.GameplayStatics.get_all_actors_of_class(world,unreal.WorldSettings)[0].set_editor_property('default_game_mode',
@@ -57,7 +57,7 @@ fit(carton,(40,30,25),(7970,8240,12.7));carton.set_gross_mass_kg(12.)
 player=spawn(unreal.load_class(None,'/Game/FirstPerson/Blueprints/BP_FirstPersonCharacter.BP_FirstPersonCharacter_C'),
              'EmptyStackTestPlayer',(7860,7930,96))
 started=time.monotonic();phase=0;at=0;game=None;char=None;pc=None;support=None;held=None
-stack_initial={};max_speed=0;live_cache={};pose_trace_at=0
+stack_initial={};max_speed=0;live_cache={};pose_trace_at=0;released_at=None
 
 def body(a): return a.get_component_by_class(unreal.StaticMeshComponent)
 def finish():
@@ -66,7 +66,7 @@ def finish():
     unreal.SystemLibrary.quit_editor()
 
 def tick(dt):
-    global phase,at,game,char,pc,support,held,max_speed,live_cache,pose_trace_at
+    global phase,at,game,char,pc,support,held,max_speed,live_cache,pose_trace_at,released_at
     try:
         assert time.monotonic()-started<360,'PIE timeout'
         if phase==0:
@@ -136,7 +136,10 @@ def tick(dt):
                 print('PLACEMENT_STEP',round(now-at,2),held.get_actor_bounds(False)[0],held.get_actor_rotation(),char.get_held_cargo(),char.is_physical_ragdoll())
                 pose_trace_at=now
             assert body(held).is_simulating_physics() and not held.get_attach_parent_actor()
-            if now-at<7:return
+            if char.get_held_cargo() is None and released_at is None:released_at=now
+            if released_at is None or now-released_at<2:
+                assert now-at<16,'Physical pallet placement timeout'
+                return
             hc,he=held.get_actor_bounds(False);sc,se=support.get_actor_bounds(False)
             print('PALLET_PLACEMENT_POSES',hc,sc,'held',char.get_held_cargo(),'max speed',max_speed)
             assert char.get_held_cargo() is None,'Placement did not release'
@@ -158,10 +161,18 @@ def tick(dt):
             at=now;phase=5;return
         if phase==5:
             if now-at<2:return
+            print('CARTON_BEFORE_PLACE',char.get_actor_location(),body(live['EmptyStackCarton']).get_world_transform(),body(live['EmptyStackCarton']).static_mesh.get_bounds(),live['EmptyStackCartonSupport'].get_actor_transform())
             assert char.try_place_on_pallet(live['EmptyStackCartonSupport'],unreal.Vector(8000,8350,15)),'Carton placement regression'
             at=now;phase=6;return
         if phase==6:
-            if now-at<5:return
+            if now-pose_trace_at>.5:
+                carton=live['EmptyStackCarton']
+                print('CARTON_PLACEMENT_STEP',round(now-at,2),carton.get_actor_transform(),carton.get_actor_bounds(False),body(carton).get_physics_linear_velocity(),body(carton).get_physics_angular_velocity_in_degrees(),'held',char.get_held_cargo(),'placing',char.is_placing_cargo(),'support',live['EmptyStackCartonSupport'].get_actor_transform())
+                pose_trace_at=now
+            if char.get_held_cargo() is not None:
+                assert now-at<9,'Carton placement did not release within its limit'
+                return
+            if now-at<8:return
             carton=live['EmptyStackCarton'];cc,ce=carton.get_actor_bounds(False)
             assert char.get_held_cargo() is None and body(carton).is_simulating_physics()
             assert abs(cc.x-8000)<5 and abs(cc.y-8350)<5 and abs(cc.z-ce.z-15)<2,('Carton did not settle',cc)

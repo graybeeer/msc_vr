@@ -262,9 +262,9 @@ void AWarehouseWorker::Tick(float DeltaSeconds)
  {
   Widget->Label=RoleName;
   Widget->FontSize=WarehousePC && WarehousePC->IsObserverView() ? WarehouseUIStyle::CompactSize : WarehouseUIStyle::LabelSize;
-  if (Visible && WarehousePC && WarehousePC->IsObserverView())
+  if (Visible)
    for (TActorIterator<AWarehouseAreaLabel> Area(GetWorld());Area;++Area)
-    if (Area->ReplacesWorkerLabel(Head)) { Visible=false; break; }
+    if (Area->ReplacesWorkerLabel(Head,RoleName)) { Visible=false; break; }
  }
  RoleLabel->SetVisibility(Visible);
 }

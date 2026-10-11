@@ -310,9 +310,16 @@ void Amsc_vrPlayerController::SetObserverRoofVisibility(bool Hide)
         for (TActorIterator<AActor> It(GetWorld()); It; ++It)
         {
             const bool Dynamic=It->IsA<AWarehouseForklift>() || It->IsA<AWarehousePallet>() || It->IsA<AWarehouseCargo>();
-            const bool Above=ObserverFloor>=0 && (Dynamic ? It->GetActorLocation().Z>=(ObserverFloor+1)*400.f-1.f :
+            bool Above=ObserverFloor>=0 && (Dynamic ? It->GetActorLocation().Z>=(ObserverFloor+1)*400.f-1.f :
                 ((ObserverFloor<1 && It->ActorHasTag(TEXT("WarehouseFloor1"))) ||
                  (ObserverFloor<2 && It->ActorHasTag(TEXT("WarehouseFloor2")))));
+            if (Above && !Dynamic)
+            {
+                FVector Center,Extent;It->GetActorBounds(false,Center,Extent);
+                // Upper decks are hidden, but columns rooted in the observed
+                // floor remain visible as the real obstacles they still are.
+                if (Extent.Z>50.f && Center.Z-Extent.Z<=ObserverFloor*400.f+10.f) Above=false;
+            }
             if ((Above || It->ActorHasTag(TEXT("ObserverRoof"))) && !HiddenActors.Contains(*It))
             {
                 HiddenActors.Add(*It);
@@ -388,7 +395,8 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
  {
   if (auto* Cargo=Cast<AWarehouseCargo>(OperatorCharacter->GetHeldCargo())) return Cargo->GetCargoDescription();
   if (auto* Pallet=Cast<AWarehousePallet>(OperatorCharacter->GetHeldCargo()))
-   return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\nE : 안전한 곳에 내려놓기"),Pallet->PalletMassKg));
+   return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\n%s"),Pallet->PalletMassKg,
+     OperatorCharacter->IsPlacingCargo() ? TEXT("팔레트 위에 내려놓는 중") : TEXT("E : 가까운 팔레트 위에 쌓기 / 안전한 곳에 내려놓기")));
   if (!bObserverView)
    if (Cast<AWarehouseComputer>(OperatorCharacter->GetInteractionTarget()))
     return FText::FromString(TEXT("E : 관제 컴퓨터 접속\n실시간 재고 · 운반 작업 · 지게차 관리"));
@@ -440,7 +448,8 @@ void Amsc_vrPlayerController::UpdateEmergencyAlerts(float Dt)
   for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) if (It->bEmergencyBlocked)
   {
    const float Distance=GetPawn() ? FVector::Dist(GetPawn()->GetActorLocation(),It->GetActorLocation())*.01f : 0.f;
-   const FString Job=It->ActiveJob.JobId.IsEmpty() ? FString() : TEXT(" · 작업 ")+It->ActiveJob.JobId;
+   const FString Job=It->ActiveJob.JobId.IsEmpty() ? FString() :
+    FString::Printf(TEXT(" · %s 작업 #%s"),It->ActiveJob.SourceSystem==TEXT("FMS-COMPUTER") ? TEXT("출고") : TEXT("운반"),*It->ActiveJob.JobId.Right(6));
    Notices.Add(FString::Printf(TEXT("%s%s · 거리 %.0fm\n%s"),*It->VehicleName,*Job,Distance,*It->EmergencyReason));
   }
   if (EmergencyAlertText.IsEmpty() && !Notices.IsEmpty()) EmergencyAlarmElapsed=6.f;

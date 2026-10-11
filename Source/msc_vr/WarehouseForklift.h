@@ -11,6 +11,7 @@ class UStaticMeshComponent;
 class AWarehouseChargingStation;
 class AWarehouseElevator;
 class UPhysicsConstraintComponent;
+class AWarehouseFleetCoordinator;
 
 UENUM(BlueprintType)
 enum class EWarehouseCycle : uint8 { Idle, Approach, Lift, TravelLower, Reverse, Lower, Withdraw, Complete, ToCharger, Docking, Charging, Returning };
@@ -110,7 +111,16 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") bool bPowered = false;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") EWarehouseCycle State = EWarehouseCycle::Idle;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") FString Status = TEXT("E : START");
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Traffic") bool bTrafficWaiting=false;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Traffic") bool bTrafficYielding=false;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Traffic") FString TrafficStatus;
 private:
+ friend class AWarehouseFleetCoordinator;
+ UPROPERTY(Transient) TObjectPtr<AWarehouseFleetCoordinator> FleetCoordinator;
+ bool bPlanningRoute=false,bAvoidTrafficReservations=false,bTrafficEscape=false;
+ bool bEndpointDriving=false,bEndpointOrienting=false,bRouteTurning=false;
+ int32 EndpointSegment=-1;
+ FBox NavigationEnvelope() const;
  // Commands are actuator targets. Telemetry and fork pose always come from Chaos.
  UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> ChassisBody;
  UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> SteeringBody;
@@ -123,7 +133,6 @@ private:
  float DesiredTurnRate=0;
  float DesiredLift=0, LiftMotorTarget=0;
  float SteeringAngle=0;
- float DriveSpinIntegral=0;
  bool bPhysicsReady=false;
  void InitializePhysicalRig();
  void UpdatePhysicalRig(float Dt);
@@ -138,7 +147,7 @@ private:
  bool bRemoteLoadFault=false;
  void AdvanceRemote(float Dt);
  bool RemotePoseClear(const FTransform& Pose);
- bool PhysicalPoseClear(const FTransform& Pose) const;
+ bool PhysicalPoseClear(const FTransform& Pose,bool CheckTranslation=false) const;
  bool PalletClaimedByOther(AWarehousePallet* Pallet) const;
  bool UpdateLoadSupport(float Dt);
  bool BeginFloorTransfer(float TargetZ, EWarehouseAIState Resume);
@@ -152,8 +161,10 @@ private:
  void TransitionAI(EWarehouseAIState Next,const FString& Message);
  void FaultAI(const FString& Reason);
  void ReportJob(const FString& Result,const FString& Detail);
+ bool RackLoadAligned() const;
  bool NavigationClear(const FTransform& Pose) const;
  bool ConnectPoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost) const;
+ bool ConnectLanePoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost) const;
  bool FollowRoute(float Speed,float Dt);
  bool MovePrecise(FVector Destination,float Speed,float Dt);
  bool SeePallet(FTransform& Pose) const;

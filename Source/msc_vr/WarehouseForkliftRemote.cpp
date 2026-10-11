@@ -1,4 +1,5 @@
 #include "WarehouseForklift.h"
+#include "WarehouseFleetCoordinator.h"
 #include "WarehousePallet.h"
 #include "WarehouseDamageSystem.h"
 #include "WarehouseChargingStation.h"
@@ -15,6 +16,7 @@ void AWarehouseForklift::BeginPlay()
 {
  Super::BeginPlay();
  InitializePhysicalRig();
+ FleetCoordinator=AWarehouseFleetCoordinator::Find(this);
  if (bAutoStart)
  {
   FTimerHandle Handle;
@@ -107,7 +109,7 @@ bool AWarehouseForklift::RemotePoseClear(const FTransform& Pose)
  bTurnObstacleClear=PhysicalPoseClear(Pose);
  return bTurnObstacleClear;
 }
-bool AWarehouseForklift::PhysicalPoseClear(const FTransform& Pose) const
+bool AWarehouseForklift::PhysicalPoseClear(const FTransform& Pose,bool CheckTranslation) const
 {
  FCollisionQueryParams FloorParams(SCENE_QUERY_STAT(RemoteFloor),false,this);
  FloorParams.AddIgnoredActors(GetPhysicalLoads());
@@ -117,7 +119,7 @@ bool AWarehouseForklift::PhysicalPoseClear(const FTransform& Pose) const
      Ground.ImpactNormal.Z<.98f) return false;
  // Linear movement uses ClearToMove's swept contact test. A snapshot overlap
  // cannot distinguish bearing contact from a jam on a continuously dynamic load.
- if (Pose.GetRotation().Equals(GetActorQuat(),1.e-5f)) return true;
+ if (!CheckTranslation && Pose.GetRotation().Equals(GetActorQuat(),1.e-5f)) return true;
  FComponentQueryParams Params(SCENE_QUERY_STAT(RemoteTurn),this);
  Params.AddIgnoredComponent(Ground.GetComponent());
  const TArray<AActor*> Loads=GetPhysicalLoads();

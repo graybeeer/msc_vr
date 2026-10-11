@@ -11,6 +11,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
+| 중앙 관제 통로 예약·우회·후퇴·양보·구간 폐쇄·운반 시간 측정 | `WarehouseFleetCoordinator.h/.cpp`, `WarehouseForkliftAI.cpp`, `WarehouseForkliftRecovery.cpp`, `Scripts/configure_fleet_corridors.py`, `Scripts/verify_fleet_workflow_pie.py`, `Scripts/verify_fleet_traffic_pie.py` | 물리 주행은 `WarehouseForkliftPhysics.cpp`, 중앙 관제 설계·검증은 `AUTONOMY.md` |
 | 입구 관제 컴퓨터·E 접속/복귀·실시간 재고·출고 작업 지시·차량 관리 | `WarehouseComputer.h/.cpp`, `WarehouseComputerUI.cpp`, `Scripts/configure_warehouse_computer.py`, `Scripts/verify_warehouse_computer_pie.py` | 화면/입력 연결은 `msc_vrPlayerController`·`msc_vrCharacter`, 실제 지시는 `WarehouseForkliftAI.cpp`의 `SubmitJob`, 접촉 재고는 `WarehouseDamageSystem::GetSupportedActors`, 사용·한계는 `WAREHOUSE.md` |
 | 작은 박스·최소 크기 유지, 큰 박스 상한 확대 | `Scripts/expand_large_cargo.py`, `Scripts/verify_large_cargo_pie.py`, `WarehouseCargo.cpp`의 수량별 상한 | `CARGO_RULES.md`, 적용 전후 기록 `Saved/Testing/LargeCargoExpansion.json`; 전체 물품 재생성은 `configure_cargo_variety.py` |
 | 구역 위치 한글 UI·층별 표시·메뉴/이름표/안내의 공통 스타일 | `WarehouseAreaLabel.h/.cpp`, `WarehouseUIStyle.h`, `Scripts/configure_area_labels.py`, `Scripts/verify_area_labels_pie.py` | 작업자 이름표는 `WarehouseWorker.h/.cpp`, HUD·설정·비상 안내는 `msc_vrPlayerController.cpp`, 배치와 사용 규칙은 `WAREHOUSE.md` |
@@ -103,6 +104,7 @@ msc_vr/
     configure_carryable_cargo.py
     configure_dual_forklifts.py
     configure_empty_storage.py
+    configure_fleet_corridors.py
     configure_forklift_autonomy.py
     configure_inbound_area.py
     configure_mezzanine.py
@@ -146,6 +148,8 @@ msc_vr/
     verify_dynamic_warehouse_startup.py
     verify_empty_storage_pie.py
     verify_first_person_warehouse.py
+    verify_fleet_traffic_pie.py
+    verify_fleet_workflow_pie.py
     verify_forklift_autonomy.py
     verify_forklift_autonomy_pie.py
     verify_forklift_recovery_pie.py
@@ -206,6 +210,8 @@ msc_vr/
       WarehouseDamageSystem.h
       WarehouseElevator.cpp
       WarehouseElevator.h
+      WarehouseFleetCoordinator.cpp
+      WarehouseFleetCoordinator.h
       WarehouseForklift.cpp
       WarehouseForklift.h
       WarehouseForkliftAI.cpp

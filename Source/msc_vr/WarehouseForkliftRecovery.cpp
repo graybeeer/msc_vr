@@ -85,6 +85,9 @@ bool AWarehouseForklift::PlanRecoveryDetour(const FTransform& Goal)
  const FVector Across=FVector::CrossProduct(FVector::UpVector,Delta.GetSafeNormal2D());
  const float Distance=Delta.Size2D();
  TArray<FTransform> Candidates;
+ if (bTrafficEscape)
+  for (float DistanceCm : {-120.f,-60.f,60.f,120.f})
+   Candidates.Add(FTransform(From.GetRotation(),From.GetLocation()+From.GetUnitAxis(EAxis::X)*DistanceCm));
  // ponytail: two local side lanes; this is bounded recovery, not a global free-space planner.
  if (Distance>250.f) for (float Side : {-220.f,220.f,-330.f,330.f})
  {
