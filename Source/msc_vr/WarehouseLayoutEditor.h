@@ -4,7 +4,7 @@
 #include "WarehouseLayoutEditor.generated.h"
 
 UENUM(BlueprintType)
-enum class EWarehouseLayoutCategory:uint8 { Rack, Forklift, Elevator, Zone, Other };
+enum class EWarehouseLayoutCategory:uint8 { Rack, Forklift, Elevator, Zone, Other, Charger };
 
 USTRUCT(BlueprintType)
 struct FWarehouseLayoutZone
@@ -77,6 +77,7 @@ private:
  int32 FloorIndex=0;
  bool WasPaused=false,MouseWasDown=false,MarqueeAdditive=false;
  bool Eligible(AActor* Actor) const;
+ bool ParkedAtCharger(class AWarehouseForklift* Vehicle,class AWarehouseChargingStation* Station) const;
  AActor* SelectionActor(AActor* HitActor) const;
  FBox GroupBounds(AActor* Actor) const;
  int32 ZoneForActor(AActor* Actor) const;

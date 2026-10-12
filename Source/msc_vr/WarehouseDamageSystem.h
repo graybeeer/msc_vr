@@ -70,6 +70,8 @@ private:
  TMap<uint64, double> LastContact;
  TMap<TWeakObjectPtr<UPrimitiveComponent>, FBodyMotion> PrePhysicsMotion;
  TArray<TArray<int32>> Supports;
+ // Parent -> children in profile index order, rebuilt with each exact support snapshot.
+ TArray<TArray<int32>> SupportedChildren;
  TArray<FBox> Bounds;
  UPROPERTY(Transient) TArray<TObjectPtr<UTextRenderComponent>> Labels;
  bool bInitialized = false;

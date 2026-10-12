@@ -1,6 +1,6 @@
 # 지게차 이동 알고리즘과 실제 관제 시스템 비교
 
-정리 기준: **2026-10-12**. 현재 맵에서 실행되는 `WarehouseForklift`와 `WarehouseFleetCoordinator`의 코드를 읽어 도식화했다. 아래의 실제 시스템 설명은 제조사·표준 작성자·Open-RMF의 공개 자료에 근거하며, 비공개 제조사 알고리즘까지 같다고 가정하지 않는다. 실행 검사와 운반 시간의 확인 범위는 [AUTONOMY.md](AUTONOMY.md), 물리 계수·실측 전 가정은 [PHYSICS.md](PHYSICS.md)를 따른다.
+정리 기준: **2026-10-13**. 현재 맵에서 실행되는 `WarehouseForklift`와 `WarehouseFleetCoordinator`의 코드를 읽어 도식화했다. 아래의 실제 시스템 설명은 제조사·표준 작성자·Open-RMF의 공개 자료에 근거하며, 비공개 제조사 알고리즘까지 같다고 가정하지 않는다. 실행 검사와 운반 시간의 확인 범위는 [AUTONOMY.md](AUTONOMY.md), 물리 계수·실측 전 가정은 [PHYSICS.md](PHYSICS.md)를 따른다.
 
 ## 1. 전체 담당 관계
 
@@ -31,11 +31,14 @@ flowchart TD
     Check -- 아니오 --> Fault["고장 보고·제동 요청<br/>원인 복구 후 재점검"]
     Check -- 예 --> Ready["READY · 작업 대기"]
     Ready --> Battery{"충전 필요?"}
-    Battery -- 예 --> Charge["충전소 경로·도킹 확인<br/>충전·분리·작업 복귀"]
-    Charge --> Ready
+    Battery -- 예 --> Charge["충전소 경로·도킹 확인<br/>목표 잔량까지 충전"]
+    Charge --> Leave["LeaveCharger · 실제 바퀴로 출차<br/>출구 도착 후 충전소 예약 해제"]
+    Leave --> Ready
     Battery -- 아니오 --> Queued{"대기 작업이 있는가?"}
     Queued -- 아니오 --> Ready
-    Queued -- 예 --> Validate{"작업 검증 통과?<br/>중복·하중·포크 높이·목적지 지지"}
+    Queued -- 예 --> Parked{"지정 충전기에<br/>무적재로 정차 중?"}
+    Parked -- 예 --> Leave
+    Parked -- 아니오 --> Validate{"작업 검증 통과?<br/>중복·하중·포크 높이·목적지 지지"}
     Validate -- 아니오 --> Fault
     Validate -- 예 --> PickupFloor{"출발지가 다른 층?"}
     PickupFloor -- 예 --> Lift1["승강기 예약·호출·문/진입 신호<br/>탑승·정지·층 이동·하차 확인"]
@@ -56,12 +59,19 @@ flowchart TD
     Lift2 --> Delivery
     DropFloor -- 아니오 --> Delivery["목적지 경로 계획<br/>중앙 승인 후 적재 주행"]
     Delivery --> DropAlign["실제 팔레트 위치 기준 하역 정렬<br/>랙 내부 범위·받침 지지 확인"]
-    DropAlign --> Lower["포크 하강·받침으로 하중 인계<br/>포크 후진 인출"]
+    DropAlign --> DropClear{"하역 위치가 실제로 비었나?"}
+    DropClear -- 예 --> Lower["포크 하강·받침으로 하중 인계<br/>포크 후진 인출"]
+    DropClear -- 다른 차량이 점유 --> DropWait["제동·중앙 관제 양보 요청<br/>실제 점유 해제 확인"]
+    DropWait --> DropClear
+    DropWait -- 30초 내 해제 불가 --> Fault
+    DropClear -- 다른 물체·지지 이상 --> Fault
     Lower --> Confirm{"위치·각도·지지·분리 정상?"}
     Confirm -- 아니오 --> Fault
     Confirm -- 예 --> Complete["완료 보고·예약 해제"]
     Complete --> Ready
 ```
+
+충전기에 정차한 차량에 작업이 들어오면 대기 지시를 보존한 채 `LeaveCharger`로 출차하고, READY로 돌아온 뒤 지시를 수락한다. 충전 완료도 같은 출차 상태를 사용한다. 이 도식은 현재 코드 흐름이며 충전 전체 주기의 실제 검사 범위는 [WAREHOUSE.md](WAREHOUSE.md)를 따른다.
 
 삽입 재시도는 무한 반복하지 않는다. 재시도 한도를 넘거나 적재물 지지 상실·과적·전도·장비 고장이 확인되면 정지와 작업자 복구 요청으로 끝낸다. 팔레트·상자는 운반 중에도 동적 강체이며, 차체에 붙이거나 충돌을 꺼서 운반 성공을 만들지 않는다. 승강기 상태·상호 잠금의 상세 담당은 [MEZZANINE.md](MEZZANINE.md)다.
 
@@ -92,6 +102,8 @@ flowchart TD
 계획은 같은 층의 차로 앵커 후보를 최대40개까지 사용한다. 복구 때 추가한 임시 경유점도 이 후보에 포함되며, 현재 위치·목표·방향 보정 노드는 따로 추가한다. 임의의 창고 전체를 자유 공간 탐색으로 항상 풀어내는 계획기는 아니다. 적재 중에는 메시의 실제 돌출 범위를 더하고, 자리 회전은 앞쪽 하중 바퀴 사이를 중심으로 전체 차체·화물의 회전 공간을 검사한다. 경로 추종이 요청한 속도와 실제 속도는 서로 다르며, 실제 바퀴 접촉·모터·부하 때문에 목표 속도에 즉시 도달하지 않는다.
 
 주변 사람·장애물 결과는 **시뮬레이션 시간1초마다** 갱신하고 사이에는 최근 결과를 재사용한다. 실제 Chaos 충돌과 물리 서브스텝은 계속 작동한다. 팔레트 인식은 현재 `SeePallet`의 거리·시야각·가시선 검사 후 액터 Transform에 인식 오차를 더하는 방식이다. 점군에서 팔레트 형상·구멍을 추출하는 실제 영상/LiDAR 알고리즘은 아니다. 자체 점검의 센서 정상 여부도 교육용으로 주입하는 값이다.
+
+현재 성능 최적화는 이 센서 주기를 줄이거나 물리를 생략하지 않는다. 하중/재고의 명시적 받침 스냅샷과 한 경로 계획 안의 질의 설정을 공유하며, 기존 기하·장면 검사 순서에서 누적 비용이 확실히 비싸진 후보만 조기에 중단한다. 자세한 적용 범위는 [AUTONOMY.md](AUTONOMY.md), 실제 CPU/GPU 측정과 검증 범위는 [PHYSICS.md](PHYSICS.md)를 따른다.
 
 ## 4. 중앙 교통 관리의 의사결정
 

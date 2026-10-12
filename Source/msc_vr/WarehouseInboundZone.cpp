@@ -1,4 +1,5 @@
 #include "WarehouseInboundZone.h"
+#include "WarehousePerformance.h"
 #include "WarehouseForklift.h"
 #include "WarehousePallet.h"
 #include "WarehouseCargo.h"
@@ -68,6 +69,7 @@ bool AWarehouseInboundZone::SlotClear(int32 Index,AWarehousePallet* Pallet,const
 }
 void AWarehouseInboundZone::ScanInbound()
 {
+ CSV_SCOPED_TIMING_STAT(Warehouse,InboundScan);
  auto* Strength=AWarehouseDamageSystem::Find(this);
  if (!Strength) { Status=TEXT("입고 대기 구역: 하중 검사 시스템 없음"); return; }
  for (int32 I=Reservations.Num()-1;I>=0;--I)
@@ -82,6 +84,7 @@ void AWarehouseInboundZone::ScanInbound()
  const double Now=GetWorld()->GetTimeSeconds();
  TSet<TWeakObjectPtr<AWarehousePallet>> Present;
  int32 Loaded=0;
+ bool RefreshLoads=true;
  for (TActorIterator<AWarehousePallet> It(GetWorld());It;++It)
  {
   auto* Pallet=*It;
@@ -89,7 +92,9 @@ void AWarehouseInboundZone::ScanInbound()
   if (FMath::Abs(Local.X)>HalfSizeCm.X-55 || FMath::Abs(Local.Y)>HalfSizeCm.Y-55 ||
       FMath::Abs(Local.Z)>5 || Strength->HasFailed(Pallet)) continue;
   Present.Add(Pallet);
-  const TArray<AActor*> Loads=Strength->GetSupportedActors(Pallet);
+  // No physics step occurs inside this scan; all pallets share one fresh snapshot.
+  const TArray<AActor*> Loads=Strength->GetSupportedActors(Pallet,RefreshLoads);
+  RefreshLoads=false;
   bool bCargo=false,bHeld=false,bStable=Pallet->GetPalletBody()->GetPhysicsLinearVelocity().Size()<10 &&
    Pallet->GetPalletBody()->GetPhysicsAngularVelocityInDegrees().Size()<5 &&
    FMath::Abs(Pallet->GetActorRotation().Pitch)<2 && FMath::Abs(Pallet->GetActorRotation().Roll)<2;

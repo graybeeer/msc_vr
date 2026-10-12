@@ -79,11 +79,13 @@ phase_wall = started
 index = 0
 live = None
 clock_actor = None
+world_settings = None
 game = None
 submitted = False
 submitted_at = submitted_wall = 0.
 completed_at = completed_wall = None
 last_simulation = None
+last_frame_count = None
 last_sample = -1.
 case = None
 results = []
@@ -132,8 +134,8 @@ def compare():
 
 
 def tick(dt):
-    global phase, phase_wall, index, live, clock_actor, game, submitted, submitted_at, submitted_wall
-    global completed_at, completed_wall, last_simulation, last_sample, case
+    global phase, phase_wall, index, live, clock_actor, world_settings, game, submitted, submitted_at, submitted_wall
+    global completed_at, completed_wall, last_simulation, last_frame_count, last_sample, case
     try:
         wall = time.monotonic()
         assert wall - started < 600, 'Overall wall-clock test timeout'
@@ -152,9 +154,9 @@ def tick(dt):
                 compare()
                 finish(True, 'Fresh native 1/2/4x PIE transports retain identical 1/30 world steps and 1/120 Chaos substeps; requested and achieved wall speeds reported separately')
                 return
-            live = clock_actor = case = None
+            live = clock_actor = world_settings = case = None
             submitted = False
-            completed_at = completed_wall = last_simulation = None
+            completed_at = completed_wall = last_simulation = last_frame_count = None
             last_sample = -1.
             phase = 'request_play'
             phase_wall = wall
@@ -170,12 +172,43 @@ def tick(dt):
             assert not clock_actor.set_speed(3), 'Unsupported speed accepted'
             assert clock_actor.set_speed(SPEEDS[index]), 'Requested supported speed rejected'
             assert clock_actor.get_editor_property('requested_speed') == SPEEDS[index]
-            case = {'requested_speed': SPEEDS[index], 'samples': []}
+            settings = unreal.GameplayStatics.get_all_actors_of_class(game, unreal.WorldSettings)
+            assert len(settings) == 1, 'Expected one native world settings actor'
+            world_settings = settings[0]
+            case = {'requested_speed': SPEEDS[index], 'samples': [], 'duplicate_world_observation_count': 0}
             print('SIMULATION_SPEED_CASE_STARTED', SPEEDS[index])
-        if last_simulation is not None and now > 2:
-            step = now - last_simulation
-            assert abs(step - 1 / 30) < .0001, ('Physics frame duration changed with wall speed', SPEEDS[index], step)
+        frame_count = unreal.SystemLibrary.get_frame_count()
+        timing = {
+            'simulation_seconds': now, 'previous_simulation_seconds': last_simulation,
+            'callback_simulation_delta': now-last_simulation if last_simulation is not None else None,
+            'slate_delta_seconds': dt, 'world_delta_seconds': unreal.GameplayStatics.get_world_delta_seconds(game),
+            'frame_count': frame_count, 'previous_frame_count': last_frame_count,
+            'frame_gap': frame_count-last_frame_count if last_frame_count is not None else None,
+            'paused': unreal.GameplayStatics.is_game_paused(game),
+            'time_dilation': unreal.GameplayStatics.get_global_time_dilation(game),
+            'minimum_world_step': world_settings.get_editor_property('min_undilated_frame_time'),
+            'maximum_world_step': world_settings.get_editor_property('max_undilated_frame_time'),
+        }
+        case['clock_observation'] = timing
+        if now > 2:
+            duplicate_observation = last_simulation is not None and now == last_simulation
+            callback_valid = last_simulation is None or abs(now-last_simulation-1/30) < .0001
+            native_step_valid = abs(timing['world_delta_seconds']-1/30) < .000001
+            clamps_valid = all(abs(timing[name]-1/30) < .000001 for name in ('minimum_world_step', 'maximum_world_step'))
+            if not ((callback_valid or duplicate_observation) and native_step_valid and clamps_valid):
+                print('SIMULATION_SPEED_CLOCK_DIAGNOSTIC', SPEEDS[index], json.dumps(timing, ensure_ascii=False))
+            assert native_step_valid, ('Native world step changed with wall speed', SPEEDS[index], timing)
+            assert clamps_valid, ('Native fixed-step world clamps changed', SPEEDS[index], timing)
+            if duplicate_observation:
+                case['duplicate_world_observation_count'] += 1
+                case.setdefault('first_duplicate_world_observation', dict(timing))
+                case['last_duplicate_world_observation'] = dict(timing)
+                last_frame_count = frame_count
+                print('SIMULATION_SPEED_DUPLICATE_WORLD_OBSERVATION', SPEEDS[index], case['duplicate_world_observation_count'], json.dumps(timing, ensure_ascii=False))
+                return  # No world progress: do not execute test actions twice.
+            assert callback_valid, ('Physics frame duration changed with wall speed', SPEEDS[index], timing)
         last_simulation = now
+        last_frame_count = frame_count
         v, p, c, comp, strength = [live[label] for label in (
             'SpeedTestAGV', 'SpeedTestPallet', 'SpeedTestCargo', 'SpeedTestConsole', 'SpeedTestStrength')]
         assert not v.get_editor_property('mechanical_failure'), v.get_editor_property('status')
@@ -221,7 +254,20 @@ def tick(dt):
             return
         if now - completed_at < 2:
             return
-        assert (p.get_actor_location() - DESTINATION).length() <= 2., 'Completed pallet does not occupy its destination'
+        case['final_position_error_cm'] = (p.get_actor_location() - DESTINATION).length()
+        case['final_physical_bounds'] = {}
+        for actor in (p, c):
+            bounds = unreal.WarehouseDamageSystem.get_physical_bounds(actor)
+            assert bounds.is_valid, ('Completed load has no native physical bounds', actor.get_actor_label())
+            case['final_physical_bounds'][actor.get_actor_label()] = {'min': vector(bounds.min), 'max': vector(bounds.max)}
+            # This fixture's destination has yaw zero. Check expected cargo as
+            # well as the pallet, independently of the native support snapshot.
+            for x in (bounds.min.x, bounds.max.x):
+                for y in (bounds.min.y, bounds.max.y):
+                    assert abs(x-DESTINATION.x) <= 60.01 and abs(y-DESTINATION.y) <= 60.01, (
+                        'Completed load crossed its 120 cm reserved slot', actor.get_actor_label(), case['final_physical_bounds'])
+        assert v.is_floor_placement_valid(p, unreal.Transform(location=DESTINATION)), (
+            'Completed floor load is unsupported, unstable, overlapping or outside its reserved footprint', case['final_position_error_cm'])
         assert c in strength.get_supported_actors(p) and not strength.has_failed(c), 'Completed cargo lost its physical support'
         assert abs(p.get_actor_rotation().pitch) < 2 and abs(p.get_actor_rotation().roll) < 2
         assert dynamic(p).get_physics_linear_velocity().length() < 5, 'Completed pallet did not settle'

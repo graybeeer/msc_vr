@@ -520,7 +520,7 @@ void Amsc_vrCharacter::UpdateRemoteControl()
 	RemoteForklift->SetRemoteInput(
 		Brake ? 0.f : float(PC->IsInputKeyDown(EKeys::W))-float(PC->IsInputKeyDown(EKeys::S)),
 		Brake ? 0.f : float(PC->IsInputKeyDown(EKeys::D))-float(PC->IsInputKeyDown(EKeys::A)),
-		Brake ? 0.f : float(PC->IsInputKeyDown(EKeys::R))-float(PC->IsInputKeyDown(EKeys::F)));
+		Brake ? 0.f : float(PC->IsInputKeyDown(EKeys::LeftMouseButton))-float(PC->IsInputKeyDown(EKeys::RightMouseButton)));
 }
 
 FQuat Amsc_vrCharacter::GetHandFacing(int Index) const

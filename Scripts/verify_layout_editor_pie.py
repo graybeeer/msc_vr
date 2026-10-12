@@ -18,6 +18,31 @@ for actor in actors.get_all_level_actors():
         actor.set_editor_property('auto_start', False)
     if isinstance(actor, unreal.WarehouseInboundZone):
         actor.set_editor_property('fleet', [])
+# A parked-at-base positive fixture is authored before PIE and never saved.
+# Production vehicles start at inbound staging, so the second saved pairing
+# remains untouched and tests moving a charger while its vehicle is away.
+authored = {a.get_actor_label(): a for a in actors.get_all_level_actors()}
+for label in ('WH_AutonomousForklift', 'WH_AutonomousForklift_02'):
+    saved_vehicle = authored[label]
+    saved_station = saved_vehicle.get_editor_property('charging_station')
+    assert saved_station and saved_station.get_editor_property('assigned_vehicle') == saved_vehicle
+    assert saved_station.is_docked(saved_vehicle), ('Saved initial pose is not at its assigned charging bay', label)
+print('CHARGER_SAVED_START_POSES_PASSED', '2 original saved pairs, before any test fixtures')
+fixture_vehicle = authored['WH_AutonomousForklift']
+fixture_station = fixture_vehicle.get_editor_property('charging_station')
+assert fixture_station and fixture_station.get_editor_property('assigned_vehicle') == fixture_vehicle
+fixture_vehicle.set_actor_transform(fixture_station.get_actor_transform(), False, True)
+dock = fixture_station.get_actor_transform()
+exit_pose = unreal.Transform(location=dock.translation + fixture_station.get_actor_forward_vector() * 120,
+                             rotation=fixture_station.get_actor_rotation())
+fixture_vehicle.set_editor_property('navigation_anchors', list(fixture_vehicle.get_editor_property('navigation_anchors')) + [dock, exit_pose])
+# Keep one explicit away-from-base fixture after production starts are unified.
+# These are authored before native rig initialization, never runtime warps.
+away_fixture = authored['WH_AutonomousForklift_02']
+away_fixture.set_actor_location(unreal.Vector(1030, -1790, 0), False, True)
+away_fixture.set_actor_rotation(unreal.Rotator(), True)
+operator_fixture = actors.spawn_actor_from_class(unreal.CameraActor, dock.translation + unreal.Vector(0, 0, 100))
+operator_fixture.set_actor_label('LayoutChargerTestOperator')
 unreal.get_default_object(unreal.load_class(None, '/Script/UnrealEd.EditorPerformanceSettings')).set_editor_property('bThrottleCPUWhenNotForeground', False)
 selection_camera = actors.spawn_actor_from_class(unreal.CameraActor, unreal.Vector(0, 0, 6500), unreal.Rotator(pitch=-90))
 selection_camera.set_actor_label('LayoutSelectionTestCamera')
@@ -168,6 +193,100 @@ def find_accepted(actor, point, snapshot, candidates):
 
 def rollback_committed(actor, point, delta):
     assert drag(actor, point + delta, -delta, True), ('Cannot return committed object to the original clear layout', str(layout.get_editor_property('status')))
+
+
+def charger_checks():
+    vehicle = next(a for a in live if a.get_actor_label() == 'WH_AutonomousForklift')
+    station = vehicle.get_editor_property('charging_station')
+    saved_tags = list(station.tags)
+    try:
+        # Older saved stations also carried Other metadata; the native category
+        # guard must still prevent the generic vehicle-refresh path.
+        station.tags = list(dict.fromkeys([str(tag) for tag in saved_tags] + ['LayoutType:Other']))
+        layout.set_category(unreal.WarehouseLayoutCategory.OTHER)
+        layout.set_selection([station])
+        assert not layout.get_selection(), 'Charger was selectable in Other category'
+        assert not layout.begin_drag(station, station.get_actor_location()), 'Charger drag bypassed Charger category'
+    finally:
+        station.tags = saved_tags
+    layout.set_category(unreal.WarehouseLayoutCategory.CHARGER)
+    assert vehicle in station.get_linked_vehicles(), 'Saved vehicle/charger association was lost'
+    assert (vehicle.get_actor_location() - station.get_actor_location()).length() < 5, 'Parked fixture did not settle at its dock'
+    assert vehicle.get_actor_up_vector().z > .999, 'Parked fixture lost its actual upright orientation'
+    assert (vehicle.get_actor_forward_vector() - station.get_actor_forward_vector()).length() < .035, 'Parked fixture lost its actual docking orientation'
+    layout.set_selection([station])
+    assert layout.get_selection() == [station], 'Saved charger is not selectable in Charger category'
+    state = capture([station, vehicle])
+    point = station.get_actor_location()
+    anchors = [p.translation for p in vehicle.get_editor_property('navigation_anchors')]
+    assert layout.begin_drag(station, point), str(layout.get_editor_property('status'))
+    layout.update_drag(point + unreal.Vector(37, -23, 800))
+    translated(state, unreal.Vector(40, -20, 0))
+    disabled(state)
+    assert not layout.end_drag(False)
+    translated(state, unreal.Vector())
+    restored(state)
+    delta = find_accepted(station, point, state, [(30, 0), (-30, 0), (0, 30), (0, -30), (100, 0)])
+    assert vehicle.get_editor_property('charging_station') == station
+    assert station.get_editor_property('assigned_vehicle') == vehicle
+    assert vehicle in station.get_linked_vehicles()
+    for old, new in zip(anchors[-2:], list(vehicle.get_editor_property('navigation_anchors'))[-2:]):
+        assert (new.translation - old - delta).length() < .1, 'Dock/start or charging-exit navigation reference stayed stale'
+    rollback_committed(station, point, delta)
+    translated(state, unreal.Vector())
+    restored(state)
+    print('LAYOUT_CHARGER_PARKED_RIG_CANCEL_COMMIT_REFERENCES_PASSED', delta)
+
+    # A real cabinet/wall intersection must be rejected, with both native rigs
+    # restored. The fixture does not replace collision geometry or responses.
+    cabinet = next(p for p in station.get_components_by_class(unreal.StaticMeshComponent) if p.get_name() == 'Cabinet')
+    wall = next(a for a in live if a.get_actor_label() == 'WH_Wall_E') if any(a.get_actor_label() == 'WH_Wall_E' for a in live) else next(
+        a for a in live if a.get_actor_label().startswith('WH_Wall_') and a.get_actor_enable_collision()
+        and a.get_actor_bounds(False)[1].z > 100)
+    wall_centre, _ = wall.get_actor_bounds(False)
+    shift = wall_centre - cabinet.get_world_location()
+    shift.z = 0
+    assert layout.begin_drag(station, point)
+    layout.update_drag(point + shift)
+    assert not layout.end_drag(True), 'Charger cabinet was allowed through a physical wall'
+    assert '겹침' in str(layout.get_editor_property('status')), layout.get_editor_property('status')
+    translated(state, unreal.Vector())
+    restored(state)
+    assert not drag(station, point, unreal.Vector(30000, 30000, 0), True), 'Charger accepted a position without a real same-floor support'
+    translated(state, unreal.Vector())
+    restored(state)
+    print('LAYOUT_CHARGER_COLLISION_FLOOR_ROLLBACK_PASSED')
+
+    operator = next(a for a in live if a.get_actor_label() == 'LayoutChargerTestOperator')
+    assert vehicle.begin_remote_control(operator), 'Could not exercise the actual remote exclusion guard'
+    try:
+        assert layout.begin_drag(station, point)
+        layout.update_drag(point + unreal.Vector(100, 0, 0))
+        translated({station: state[station]}, unreal.Vector(100, 0, 0))
+        translated({vehicle: state[vehicle]}, unreal.Vector())
+        assert vehicle.get_actor_enable_collision(), 'Remote vehicle entered the disabled charger drag group'
+        assert not layout.end_drag(False)
+        translated(state, unreal.Vector())
+        restored(state)
+    finally:
+        vehicle.end_remote_control(operator)
+    print('LAYOUT_CHARGER_REMOTE_VEHICLE_NOT_DRAGGED_PASSED')
+
+    away = next(a for a in live if a.get_actor_label() == 'WH_AutonomousForklift_02')
+    away_station = away.get_editor_property('charging_station')
+    assert (away.get_actor_location() - away_station.get_actor_location()).length() > 5
+    untouched = capture([away])
+    station_state = capture([away_station])
+    away_point = away_station.get_actor_location()
+    delta = find_accepted(away_station, away_point, station_state, [(30, 0), (-30, 0), (0, 30), (0, -30), (100, 0)])
+    translated(untouched, unreal.Vector())
+    restored(untouched)
+    assert away.get_editor_property('charging_station') == away_station
+    rollback_committed(away_station, away_point, delta)
+    translated(untouched, unreal.Vector())
+    restored(untouched)
+    print('LAYOUT_CHARGER_AWAY_VEHICLE_POSITION_PRESERVED_PASSED', delta)
+    layout.clear_selection()
 
 
 def reject_wall_overlap(actor, point, state):
@@ -503,6 +622,7 @@ def tick(dt):
             return
 
         if phase == 2:
+            charger_checks()
             layout.set_category(unreal.WarehouseLayoutCategory.FORKLIFT)
             selected = next(a for a in live if isinstance(a, unreal.WarehouseForklift) and -2 < a.get_actor_location().z < 398)
             snapshot = capture([selected])
@@ -628,7 +748,7 @@ def tick(dt):
             for part in selected.get_components_by_class(unreal.StaticMeshComponent):
                 assert part.get_world_location().z > -15, ('AGV part fell through floor', part.get_name())
             print('LAYOUT_UNPAUSE_AGV_RESTART_PASSED')
-            finish(True, 'Saved single/multiple racks and contents, projected marquee/floor scope, rack/wall face snap, zones, collision rollback, physical AGV rig, common 3-floor elevator, truck cargo and simulation resume')
+            finish(True, 'Saved single/multiple racks and contents, projected marquee/floor scope, rack/wall face snap, zones, charger/parked rig references and remote/away exclusion, collision/floor rollback, physical AGV rig, common 3-floor elevator, truck cargo and simulation resume')
     except Exception:
         finish(False, traceback.format_exc())
 

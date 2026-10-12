@@ -36,6 +36,7 @@ actors.spawn_actor_from_class(unreal.PlayerStart,unreal.Vector(3000,-3000,125))
 for name,y,px in (('Retry',0,500),('Blocked',-1500,500),('Detour',1500,1200),('Stall',3000,1000),('Limit',-3000,500)):
     rig=actors.spawn_actor_from_class(unreal.WarehouseForklift,unreal.Vector(0,y,0))
     rig.set_actor_label(name)
+    rig.set_editor_property('vehicle_name',name)
     rig.set_editor_property('auto_start',True)
     if name in ('Retry','Blocked','Limit'):rig.set_editor_property('pallet_position_bias_cm',unreal.Vector(-20,0,0))
     if name=='Stall':rig.set_editor_property('empty_travel_speed_cm',30)
@@ -44,7 +45,9 @@ for name,y,px in (('Retry',0,500),('Blocked',-1500,500),('Detour',1500,1200),('S
     rig.set_editor_property('target_pallet',deck)
     job=unreal.WarehouseWorkOrder(job_id=name,pallet=deck,destination=unreal.Transform(location=unreal.Vector(1700,y,0)))
     rig.set_editor_property('pending_jobs',[job])
-rear=obstacle('RearWall',(-170,-1500,115),(.5,4,2.3))
+# Keep this wall outside the initial route; move it behind the vehicle only
+# after incomplete insertion triggers the recovery being tested below.
+rear=obstacle('RearWall',(3000,-1500,115),(.5,4,2.3))
 rear.static_mesh_component.set_mobility(unreal.ComponentMobility.MOVABLE)
 obstacle('RouteWall',(450,1500,115),(.5,1,2.3))
 obstacle('PersonProbe',(3000,2500,85),(.4,.5,1.7),True)

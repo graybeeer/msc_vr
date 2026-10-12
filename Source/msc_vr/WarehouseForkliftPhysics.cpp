@@ -1,4 +1,5 @@
 #include "WarehouseForklift.h"
+#include "WarehousePerformance.h"
 #include "WarehousePhysics.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -220,12 +221,21 @@ bool AWarehouseForklift::CommandTurn(float YawRate,float Dt)
 
 void AWarehouseForklift::UpdatePhysicalRig(float Dt)
 {
+ CSV_SCOPED_TIMING_STAT(Warehouse,ForkliftMotors);
  if (!bPhysicsReady || Dt<=0) return;
  CurrentSpeedCm=FVector::DotProduct(ChassisBody->GetPhysicsLinearVelocity(),GetActorForwardVector());
- LiftOffset=GetActorTransform().InverseTransformPosition(Carriage->GetComponentLocation()).Z;
- if (GetActorUpVector().Z<.75f || SteeringJoint->IsBroken() || CarriageJoint->IsBroken() || StageJoint->IsBroken() || WheelJoints.ContainsByPredicate([](UPhysicsConstraintComponent* Joint) { return Joint->IsBroken(); }))
+ const FVector GuideOffset=GetActorTransform().InverseTransformPosition(Carriage->GetComponentLocation());
+ LiftOffset=GuideOffset.Z;
+ // The carriage guide locks both planar axes. A detached native carriage
+ // must fault even when Chaos's cached IsBroken flag has not reported it.
+ const bool GuideLost=GuideOffset.Size2D()>5.f;
+ if (GetActorUpVector().Z<.75f || GuideLost || SteeringJoint->IsBroken() || CarriageJoint->IsBroken() || StageJoint->IsBroken() || WheelJoints.ContainsByPredicate([](UPhysicsConstraintComponent* Joint) { return Joint->IsBroken(); }))
  {
-  if (!bMechanicalFailure) SetMechanicalFailure();
+  if (!bMechanicalFailure)
+  {
+   if (GuideLost) UE_LOG(LogTemp,Warning,TEXT("AGV_CARRIAGE_GUIDE_LOST %s offset=%s"),*VehicleName,*GuideOffset.ToString());
+   SetMechanicalFailure();
+  }
  }
  if (!bPowered || bMechanicalFailure || !bEStopReleased || !bBrakeHealthy) BrakeDrive();
  const float Wheelbase=FMath::Abs((-74.f+7.f)*(215.f/282.55f));
@@ -247,12 +257,15 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  SteeringJoint->SetAngularOrientationTarget(FRotator(0,0,FMath::RadiansToDegrees(SteeringAngle)));
  if (FMath::Abs(FMath::FindDeltaAngleRadians(ActualSteering,SteeringAngle))>.01f) SteeringBody->WakeAllRigidBodies();
  const float SteeringError=FMath::Abs(FMath::FindDeltaAngleRadians(ActualSteering,RequestedSteering));
- // The finite spindle can deflect about two degrees under opposite rolling
- // load at its end stop. Braking there prevented the steering from settling.
- const bool TurnReady=Turning && SteeringError<FMath::DegreesToRadians(5.f) && ChassisBody->GetPhysicsLinearVelocity().Size2D()<30.f;
+ // A loaded, braked tyre can retain about four degrees of finite spindle
+ // deflection. Use the same five-degree readiness envelope for travel and
+ // pivoting; a tighter travel gate can lock the brake indefinitely. The
+ // spindle still corrects its error and all swept/native contacts remain.
+ const float SteeringTolerance=FMath::DegreesToRadians(5.f);
+ const bool TurnReady=Turning && SteeringError<SteeringTolerance && ChassisBody->GetPhysicsLinearVelocity().Size2D()<30.f;
  // Finish steering before applying drive torque; a sideways tyre otherwise
  // translates the chassis during a pivot or when resuming straight travel.
- const bool Braking=Turning ? !TurnReady : FMath::Abs(DesiredDriveSpeed)<.01f || SteeringError>FMath::DegreesToRadians(3.f);
+ const bool Braking=Turning ? !TurnReady : FMath::Abs(DesiredDriveSpeed)<.01f || SteeringError>SteeringTolerance;
  // Begin the acceleration ramp only after steering is ready. Building a
  // full-speed target under the brake caused a sideways launch after a pivot.
  DriveSpeedTarget=FMath::FInterpConstantTo(DriveSpeedTarget,Braking ? 0.f : DesiredDriveSpeed,Dt,FMath::Max(1.f,DriveAccelerationCm));
@@ -277,8 +290,9 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  const float TorqueNm=FMath::Clamp(float(FVector::DotProduct(JointTorque,Axle)/10000.),-Limit,Limit);
  if (FParse::Param(FCommandLine::Get(),TEXT("DriveDiagnostics")) &&
      FMath::FloorToInt(GetWorld()->GetTimeSeconds()*2.f)!=FMath::FloorToInt((GetWorld()->GetTimeSeconds()-Dt)*2.f))
-  UE_LOG(LogTemp,Log,TEXT("AGV_DRIVE_DIAG %s Turn=%.3f SteerTarget=%.2f SteerActual=%.2f SpinTarget=%.3f Spin=%.3f Torque=%.2f Limit=%.2f Speed=%.2f Powered=%d Route=%d/%d Endpoint=%d Turning=%d Orienting=%d Driving=%d"),
-   *VehicleName,DesiredTurnRate,FMath::RadiansToDegrees(SteeringAngle),FMath::RadiansToDegrees(ActualSteering),DesiredSpin,Spin,TorqueNm,Limit,CurrentSpeedCm,bPowered,RouteIndex,PlannedRoute.Num(),EndpointSegment,bRouteTurning,bEndpointOrienting,bEndpointDriving);
+  UE_LOG(LogTemp,Log,TEXT("AGV_DRIVE_DIAG %s Turn=%.3f SteerTarget=%.2f SteerActual=%.2f SpinTarget=%.3f Spin=%.3f Torque=%.2f Limit=%.2f Speed=%.2f Powered=%d Route=%d/%d Endpoint=%d Turning=%d Orienting=%d Driving=%d State=%d Lift=%.3f LiftTarget=%.3f LiftVelocity=%.3f"),
+   *VehicleName,DesiredTurnRate,FMath::RadiansToDegrees(SteeringAngle),FMath::RadiansToDegrees(ActualSteering),DesiredSpin,Spin,TorqueNm,Limit,CurrentSpeedCm,bPowered,RouteIndex,PlannedRoute.Num(),EndpointSegment,bRouteTurning,bEndpointOrienting,bEndpointDriving,
+   int32(AIState),LiftOffset,DesiredLift,CarriageBody->GetPhysicsLinearVelocity().Z-ChassisBody->GetPhysicsLinearVelocity().Z);
  // Bearing resistance dissipates wheel motion and applies the opposite reaction to the chassis.
  for (int32 I=0; I<Wheels.Num(); ++I)
  {
@@ -288,6 +302,9 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
   // Free roller bearings are not service brakes. The former 8Nm per small
   // roller consumed substantial drive power even on an empty vehicle.
   const FVector Resistance=Axis*(-FMath::Clamp(W*.08f,-1.5f,1.5f)*10000.f);
+  // Even AddTorque(0) wakes a sleeping Chaos body. Preserve natural rest;
+  // every nonzero bearing torque still applies with its equal reaction.
+  if (Resistance.IsZero()) continue;
   Wheel->AddTorqueInRadians(Resistance); (I==0 ? SteeringBody.Get() : ChassisBody.Get())->AddTorqueInRadians(-Resistance);
  }
  if (bPowered && !bMechanicalFailure)

@@ -13,7 +13,8 @@ DELIVERY_SEED = 20261001
 
 def configure_cargo_variety():
     actors=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
-    cargo=sorted((a for a in actors.get_all_level_actors() if isinstance(a,unreal.WarehouseCargo)),key=lambda a:a.get_actor_label())
+    # Deliberate exception-test loads keep their authored recipe, mass and tint.
+    cargo=sorted((a for a in actors.get_all_level_actors() if isinstance(a,unreal.WarehouseCargo) and not a.actor_has_tag('ExceptionCargo')),key=lambda a:a.get_actor_label())
     assert cargo,'No cargo in level'
     meshes=[unreal.load_asset('/Game/Warehouse/Cargo/BoxesPalletsPack/Meshes/SM_Carton_Intact_'+str(i)) for i in (1,2)]
     assert all(meshes),'Install the local Fab Boxes & Pallets Pack with Scripts/import_boxes_pallets_pack.py; see WAREHOUSE.md'

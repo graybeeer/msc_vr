@@ -1,4 +1,5 @@
 #include "WarehouseFleetCoordinator.h"
+#include "WarehousePerformance.h"
 #include "WarehouseForklift.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -123,6 +124,7 @@ bool AWarehouseFleetCoordinator::Retreat(AWarehouseForklift* V,AWarehouseForklif
 
 bool AWarehouseFleetCoordinator::Permit(AWarehouseForklift* V,const FTransform* PreciseGoal)
 {
+ CSV_SCOPED_TIMING_STAT(Warehouse,TrafficPermit);
  if (V->bTrafficEscape || V->IsRemoteControlled()) return true;
  auto& Request=Requests.FindOrAdd(V);
  if (!Request.Order) { Request.Order=++NextOrder;Request.Since=GetWorld()->GetTimeSeconds(); }

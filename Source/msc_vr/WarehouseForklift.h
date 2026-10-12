@@ -12,6 +12,7 @@ class AWarehouseChargingStation;
 class AWarehouseElevator;
 class UPhysicsConstraintComponent;
 class AWarehouseFleetCoordinator;
+struct FWarehouseNavigationQuery;
 
 UENUM(BlueprintType)
 enum class EWarehouseCycle : uint8 { Idle, Approach, Lift, TravelLower, Reverse, Lower, Withdraw, Complete, ToCharger, Docking, Charging, Returning };
@@ -68,6 +69,10 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") TArray<FString> CompletedJobIds;
  UPROPERTY(BlueprintAssignable, Category="Autonomy") FWarehouseReportEvent OnJobReport;
  UFUNCTION(BlueprintCallable, Category="Autonomy") bool SubmitJob(const FWarehouseWorkOrder& Job);
+ // Floor handoff uses a reserved 120cm square, not a centre-only tolerance.
+ static constexpr float FloorSlotHalfExtentCm = 60.f;
+ UFUNCTION(BlueprintPure, Category="Autonomy") bool IsFloorFootprintValid(AWarehousePallet* Pallet,const FTransform& Reference,bool Refresh=true) const;
+ UFUNCTION(BlueprintPure, Category="Autonomy") bool IsFloorPlacementValid(AWarehousePallet* Pallet,const FTransform& Destination,bool bForksStillInserted=false,bool Refresh=true) const;
  UFUNCTION(BlueprintCallable, Category="Autonomy") bool PlanAutonomousRoute(const FTransform& Goal);
  UFUNCTION(BlueprintCallable, Category="Layout") void RefreshAfterLayout();
  UFUNCTION(BlueprintPure, Category="Autonomy") FString CheckSystems() const;
@@ -118,6 +123,7 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Traffic") FString TrafficStatus;
 private:
  friend class AWarehouseFleetCoordinator;
+ friend class AWarehouseLayoutEditor;
  UPROPERTY(Transient) TObjectPtr<AWarehouseFleetCoordinator> FleetCoordinator;
  bool bPlanningRoute=false,bAvoidTrafficReservations=false,bTrafficEscape=false;
  bool bEndpointDriving=false,bEndpointOrienting=false,bRouteTurning=false;
@@ -164,16 +170,20 @@ private:
  void FaultAI(const FString& Reason);
  void ReportJob(const FString& Result,const FString& Detail);
  bool RackLoadAligned() const;
- bool NavigationClear(const FTransform& Pose) const;
- bool ConnectPoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost) const;
- bool ConnectLanePoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost) const;
+ FWarehouseNavigationQuery BuildNavigationQuery() const;
+ bool NavigationClear(const FTransform& Pose,const FWarehouseNavigationQuery* Query=nullptr) const;
+ bool ConnectPoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost,const FWarehouseNavigationQuery* Query=nullptr) const;
+ bool ConnectLanePoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost,const FWarehouseNavigationQuery* Query=nullptr) const;
  bool FollowRoute(float Speed,float Dt);
  bool MovePrecise(FVector Destination,float Speed,float Dt);
  bool SeePallet(FTransform& Pose) const;
- bool DestinationClear() const;
+ bool DestinationClear(const TArray<AActor*>* Traffic=nullptr) const;
+ bool WaitForDestinationClear(float Dt);
+ float DestinationTrafficSeconds=0;
  void TrackCargo();
  bool PalletOnForks() const;
  float LostSupportSeconds = 0;
+ float LiftInitialHeight=0,LiftProgressHeight=0,LiftProgressAt=0;
  FTransform PalletApproach(const FTransform& PalletPose,float Distance) const;
  EWarehouseAIState ResumeAI = EWarehouseAIState::Ready;
  EWarehouseAIState WaitResumeAI = EWarehouseAIState::Ready;
@@ -181,6 +191,8 @@ private:
  FTransform ObservedPallet;
  FVector RetractLocation = FVector::ZeroVector;
  FTransform ChargeExitPose;
+ FTransform DockStablePose;
+ float DockStableSeconds = -1; // Negative until the brake-only settling window starts.
  float AIElapsed = 0;
  float AITotalSeconds = 0;
  float WaitSeconds = 0;
@@ -227,7 +239,7 @@ private:
  bool bRouteObstacleClear=true, bTurnObstacleClear=true;
  FString MovementObstacleReason, LiftObstacleReason;
  bool MoveVehicle(FVector Delta);
- bool MoveToLine(FVector Destination, float Speed, float Dt);
+ bool MoveToLine(FVector Destination, float Speed, float Dt, float ArrivalTolerance=1.f);
  bool BeginChargeTrip();
  void ConsumeEnergy(float Wh);
  void RefreshDisplay();

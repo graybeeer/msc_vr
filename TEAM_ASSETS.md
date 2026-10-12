@@ -72,7 +72,7 @@ Windows 기준으로 아래 순서로 런처의 검색 경로를 등록합니다
 
 ## 4. C++ 빌드와 로컬 에셋 준비
 
-팩 설치 뒤에는 Git에서 제외한 **충돌 복사본·온전한 상자·공통 팔레트·열린 트럭 메시**도 만들어야 합니다. 먼저 프로젝트의 C++를 `msc_vrEditor / Development Editor / Win64`로 빌드합니다. 팀원 PC에는 UE 5.8과 Visual Studio의 게임 C++ 개발 도구가 필요합니다.
+팩 설치 뒤에는 Git에서 제외한 **충돌 복사본·온전한 상자·공통 팔레트·열린 트럭 메시·중량 시험 상자 색 재질**도 만들어야 합니다. 먼저 프로젝트의 C++를 `msc_vrEditor / Development Editor / Win64`로 빌드합니다. 팀원 PC에는 UE 5.8과 Visual Studio의 게임 C++ 개발 도구가 필요합니다.
 
 | 순서 | 작업 | 저장하는 대상 |
 | --- | --- | --- |
@@ -80,8 +80,9 @@ Windows 기준으로 아래 순서로 런처의 검색 경로를 등록합니다
 | ② | 충돌·실측 상자·공통 팔레트 준비 | 에셋만 생성 |
 | ③ | 손상 프로필과 파손용 메시 준비 | 에셋 생성 + 맵 손상 프로필 저장 |
 | ④ | 열린 트럭 적재함 준비 | 에셋 생성 + `TRK_` 내부와 상자 48개 재배치·저장 |
+| ⑤ | 중량 시험 상자 색 재질 복원 | 로컬 재질 생성 + 대상 상자4개·표지·하중 프로필을 기본 배치로 갱신·저장 |
 
-**아래 명령은 PowerShell에서 `msc_vr.uproject`가 있는 프로젝트 폴더로 이동한 뒤, Unreal Editor를 종료한 상태에서 순서대로 실행합니다.** 엔진 설치 위치가 다르면 실행 파일 경로를 수정합니다. 정상 완료 문구를 확인한 뒤 다음 단계로 넘어갑니다.
+**①~④ 명령은 PowerShell에서 `msc_vr.uproject`가 있는 프로젝트 폴더로 이동한 뒤, Unreal Editor를 종료한 상태에서 순서대로 실행합니다.** 엔진 설치 위치가 다르면 실행 파일 경로를 수정합니다. 정상 완료 문구를 확인한 뒤 다음 단계로 넘어갑니다. ⑤는 아래 안내대로 일반 Unreal Editor에서 실행합니다.
 
 ### ① 상자 FBX 임포트 — 에셋만 생성
 
@@ -115,7 +116,17 @@ Windows 기준으로 아래 순서로 런처의 검색 경로를 등록합니다
 
 완료 문구: `TRUCK_INTERIOR_APPLIED`. 원본 트럭 팩은 그대로 두고 로컬 파생 메시를 만듭니다. 이 단계는 단순 다운로드가 아니라 **맵의 TRK_ 배치를 초기 구성으로 다시 만드는 작업**입니다. 개인적으로 트럭 내부를 편집한 뒤에는 자동으로 반복 실행하지 않습니다.
 
-일반 설치에서는 맵을 다시 만드는 `build_first_person_warehouse.py`, `configure_mezzanine.py`, `apply_real_world_scale.py`, `configure_cargo_variety.py`, `configure_dual_forklifts.py`를 실행하지 않습니다. 최신 Git 맵에는 복층과 1층 지게차 2대의 배치가 이미 들어 있습니다. ③·④도 개인적으로 해당 영역을 편집한 뒤 반복 실행할 준비 작업은 아닙니다.
+### ⑤ 중량 시험 상자 색 재질 복원 — 첫 설치·재질 누락 때만
+
+저장된 맵의 중량 상자는 `Content/Warehouse/Cargo/BoxesPalletsPack/HeavyTest/Materials/`의 로컬 파생 재질을 참조합니다. 이 폴더는 Git에 포함되지 않으므로 첫 설치 또는 해당 재질이 누락됐을 때 재생성해야 합니다. Fab 상자 팩과②의 `SM_Carton_Intact_2` 준비를 먼저 끝냅니다. 상자 사양·배치·검증 범위는 [WAREHOUSE.md의 중량 예외 시험 상자](WAREHOUSE.md#중량-예외-시험-상자)를 확인합니다.
+
+1. 빌드를 마친 `msc_vr.uproject`를 일반 **Unreal Editor**로 열고 필요한 현재 작업을 저장합니다.
+2. **Tools → Execute Python Script...**에서 프로젝트의 `Scripts/configure_heavy_test_cargo.py`를 선택합니다. 이 단계는 실제 PIE 검사를 사용하므로 앞 단계의 `UnrealEditor-Cmd.exe` 방식으로 실행하지 않습니다.
+3. 스크립트가 지정 구석의 실제 충돌·바닥을 잠시 플레이로 확인한 뒤 재질을 생성하고 맵을 저장합니다. 출력 로그에서 `HEAVY_NATIVE_CORNER_PREFLIGHT_PASSED`와 마지막 `HEAVY_TEST_CARGO_SAVED`를 확인합니다. 정상 완료 후 에디터는 자동 종료됩니다. Python 오류가 있으면 완료로 처리하지 않습니다.
+
+이 작업은 **대상 상자4개의 위치를 원래 두 열·두 단 배치로 되돌리고 관련 표지·하중 프로필도 갱신해 맵에 저장**합니다. 나머지 창고 물류를 재생성하지 않습니다. 이미 이 상자를 수동 배치한 팀원은 일상 작업마다 반복 실행하지 않습니다.
+
+일반 설치에서는 맵을 다시 만드는 `build_first_person_warehouse.py`, `configure_mezzanine.py`, `apply_real_world_scale.py`, `configure_cargo_variety.py`, `configure_dual_forklifts.py`를 실행하지 않습니다. 최신 Git 맵에는 복층과 1층 지게차 2대의 배치가 이미 들어 있습니다. ③·④·⑤도 개인적으로 해당 영역을 편집한 뒤 반복 실행할 준비 작업은 아닙니다.
 
 ## 5. 따로 다운로드하지 않아도 되는 것
 
@@ -135,7 +146,14 @@ Windows 기준으로 아래 순서로 런처의 검색 경로를 등록합니다
 - [ ] 상자 FBX 임포트와 충돌 준비를 끝냈고 `SM_Carton_Intact_1/2`, `SM_Pallet_110`이 있다.
 - [ ] `Content/Warehouse/Collision/`와 `Content/Warehouse/Physics/`가 생성됐다.
 - [ ] `Content/Warehouse/Exterior/TruckInterior/SM_Truck_Open.uasset`이 있다.
+- [ ] `Content/Warehouse/Cargo/BoxesPalletsPack/HeavyTest/Materials/`를 재생성했고 중량 시험 상자가 텍스처와4색으로 보인다.
 - [ ] C++ 빌드를 완료하고 `msc_vr.uproject`를 UE 5.8에서 열었다.
 - [ ] 기본 맵 `Content/FirstPerson/Lvl_FirstPerson.umap`에서 랙·팔레트·상자·트럭·나무·관목이 보인다.
 
 모델이 안 보이면 **프로젝트 안의 폴더 경로**부터 확인합니다. 팩을 다른 폴더로 옮기면 저장된 맵의 참조가 맞지 않을 수 있습니다. 상자 품목·질량 규칙은 [CARGO_RULES.md](CARGO_RULES.md), 지게차 모델·바퀴 충돌 재생성 순서는 [REFINED_AGV.md](REFINED_AGV.md), 실제 강체 구동과 물리 준비·검사 기준은 [PHYSICS.md](PHYSICS.md)를 확인합니다.
+
+## 무료 운반 애니메이션 후보 — 미적용
+
+추가 운반 애니메이션은 **무료 에셋만** 대상으로 합니다. 2026-10-12 [Mixamo 공식 검색](https://www.mixamo.com/#/?query=box&type=Motion%2CMotionPack)에서 `Box Idle`(들고 서기), `Box Turn`(좌·우 회전), `Box Walk Arc`(곡선 보행), `Jogging With Box`(들고 뛰기)를 확인했습니다. [Adobe 공식 안내](https://helpx.adobe.com/creative-cloud/faq/mixamo-faq.html)는 Adobe ID로 무료 이용 및 게임 사용이 가능하다고 명시합니다.
+
+현재 다운로드·리타게팅·게임 적용은 하지 않았으며 필수 설치 목록에 포함하지 않습니다. 앞서 검토한 Fab `Pick Up & Carry Animation Pack`은 무료를 확인하지 못해 제외합니다. 적용할 때는 현재 캐릭터에 동작을 맞추고 기존 상자 크기별 양손 IK와 연결해야 합니다.

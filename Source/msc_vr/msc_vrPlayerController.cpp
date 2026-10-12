@@ -162,8 +162,8 @@ void Amsc_vrPlayerController::BeginPlay()
 			.Visibility_Lambda([this]() { return bObserverView && LayoutEditor && LayoutEditor->bEditing && !IsWarehouseMenuOpen() ? EVisibility::Visible:EVisibility::Collapsed; });
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(LayoutCanvas.ToSharedRef(),10);
 		auto Row=SNew(SHorizontalBox);
-		const TCHAR* Labels[]={TEXT("1 랙"),TEXT("2 지게차"),TEXT("3 승강기"),TEXT("4 입출고 구역"),TEXT("5 기타 물건")};
-		for (int32 I=0;I<5;++I)
+		const TCHAR* Labels[]={TEXT("1 랙"),TEXT("2 지게차"),TEXT("3 승강기"),TEXT("4 입출고 구역"),TEXT("5 기타 물건"),TEXT("6 충전기")};
+		for (int32 I=0;I<UE_ARRAY_COUNT(Labels);++I)
 			Row->AddSlot().AutoWidth().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
 				.OnClicked_Lambda([this,I]() { SetLayoutCategory(I);return FReply::Handled(); })
 				[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity_Lambda([this,I]() { return LayoutEditor && int32(LayoutEditor->Category)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(Labels[I]))]];
@@ -306,7 +306,7 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 	};
 	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::TitleSize,true))
 		.ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("물류창고 · 설정 / 관찰")))];
-	Text(TEXT("F1: 메뉴  |  Shift: 달리기  |  Ctrl: 앉기  |  E: 집기 / 적재\nG: 바라보는 지게차의 후방 3인칭 원격 조작 / 종료\n원격: W/S 전후진 · A/D 조향·자리 회전 · R/F 포크 승강 · Space 제동\n마우스: 지게차 주변 보기 · 종료하면 플레이어 1인칭 복귀\n메뉴와 관찰 중에도 창고 시뮬레이션은 계속됩니다."));
+	Text(TEXT("F1: 메뉴  |  Shift: 달리기  |  Ctrl: 앉기  |  E: 집기 / 적재\nG: 바라보는 지게차의 후방 3인칭 원격 조작 / 종료\n원격: W/S 전후진 · A/D 조향·자리 회전 · 좌클릭 포크 올림 · 우클릭 내림 · Space 제동\n마우스 이동: 지게차 주변 보기 · 종료하면 플레이어 1인칭 복귀\n메뉴와 관찰 중에도 창고 시뮬레이션은 계속됩니다."));
 	Button(bObserverView ? TEXT("1인칭 캐릭터로 돌아가기") : TEXT("전지적 관찰 시점으로 전환"),[this]() { ToggleObserverView(); CloseWarehouseMenu(); });
 	Button(TEXT("창고 전체 보기"),[this]() { if (!bObserverView) ToggleObserverView(); SetObserverFloor(-1); CloseWarehouseMenu(); });
     for (int32 Floor=0; Floor<3; ++Floor)
@@ -434,7 +434,7 @@ void Amsc_vrPlayerController::ToggleLayoutEditing()
  UpdateInputMode();
 }
 void Amsc_vrPlayerController::SetLayoutCategory(int32 CategoryIndex)
-{ if (LayoutEditor && CategoryIndex>=0 && CategoryIndex<5) LayoutEditor->SetCategory(EWarehouseLayoutCategory(CategoryIndex)); }
+{ if (LayoutEditor && CategoryIndex>=0 && CategoryIndex<=int32(EWarehouseLayoutCategory::Charger)) LayoutEditor->SetCategory(EWarehouseLayoutCategory(CategoryIndex)); }
 
 void Amsc_vrPlayerController::SetObserverRoofVisibility(bool Hide)
 {
@@ -526,7 +526,7 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
  if (IsWarehouseMenuOpen() || !PlayerCameraManager || !GetPawn()) return FText::GetEmpty();
  if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn()))
   if (auto* Vehicle=OperatorCharacter->GetRemoteForklift())
-   return FText::FromString(FString::Printf(TEXT("지게차 후방 시점 · 스마트폰 원격 조작 · %s\nW/S 전후진 · A/D 조향·자리 회전 · R/F 포크 승강 · Space 제동\n마우스 주변 보기 · G 종료 / 플레이어 1인칭 복귀\n%s\n속도 %.2f m/s · 배터리 %.0f%% · 적재 %.0f / %.0f kg"),
+   return FText::FromString(FString::Printf(TEXT("지게차 후방 시점 · 스마트폰 원격 조작 · %s\nW/S 전후진 · A/D 조향·자리 회전 · 좌클릭 포크 올림 · 우클릭 내림 · Space 제동\n마우스 이동: 주변 보기 · G 종료 / 플레이어 1인칭 복귀\n%s\n속도 %.2f m/s · 배터리 %.0f%% · 적재 %.0f / %.0f kg"),
     *Vehicle->VehicleName,*Vehicle->Status,FMath::Abs(Vehicle->CurrentSpeedCm)*.01f,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
  if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn()))
  {

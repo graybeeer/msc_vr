@@ -1,4 +1,5 @@
 #include "WarehouseForklift.h"
+#include "WarehousePerformance.h"
 #include "WarehouseFleetCoordinator.h"
 #include "WarehousePallet.h"
 #include "WarehouseDamageSystem.h"
@@ -11,6 +12,8 @@
 #include "Engine/StaticMesh.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "CollisionQueryParams.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "UObject/ConstructorHelpers.h"
 
 void AWarehouseForklift::RebuildEditedMesh(UStaticMesh* Mesh)
@@ -242,6 +245,7 @@ bool AWarehouseForklift::BeginChargeTrip()
 }
 void AWarehouseForklift::Tick(float DeltaSeconds)
 {
+ CSV_SCOPED_TIMING_STAT(Warehouse,ForkliftTick);
  Super::Tick(DeltaSeconds);
  if (bEmergencyBlocked && IsRemoteControlled() && FVector::Dist2D(GetActorLocation(),EmergencyLocation)>50.f && CheckSystems().IsEmpty())
  { bEmergencyBlocked=false; EmergencyReason.Reset(); }
@@ -323,6 +327,17 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
   }
   TArray<FHitResult> Hits;
   GetWorld()->ComponentSweepMulti(Hits,Part,Part->GetComponentLocation(),Part->GetComponentLocation()+PartDelta,Part->GetComponentQuat(),Params);
+  if (!LiftOnly && IsRemoteControlled() && !PartDelta.IsNearlyZero())
+  {
+   // A one-second scanner cannot predict a stationary wall using only one
+   // frame of travel. Scan the existing safety horizon, retaining the short
+   // native sweep for dynamic pallets/loads and their insertion contacts.
+   TArray<FHitResult> Ahead;
+   GetWorld()->ComponentSweepMulti(Ahead,Part,Part->GetComponentLocation(),
+    Part->GetComponentLocation()+PartDelta+PartDelta.GetSafeNormal()*LookAhead,Part->GetComponentQuat(),Params);
+   for (const auto& Hit : Ahead)
+    if (Hit.GetComponent() && !Hit.GetComponent()->IsSimulatingPhysics()) Hits.Add(Hit);
+  }
   for (const FHitResult& Hit : Hits)
   {
    // A rolling tyre's convex sweep can return a slightly tilted wheel normal
@@ -335,9 +350,49 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
     Bearing.AddIgnoredActors(GetPhysicalLoads());
     FHitResult Ground;
     const float Radius=Part->GetStaticMesh()->GetBoundingBox().GetExtent().Z*Part->GetComponentScale().GetAbs().Z;
-    if (GetWorld()->LineTraceSingleByChannel(Ground,Part->GetComponentLocation(),
-        Part->GetComponentLocation()-FVector(0,0,Radius+5.f),ECC_Visibility,Bearing) &&
-        Ground.GetComponent()==Hit.GetComponent() && Ground.ImpactNormal.Z>.98f) continue;
+    const FVector RayStart=Part->GetComponentLocation(),RayEnd=RayStart-FVector(0,0,Radius+5.f);
+    auto* Surface=Hit.GetComponent();
+    // Coplanar floor pieces can trade the first world trace hit. Verify the
+    // swept component's own native bearing surface, retaining the channel rule.
+    const bool BearingHit=Surface && Surface->IsQueryCollisionEnabled() &&
+     Surface->GetCollisionResponseToChannel(ECC_Visibility)==ECR_Block &&
+     Surface->LineTraceComponent(Ground,RayStart,RayEnd,Bearing);
+    if (BearingHit && Ground.ImpactNormal.Z>.98f) continue;
+    // At a slab seam the tyre reaches the next slab before its centre does.
+    // Require a non-simulating flat bearing below the centre and the same
+    // upward plane on the swept component at its real contact point. Editor
+    // mobility alone does not tell whether a bearing is a dynamic rigid body.
+    FHitResult BelowWheel,AtSeam;
+    const bool WorldBearingHit=!BearingHit && Surface && !Surface->IsSimulatingPhysics() &&
+     Surface->IsQueryCollisionEnabled() && Surface->GetCollisionResponseToChannel(ECC_Visibility)==ECR_Block &&
+     GetWorld()->LineTraceSingleByChannel(BelowWheel,RayStart,RayEnd,ECC_Visibility,Bearing) &&
+     BelowWheel.GetComponent() && !BelowWheel.GetComponent()->IsSimulatingPhysics() && BelowWheel.ImpactNormal.Z>.98f;
+    FVector SeamRayPoint=Hit.ImpactPoint;
+    bool SeamBearingHit=WorldBearingHit && Surface->LineTraceComponent(AtSeam,
+     SeamRayPoint+FVector(0,0,2),SeamRayPoint-FVector(0,0,2),Bearing);
+    bool SeamInsetAttempted=false;
+    if (WorldBearingHit && !SeamBearingHit)
+    {
+     // A convex contact can lie just beyond a shared triangle/box edge.
+     // Probe only 1mm towards this component's interior; its own native shape
+     // must still prove the upward, coplanar bearing below.
+     SeamInsetAttempted=true;
+     SeamRayPoint+=(Surface->Bounds.Origin-Hit.ImpactPoint).GetSafeNormal2D()*.1f;
+     SeamBearingHit=Surface->LineTraceComponent(AtSeam,
+      SeamRayPoint+FVector(0,0,2),SeamRayPoint-FVector(0,0,2),Bearing);
+    }
+    if (SeamBearingHit && AtSeam.ImpactNormal.Z>.98f &&
+        FMath::Abs(AtSeam.ImpactPoint.Z-BelowWheel.ImpactPoint.Z)<.5f) continue;
+    if (FParse::Param(FCommandLine::Get(),TEXT("DriveDiagnostics")))
+     UE_LOG(LogTemp,Log,TEXT("AGV_BEARING_REJECT %s wheel=%s surface=%s/%s surfaceMobility=%d surfaceSimulating=%d ray=%s -> %s nativeHit=%d point=%s normal=%s sweepPoint=%s sweepNormal=%s penetration=%.4f worldBearing=%d worldSurface=%s/%s worldMobility=%d worldSimulating=%d worldPoint=%s worldNormal=%s seamInset=%d seamRayPoint=%s seamBearing=%d seamPoint=%s seamNormal=%s"),
+      *VehicleName,*Part->GetName(),*GetNameSafe(Hit.GetActor()),*GetNameSafe(Surface),
+      Surface ? int32(Surface->Mobility) : -1,Surface && Surface->IsSimulatingPhysics(),*RayStart.ToString(),*RayEnd.ToString(),
+      BearingHit,*Ground.ImpactPoint.ToString(),*Ground.ImpactNormal.ToString(),*Hit.ImpactPoint.ToString(),*Hit.Normal.ToString(),Hit.PenetrationDepth,
+      WorldBearingHit,*GetNameSafe(BelowWheel.GetActor()),*GetNameSafe(BelowWheel.GetComponent()),
+      BelowWheel.GetComponent() ? int32(BelowWheel.GetComponent()->Mobility) : -1,
+      BelowWheel.GetComponent() && BelowWheel.GetComponent()->IsSimulatingPhysics(),
+      *BelowWheel.ImpactPoint.ToString(),*BelowWheel.ImpactNormal.ToString(),SeamInsetAttempted,*SeamRayPoint.ToString(),
+      SeamBearingHit,*AtSeam.ImpactPoint.ToString(),*AtSeam.ImpactNormal.ToString());
    }
    // An existing contact must allow separating or sliding motion, including withdrawing
    // a jammed tine. Inward motion still brakes; native contact is never disabled.
@@ -363,14 +418,14 @@ bool AWarehouseForklift::MoveLift(float Height)
  DesiredLift=Height;
  return true;
 }
-bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt)
+bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt,float ArrivalTolerance)
 {
  const FVector Offset=Destination-GetActorLocation();
  const float LateralLimit=AIState==EWarehouseAIState::AlignUnload ? 15.f : 5.f;
  if (FMath::Abs(FVector::DotProduct(Offset,GetActorRightVector()))>LateralLimit || FMath::Abs(Offset.Z)>3)
  { StopFor(TEXT("ROUTE MISALIGNED")); return false; }
  const float Distance=FVector::DotProduct(Offset,GetActorForwardVector());
- if (FMath::Abs(Distance)<1.f) { BrakeDrive(); return FMath::Abs(CurrentSpeedCm)<1.f; }
+ if (FMath::Abs(Distance)<ArrivalTolerance) { BrakeDrive(); return FMath::Abs(CurrentSpeedCm)<1.f; }
  if (bAutonomousMode && FleetCoordinator && !bTrafficEscape)
  {
   const FTransform Goal(GetActorQuat(),Destination);

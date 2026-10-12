@@ -1,4 +1,5 @@
 #include "WarehouseComputer.h"
+#include "WarehousePerformance.h"
 #include "WarehouseCargo.h"
 #include "WarehousePallet.h"
 #include "WarehouseForklift.h"
@@ -139,6 +140,7 @@ FString AWarehouseComputer::Locate(AActor* Object) const
 }
 void AWarehouseComputer::RefreshState()
 {
+ CSV_SCOPED_TIMING_STAT(Warehouse,InventoryRefresh);
  ++RefreshCount;Fleet.Reset();Inventory.Reset();
  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
  {
@@ -217,7 +219,8 @@ bool AWarehouseComputer::IssueOutbound(AWarehouseCargo* Cargo,AWarehouseForklift
  auto* Strength=AWarehouseDamageSystem::Find(this);
  if (!Pallet || !Strength) return Fail(TEXT("이 상품을 팔레트 위에 올린 뒤 지시하세요."));
  if (Claimed(Pallet)) return Fail(TEXT("이 팔레트는 이미 다른 작업에 예약되어 있습니다."));
- const auto Loads=Strength->GetSupportedActors(Pallet);
+ // RefreshState above already refreshed support; the scene has not advanced.
+ const auto Loads=Strength->GetSupportedActors(Pallet,false);
  for (TActorIterator<Amsc_vrCharacter> It(GetWorld());It;++It)
   if (It->GetHeldCargo()==Pallet || Loads.Contains(It->GetHeldCargo())) return Fail(TEXT("사람이 들고 있는 물체는 운반할 수 없습니다."));
  if (Strength->HasFailed(Pallet) || Pallet->GetPalletBody()->GetPhysicsLinearVelocity().Size()>10 ||
@@ -233,7 +236,9 @@ bool AWarehouseComputer::IssueOutbound(AWarehouseCargo* Cargo,AWarehouseForklift
  const float Mass=Pallet->PalletMassKg+Strength->GetSupportedMass(Pallet);
  const auto& Destination=OutboundDestinations[DestinationIndex];
  const FVector OutboundLocal=Destination.GetLocation()-OutboundCentre;
- if (FMath::Abs(OutboundLocal.X)>OutboundHalfSize.X-55 || FMath::Abs(OutboundLocal.Y)>OutboundHalfSize.Y-55 || FMath::Abs(OutboundLocal.Z)>5)
+ const FVector SlotHalf=(Destination.GetUnitAxis(EAxis::X).GetAbs()+Destination.GetUnitAxis(EAxis::Y).GetAbs())*AWarehouseForklift::FloorSlotHalfExtentCm;
+ if (FMath::Abs(OutboundLocal.X)>OutboundHalfSize.X-SlotHalf.X ||
+     FMath::Abs(OutboundLocal.Y)>OutboundHalfSize.Y-SlotHalf.Y || FMath::Abs(OutboundLocal.Z)>5)
   return Fail(TEXT("출고 위치가 대기 구역 경계를 벗어났습니다."));
  if (Destination.ContainsNaN() || !Destination.GetScale3D().Equals(FVector::OneVector) ||
      FMath::Abs(Destination.Rotator().Pitch)>.1 || FMath::Abs(Destination.Rotator().Roll)>.1)
@@ -256,9 +261,26 @@ bool AWarehouseComputer::IssueOutbound(AWarehouseCargo* Cargo,AWarehouseForklift
   }
  }
  if (!Vehicle) return Fail(TEXT("사용 가능한 차량이 없습니다. 작업 중인 차량을 직접 선택하면 대기열에 추가할 수 있습니다."));
+ if (!Vehicle->IsFloorFootprintValid(Pallet,Pallet->GetActorTransform(),false))
+  return Fail(TEXT("팔레트와 화물이 120cm 출고 예약 공간을 벗어납니다."));
  for (AWarehouseForklift* V : Fleet)
  {
-  auto Reserved=[&](const FWarehouseWorkOrder& Job) { return !Job.JobId.IsEmpty() && FVector::Dist2D(Job.Destination.GetLocation(),Destination.GetLocation())<110 && FMath::Abs(Job.Destination.GetLocation().Z-Destination.GetLocation().Z)<20; };
+  auto Reserved=[&](const FWarehouseWorkOrder& Job)
+  {
+   if (Job.JobId.IsEmpty() || FMath::Abs(Job.Destination.GetLocation().Z-Destination.GetLocation().Z)>=20) return false;
+   const FVector A=Destination.GetUnitAxis(EAxis::X),B=Destination.GetUnitAxis(EAxis::Y);
+   const FVector C=Job.Destination.GetUnitAxis(EAxis::X),D=Job.Destination.GetUnitAxis(EAxis::Y);
+   const FVector Delta=Job.Destination.GetLocation()-Destination.GetLocation();
+   // Four separating axes cover the two actual 120cm squares, including
+   // diagonal slots which a centre-distance reservation would miss.
+   for (const FVector Axis : {A,B,C,D})
+   {
+    const float Extent=AWarehouseForklift::FloorSlotHalfExtentCm*(FMath::Abs(FVector::DotProduct(A,Axis))+
+     FMath::Abs(FVector::DotProduct(B,Axis))+FMath::Abs(FVector::DotProduct(C,Axis))+FMath::Abs(FVector::DotProduct(D,Axis)));
+    if (FMath::Abs(FVector::DotProduct(Delta,Axis))>=Extent) return false;
+   }
+   return true;
+  };
   if (Reserved(V->ActiveJob)) return Fail(TEXT("출고 위치가 다른 작업에 예약되어 있습니다."));
   for (const auto& Job : V->PendingJobs) if (Reserved(Job)) return Fail(TEXT("출고 위치가 다른 작업에 예약되어 있습니다."));
  }
@@ -266,7 +288,7 @@ bool AWarehouseComputer::IssueOutbound(AWarehouseCargo* Cargo,AWarehouseForklift
  for (auto* Load : Loads) Params.AddIgnoredActor(Load);
  const FVector P=Destination.GetLocation();const float Height=Bounds.IsValid ? Bounds.GetSize().Z : 120;
  if (GetWorld()->OverlapBlockingTestByChannel(P+FVector(0,0,Height*.5+2),Destination.GetRotation(),ECC_Visibility,
-     FCollisionShape::MakeBox(FVector(54,54,FMath::Max(1.f,Height*.5f-1))),Params)) return Fail(TEXT("출고 위치에 물체가 있습니다. 먼저 비워 주세요."));
+     FCollisionShape::MakeBox(FVector(AWarehouseForklift::FloorSlotHalfExtentCm,AWarehouseForklift::FloorSlotHalfExtentCm,FMath::Max(1.f,Height*.5f-1))),Params)) return Fail(TEXT("출고 위치에 물체가 있습니다. 먼저 비워 주세요."));
  for (float X : {-40.f,40.f}) for (float Y : {-40.f,40.f})
  {
   FHitResult Hit;const FVector Probe=Destination.TransformPosition(FVector(X,Y,0));

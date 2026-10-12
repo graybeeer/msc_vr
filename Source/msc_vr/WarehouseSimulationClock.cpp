@@ -1,4 +1,5 @@
 #include "WarehouseSimulationClock.h"
+#include "WarehousePerformance.h"
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -61,6 +62,8 @@ void AWarehouseSimulationClock::PaceFrame()
 }
 void AWarehouseSimulationClock::Tick(float Dt)
 {
+ CSV_CUSTOM_STAT(Warehouse,SimulationSeconds,float(GetWorld()->GetTimeSeconds()),ECsvCustomStatOp::Set);
+ CSV_CUSTOM_STAT(Warehouse,RequestedSpeed,RequestedSpeed,ECsvCustomStatOp::Set);
  Super::Tick(Dt);
  const double Now=FPlatformTime::Seconds();
  if (Now-SampleWall>=1.)

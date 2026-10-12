@@ -19,6 +19,9 @@ def configure_warehouse_layout():
             tags(a,'LayoutType:Rack','LayoutGroup:'+spec.name,'WarehouseFloor'+str(floor));rack_members.add(a)
     lift=named['MZ_AGVElevator'];tags(lift,'LayoutType:Elevator','LayoutGroup:Elevator')
     for label,a in named.items():
+        if isinstance(a,unreal.WarehouseChargingStation):
+            tags(a,'LayoutType:Charger')
+            a.tags=[tag for tag in a.tags if str(tag)!='LayoutType:Other']
         if '_LiftLane_' in label or label.endswith(('_WaitLine','_LiftSign')) or (label.startswith('WH_AreaUI_') and 'Lift_' in label):
             tags(a,'LayoutType:Elevator','LayoutGroup:Elevator')
         if label=='Floor' or label=='WH_InboundFloor' or label.startswith('MZ_GroundRear') or (label.startswith(('MZ_L2_Deck_','MZ_L3_Deck_'))):
@@ -28,7 +31,7 @@ def configure_warehouse_layout():
         if label.startswith(('WH_Wall','WH_Roof','EXT_','MZ_L2_Deck_','MZ_L3_Deck_','MZ_Ground','WH_InboundFloor')) or label=='Floor':
             if not any(str(t).startswith('LayoutGroup:TruckDock') for t in a.tags):tags(a,'LayoutFixed')
             continue
-        if isinstance(a,(unreal.WarehousePallet,unreal.WarehouseCargo,unreal.WarehouseWorker,unreal.WarehouseChargingStation,unreal.WarehouseComputer)) or label.startswith(('WH_Utility_','WH_Column_')):
+        if isinstance(a,(unreal.WarehousePallet,unreal.WarehouseCargo,unreal.WarehouseWorker,unreal.WarehouseComputer)) or label.startswith(('WH_Utility_','WH_Column_')):
             tags(a,'LayoutType:Other')
     zone_data=[]
     for index,key,centre,half in [(1,'Inbound',(1100,-1640,0),(400,310,80)),(2,'Outbound',(-1000,-1640,0),(350,310,80))]:

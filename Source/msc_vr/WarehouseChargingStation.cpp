@@ -4,6 +4,7 @@
 #include "Components/TextRenderComponent.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Materials/MaterialInterface.h"
+#include "EngineUtils.h"
 
 AWarehouseChargingStation::AWarehouseChargingStation()
 {
@@ -40,6 +41,18 @@ bool AWarehouseChargingStation::IsDocked(const AWarehouseForklift* Vehicle) cons
  return IsValid(Vehicle) && FVector::Dist(Vehicle->GetActorLocation(),GetActorLocation())<=1.f &&
   Vehicle->GetActorUpVector().Z>.999f && GetActorUpVector().Z>.999f &&
   FVector::DotProduct(Vehicle->GetActorForwardVector(),GetActorForwardVector())>=FMath::Cos(FMath::DegreesToRadians(.5f));
+}
+TArray<AWarehouseForklift*> AWarehouseChargingStation::GetLinkedVehicles() const
+{
+ TArray<AWarehouseForklift*> Vehicles;
+ auto AddLinked=[&](AWarehouseForklift* Vehicle)
+ {
+  if (IsValid(Vehicle) && Vehicle->GetWorld()==GetWorld() && Vehicle->ChargingStation==this) Vehicles.AddUnique(Vehicle);
+ };
+ AddLinked(AssignedVehicle.Get());AddLinked(Occupant.Get());
+ if (GetWorld()) for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
+  AddLinked(*It);
+ return Vehicles;
 }
 bool AWarehouseChargingStation::TryReserve(AWarehouseForklift* Vehicle)
 {

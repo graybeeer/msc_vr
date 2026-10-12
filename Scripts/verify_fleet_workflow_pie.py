@@ -102,7 +102,10 @@ def tick(dt):
             shot('Computer');enter('computer_submit');return
         if phase=='computer_submit':
             if age<.4:return
-            comp=live['WH_ManagementComputer'];assert len(comp.get_editor_property('inventory'))==360
+            comp=live['WH_ManagementComputer']
+            expected={a.get_path_name() for a in unreal.GameplayStatics.get_all_actors_of_class(game,unreal.WarehouseCargo)}
+            inventory=comp.get_editor_property('inventory')
+            assert len(inventory)==len(expected) and {row.cargo.get_path_name() for row in inventory}==expected,'Console inventory must include every saved-map cargo exactly once'
             assert comp.issue_outbound(live['WH_Drop_Box'],None,0),comp.get_editor_property('last_message')
             job_id=[t.job_id for t in comp.get_editor_property('tasks') if t.job_id.startswith('CONSOLE-')][-1]
             event('outbound_accepted',job=job_id);pc.close_warehouse_computer()

@@ -11,6 +11,56 @@
 #include "TimerManager.h"
 #include "CollisionQueryParams.h"
 #include "CollisionShape.h"
+#include "PhysicsEngine/BodyInstance.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+
+namespace
+{
+// A tyre can bear on two adjacent slabs while the chassis floor trace sees
+// only one. Prove the other contact using its native upward surface; dynamic
+// objects, raised obstacles and deeper penetrations remain blocking hits.
+bool WheelBearingOnCoplanarFloor(UWorld* World,const AActor* Vehicle,UStaticMeshComponent* Wheel,
+ UPrimitiveComponent* Surface,const FTransform& Candidate,const TArray<AActor*>& Loads)
+{
+ if (!Surface || Surface->IsSimulatingPhysics() || !Surface->IsQueryCollisionEnabled() ||
+     Surface->GetCollisionResponseToChannel(ECC_Visibility)!=ECR_Block) return false;
+ const auto* Body=Wheel->GetBodyInstance();
+ if (!Body || !Body->IsValidBodyInstance()) return false;
+ // Use the current cooked Chaos shape bounds. Rotating the asset's coarse
+ // convex element box can overestimate a circular tyre's vertical extent.
+ const FBox Native=Body->GetBodyBounds();
+ if (!Native.IsValid) return false;
+ const FBox Bounds=Native.TransformBy(Wheel->GetComponentTransform().ToInverseMatrixWithScale()*Candidate.ToMatrixWithScale());
+ if (!Bounds.IsValid) return false;
+ FCollisionQueryParams TyreQuery(SCENE_QUERY_STAT(TurningTyreTread),false);
+ FHitResult Tread;
+ const FVector CurrentCenter=Native.GetCenter();
+ if (!Wheel->LineTraceComponent(Tread,FVector(CurrentCenter.X,CurrentCenter.Y,Native.Min.Z-5.f),CurrentCenter,TyreQuery) ||
+     Tread.ImpactNormal.Z>=-.98f) return false;
+ const FVector Contact=Candidate.TransformPosition(Wheel->GetComponentTransform().InverseTransformPosition(Tread.ImpactPoint));
+ FCollisionQueryParams Query(SCENE_QUERY_STAT(TurningTyreSupport),false,Vehicle);
+ Query.AddIgnoredActors(Loads);
+ const FVector Start=Bounds.GetCenter(),End(Start.X,Start.Y,Bounds.Min.Z-5.f);
+ FHitResult Below;
+ if (!World->LineTraceSingleByChannel(Below,Start,End,ECC_Visibility,Query) ||
+     !Below.GetComponent() || Below.GetComponent()->IsSimulatingPhysics() || Below.ImpactNormal.Z<=.98f ||
+     FMath::Abs(Contact.Z-Below.ImpactPoint.Z)>.5f) return false;
+ FHitResult Bearing;
+ if (Surface->LineTraceComponent(Bearing,Start,End,Query))
+  return Bearing.ImpactNormal.Z>.98f && FMath::Abs(Bearing.ImpactPoint.Z-Below.ImpactPoint.Z)<.5f;
+ // A centre outside the neighbouring slab still permits tread at the seam.
+ // Probe at its closest bounds point, only 1mm inside, then require the native
+ // surface itself and the candidate tyre bounds to confirm that contact.
+ FVector Point=Surface->Bounds.GetBox().GetClosestPointTo(Start);
+ Point+=(Surface->Bounds.Origin-Point).GetSafeNormal2D()*.1f;
+ if (Point.X<Bounds.Min.X-.1f || Point.X>Bounds.Max.X+.1f ||
+     Point.Y<Bounds.Min.Y-.1f || Point.Y>Bounds.Max.Y+.1f) return false;
+ Point.Z=Below.ImpactPoint.Z;
+ return Surface->LineTraceComponent(Bearing,Point+FVector(0,0,2),Point-FVector(0,0,2),Query) &&
+  Bearing.ImpactNormal.Z>.98f && FMath::Abs(Bearing.ImpactPoint.Z-Below.ImpactPoint.Z)<.5f;
+}
+}
 
 void AWarehouseForklift::BeginPlay()
 {
@@ -137,6 +187,11 @@ bool AWarehouseForklift::PhysicalPoseClear(const FTransform& Pose,bool CheckTran
   GetWorld()->ComponentOverlapMultiByChannel(Hits,Part,Candidate.GetLocation(),Candidate.GetRotation(),Part->GetCollisionObjectType(),Params);
   for (const auto& Hit : Hits) if (Hit.bBlockingHit)
   {
+   if (Wheels.Contains(Part) && WheelBearingOnCoplanarFloor(GetWorld(),this,
+       Part,Hit.GetComponent(),Candidate,Loads)) continue;
+   if (FParse::Param(FCommandLine::Get(),TEXT("DriveDiagnostics")))
+    UE_LOG(LogTemp,Log,TEXT("AGV_TURN_OVERLAP_REJECT %s part=%s surface=%s/%s candidate=%s"),
+     *VehicleName,*Part->GetName(),*GetNameSafe(Hit.GetActor()),*GetNameSafe(Hit.GetComponent()),*Candidate.GetLocation().ToString());
    // Forecast truck and supported loads together; native loose-load contacts
    // still determine whether the pallet follows, jams, slips or falls.
    return false;

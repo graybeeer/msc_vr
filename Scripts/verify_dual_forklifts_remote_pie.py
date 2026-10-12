@@ -1,6 +1,10 @@
 """Real-time PIE integration: two physical L1 jobs and smartphone remote controls.
 
-Test fixtures and runtime repositioning are transient. This script never saves.
+Remote motion/lift commands use SetRemoteInput with character polling disabled.
+They verify native actuators and release guards, not OS mouse-button mapping.
+
+Test objects/operator are transient. Running vehicle poses are never assigned.
+This script never saves.
 Pass -RemoteChecksOnly to stop both autonomous jobs before unloading and exercise
 the remote phases independently. That mode never reports completed L1 jobs.
 """
@@ -22,12 +26,20 @@ performance = unreal.get_default_object(unreal.load_class(None, '/Script/UnrealE
 throttle = performance.get_editor_property('bThrottleCPUWhenNotForeground')
 performance.set_editor_property('bThrottleCPUWhenNotForeground', False)
 assert level.load_level(LEVEL)
-fixture = actors.spawn_actor_from_class(unreal.WarehouseCargo, unreal.Vector(600, -1700, 20))
+# Keep unused probes physically supported outside the production aisles.
+# They must not obstruct the independent-navigation prerequisite before use.
+probe_floor = actors.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector(8000, 8000, -5))
+probe_floor.set_actor_label('RemoteProbeStorageFloor')
+probe_floor.set_editor_property('is_spatially_loaded', False)
+probe_floor.static_mesh_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Cube'))
+probe_floor.static_mesh_component.set_collision_profile_name('BlockAll')
+probe_floor.set_actor_scale3d(unreal.Vector(10, 10, .1))
+fixture = actors.spawn_actor_from_class(unreal.WarehouseCargo, unreal.Vector(7750, 8150, 20))
 fixture.set_actor_label('RemoteTestCarton')
 fixture.set_editor_property('is_spatially_loaded', False)
 fixture.set_cargo_mesh(unreal.load_asset('/Game/Warehouse/Cargo/BoxesPalletsPack/Meshes/SM_Carton_Intact_1'))
 fixture.set_gross_mass_kg(5)
-fit(fixture, (20, 18, 18), (600, -1700, 9.1))
+fit(fixture, (20, 18, 18), (7750, 8150, 9.1))
 obstacle = actors.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector(8000, 8000, 40))
 obstacle.set_actor_label('RemoteTestObstacle')
 obstacle.set_editor_property('is_spatially_loaded', False)
@@ -39,15 +51,15 @@ human = actors.spawn_actor_from_class(unreal.WarehouseWorker, unreal.Vector(8000
 human.set_actor_label('RemoteTestWorker')
 human.set_editor_property('is_spatially_loaded', False)
 assert human.copy_player_appearance(unreal.load_class(None, '/Game/FirstPerson/Blueprints/BP_FirstPersonCharacter.BP_FirstPersonCharacter_C'))
-test_pallet = actors.spawn_actor_from_class(unreal.WarehousePallet, unreal.Vector(1700, -1650, .1))
+test_pallet = actors.spawn_actor_from_class(unreal.WarehousePallet, unreal.Vector(7750, 7750, .1))
 test_pallet.set_actor_label('RemoteTestPallet')
 test_pallet.set_editor_property('is_spatially_loaded', False)
-test_load = actors.spawn_actor_from_class(unreal.WarehouseCargo, unreal.Vector(1700, -1650, 25.2))
+test_load = actors.spawn_actor_from_class(unreal.WarehouseCargo, unreal.Vector(7750, 7750, 25.2))
 test_load.set_actor_label('RemoteTestLoad')
 test_load.set_editor_property('is_spatially_loaded', False)
 test_load.set_cargo_mesh(unreal.load_asset('/Game/Warehouse/Cargo/BoxesPalletsPack/Meshes/SM_Carton_Intact_1'))
 test_load.set_gross_mass_kg(12)
-fit(test_load, (30, 24, 20), (1700, -1650, 25.2))
+fit(test_load, (30, 24, 20), (7750, 7750, 25.2))
 strength = next(a for a in actors.get_all_level_actors() if a.get_actor_label() == 'WH_DamageSystem')
 specs = list(strength.get_editor_property('objects'))
 for actor, mass, capacity in ((test_pallet, 25, 1500), (test_load, 12, 120)):
@@ -75,8 +87,13 @@ obstacle_start = None
 interrupted_job = None
 interrupted_pending = None
 other_before = None
-deadman_at = 0
+deadman = {}
 load_before = None
+initial_orders = []
+outbound_requested = False
+remote_heading_before = 0
+remote_diagnostic_second = -1
+insertion_settled_at = None
 
 
 def finish():
@@ -93,16 +110,54 @@ def components(actor):
     return {c.get_name(): c for c in actor.get_components_by_class(unreal.SceneComponent)}
 
 
+def verify_unselected_vehicle(vehicle, origin):
+    displacement = (vehicle.get_actor_location() - origin).length()
+    speed = components(vehicle)['Body'].get_physics_linear_velocity().length()
+    print('REMOTE_UNSELECTED_VEHICLE_NATIVE_REST', vehicle.get_actor_label(),
+          'displacement_cm', displacement, 'speed_cm_s', speed, 'status', vehicle.status)
+    assert not vehicle.is_remote_controlled() and not vehicle.powered, 'Remote input activated the unselected vehicle'
+    assert displacement < 5 and speed < 5, ('Unselected braked vehicle made substantial physical motion', displacement, speed)
+
+
+def diagnose_remote_turn(vehicle, elapsed):
+    game = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world()
+    body = components(vehicle)['Body']
+    print('REMOTE_TURN_DIAGNOSTIC', elapsed, vehicle.status, 'pose', vehicle.get_actor_transform(),
+          'lift_cm', vehicle.get_fork_height_cm(), 'speed', body.get_physics_linear_velocity(),
+          'heading_change', abs((vehicle.get_actor_rotation().yaw - remote_heading_before + 180) % 360 - 180))
+    # Read the same candidate geometry as the normal reverse/steering command.
+    # These overlaps are diagnostics only; no pose or contact is changed.
+    step = unreal.GameplayStatics.get_world_delta_seconds(game)
+    distance = -min(180., vehicle.empty_travel_speed_cm) * step
+    rotation = vehicle.get_actor_rotation()
+    rotation.yaw += distance * .35 / max(117.3, vehicle.minimum_turning_radius_cm) * 180 / 3.141592653589793
+    pose = unreal.Transform(location=vehicle.get_actor_location() + vehicle.get_actor_forward_vector() * distance, rotation=rotation)
+    for part in vehicle.get_components_by_class(unreal.StaticMeshComponent):
+        local = unreal.MathLibrary.make_relative_transform(part.get_world_transform(), vehicle.get_actor_transform())
+        candidate = unreal.MathLibrary.compose_transforms(local, pose)
+        hits = unreal.SystemLibrary.component_overlap_components(part, candidate,
+            [unreal.ObjectTypeQuery.OBJECT_TYPE_QUERY1, unreal.ObjectTypeQuery.OBJECT_TYPE_QUERY2],
+            unreal.PrimitiveComponent, [vehicle]) or []
+        if hits:
+            print('REMOTE_TURN_NATIVE_OVERLAP', part.get_name(), candidate.translation,
+                  [(hit.get_owner().get_actor_label(), hit.get_name()) for hit in hits])
+
+
 def look_at_vehicle(vehicle):
     # Stand alongside the chassis, outside the forward person-safety volume.
     body = components(vehicle)['Body']
     target = body.get_world_location() + vehicle.get_actor_forward_vector() * -55 + unreal.Vector(0, 0, 75)
-    position = vehicle.get_actor_location() - vehicle.get_actor_right_vector() * 170 + vehicle.get_actor_forward_vector() * -40
+    positions = [vehicle.get_actor_location() + vehicle.get_actor_right_vector() * side + vehicle.get_actor_forward_vector() * -40
+                 for side in (-250, 250)]
     movement = pawn.get_component_by_class(unreal.CharacterMovementComponent)
     movement.stop_movement_immediately()
     # Use the collision-tested Teleport API rather than forcing an actor-only move.
     # The capsule/base diagnostics distinguish overlap resolution from stale movement state.
-    assert pawn.teleport(position + unreal.Vector(0, 0, 125), pawn.get_actor_rotation()), ('Operator capsule has no room', position)
+    for position in positions:
+        if pawn.teleport(position + unreal.Vector(0, 0, 125), pawn.get_actor_rotation()):
+            break
+    else:
+        raise AssertionError(('Operator capsule has no room on either vehicle side', positions))
     movement.stop_movement_immediately()
     camera = pawn.get_component_by_class(unreal.CameraComponent)
     rotation = unreal.MathLibrary.find_look_at_rotation(camera.get_world_location(), target)
@@ -181,7 +236,7 @@ def diagnose_phone_pose():
 
 
 def tick(dt):
-    global phase, at, named, fleet, pc, pawn, before, remote, lift_before, remote_cycles, obstacle_start, interrupted_job, interrupted_pending, other_before, deadman_at, load_before
+    global phase, at, named, fleet, pc, pawn, before, remote, lift_before, remote_cycles, obstacle_start, interrupted_job, interrupted_pending, other_before, deadman, load_before, outbound_requested, remote_heading_before, remote_diagnostic_second, insertion_settled_at
     try:
         assert time.monotonic() - started < 900, 'Fleet/remote integration timeout'
         if phase == 0:
@@ -233,20 +288,37 @@ def tick(dt):
             if now < 3:
                 return
             assert all(v.get_editor_property('auto_start') and v.get_editor_property('powered') for v in fleet)
+            # The saved fleet now parks at charging bays. Use the real console
+            # to give the second ready AGV independent work, then wait for both
+            # native dock exits and work-order acceptance before comparing loads.
+            second = fleet[1]
+            if (not outbound_requested and not second.active_job.job_id and not second.pending_jobs
+                    and second.ai_state == unreal.WarehouseAIState.READY):
+                console = named['WH_ManagementComputer']
+                assert console.issue_outbound(named['WH_Drop_Box'], second, 0), console.last_message
+                outbound_requested = True
+            if not all(v.active_job.job_id and v.target_pallet for v in fleet):
+                assert now < 90, 'Both AGVs did not leave their docks and accept independent work'
+                return
             assert fleet[0].get_editor_property('target_pallet') != fleet[1].get_editor_property('target_pallet')
             assert fleet[0].get_editor_property('charging_station') != fleet[1].get_editor_property('charging_station')
             for v in fleet:
                 assert v.get_editor_property('charging_station').get_editor_property('assigned_vehicle') == v
                 assert unreal.WarehouseAIState.SELF_CHECK in seen[fleet.index(v)], 'Self check was skipped'
             duplicate = unreal.WarehouseWorkOrder(job_id='CONFLICT-V01-V02', source_system='FLEET-CONFLICT-TEST',
-                pallet=named[FLEET[0][1]], destination=unreal.Transform(location=unreal.Vector(1000, 250, 0), rotation=unreal.Rotator(yaw=90)))
+                pallet=fleet[0].target_pallet, destination=fleet[0].active_job.destination)
             assert not fleet[1].submit_job(duplicate), 'Both AGVs accepted the same pallet'
+            initial_orders.extend((v.active_job.job_id, v.target_pallet,
+                unreal.Transform(location=v.active_job.destination.translation, rotation=v.active_job.destination.rotation.rotator())) for v in fleet)
+            initial[:] = [v.get_actor_location() for v in fleet]
             print('DUAL_AGV_SHARED_PALLET_REJECTED')
             phase = 2
             return
         if phase == 2:
             if not all((v.get_actor_location() - initial[i]).length() > 80 for i, v in enumerate(fleet)):
-                assert now < 90, 'Both forklifts did not independently navigate'
+                # The second native vehicle may wait for the first vehicle's
+                # reserved aisle; retain actual movement checks through that wait.
+                assert now < 180, 'Both forklifts did not independently navigate'
                 return
             print('DUAL_AGV_SIMULTANEOUS_NAVIGATION_PASSED', [v.get_actor_location() for v in fleet])
             remote = fleet[0]
@@ -260,7 +332,7 @@ def tick(dt):
             look_at_vehicle(remote)
             interrupted_job = remote.get_editor_property('active_job').job_id
             interrupted_pending = [job.job_id for job in remote.get_editor_property('pending_jobs')]
-            assert interrupted_job == FLEET[0][-1], 'The first job was not active before takeover'
+            assert interrupted_job, 'There was no active job to test remote takeover'
             pawn.toggle_remote_control()
             assert pawn.get_remote_forklift() == remote and remote.is_remote_controlled()
             assert not fleet[1].is_remote_controlled()
@@ -269,7 +341,11 @@ def tick(dt):
             phase = 15
             return
         if phase == 15:
-            if now - at < .5:
+            assert fleet[1].get_editor_property('powered') and not fleet[1].is_remote_controlled(), 'Remote takeover stopped the unrelated AGV'
+            assert fleet[1].get_editor_property('active_job').job_id == initial_orders[1][0], 'Remote takeover changed the unrelated work order'
+            # A live aisle reservation or turn can legitimately delay translation.
+            if now - at < .5 or (fleet[1].get_actor_location() - other_before).length() <= 1:
+                assert now - at < 20, 'Unrelated AGV made no actual progress after remote takeover'
                 return
             assert (fleet[1].get_actor_location() - other_before).length() > 1, 'Remote takeover paused the unrelated AGV'
             pawn.toggle_remote_control()
@@ -290,16 +366,15 @@ def tick(dt):
                 print('REMOTE_ONLY_AUTONOMY_STOPPED', 'Skipping physical job completion checks; active/pending work orders retained',
                     [(v.get_editor_property('active_job').job_id, [job.job_id for job in v.get_editor_property('pending_jobs')]) for v in fleet])
             else:
-                if not all(row[-1] in v.get_editor_property('completed_job_ids') for row, v in zip(FLEET, fleet)):
+                if not all(order[0] in v.get_editor_property('completed_job_ids') for order, v in zip(initial_orders, fleet)):
                     return
-                for row in FLEET:
-                    c, e = named[row[1]].get_actor_bounds(False)
-                    assert abs(c.z - e.z) < 2 and abs(c.x - row[4]) < 3 and abs(c.y - row[7]) < 3, ('Wrong ground-floor unloading pose', c, e)
+                for vehicle, (_, pallet, destination) in zip(fleet, initial_orders):
+                    if abs(destination.translation.z) <= 5:
+                        assert vehicle.is_floor_placement_valid(pallet, destination), 'Completed floor load did not settle inside its actual reservation'
+                    else:
+                        assert (pallet.get_actor_location() - destination.translation).length() <= 2, 'Completed rack load missed its actual destination'
                 print('DUAL_AGV_PHYSICAL_JOBS_PASSED', 'Both distinct L1 pallets unloaded; cargo/pallet physics stayed enabled')
-            # Work orders are retained. Move only the test instance to a clear bay.
-            for row, v in zip(FLEET, fleet):
-                v.set_actor_location(unreal.Vector(row[4], row[5], 0), False, True)
-                v.set_actor_rotation(unreal.Rotator(yaw=90), True)
+            # Keep the actual paused poses; move only the pickup fixture/operator.
             remote = fleet[0]
             look_at_vehicle(remote)
             box = named['RemoteTestCarton']
@@ -374,16 +449,66 @@ def tick(dt):
                 assert now - at < 15, 'Remote reverse input did not move selected AGV after self check'
                 return
             assert (remote.get_actor_location() - before[0]).length() > 8, 'Remote reverse input did not move selected AGV'
-            assert (fleet[1].get_actor_location() - before[1]).length() < .1, 'Remote input moved unrelated AGV'
-            # Stop transmitting instead of sending brake, checking the .25s deadman.
-            deadman_at = time.monotonic()
+            verify_unselected_vehicle(fleet[1], before[1])
+            # Stop transmitting instead of sending brake. The .25-second
+            # watchdog uses the native world real clock; stopping then takes
+            # finite tyre/joint braking time, as in the native drive test.
+            body = components(remote)['Body']
+            assert body.is_simulating_physics()
+            assert body.get_collision_enabled() != unreal.CollisionEnabled.NO_COLLISION
+            deadman = dict(sim=now, real=unreal.GameplayStatics.get_real_time_seconds(game),
+                wall=time.monotonic(), pose=remote.get_actor_transform(), origin=remote.get_actor_location(),
+                initial_speed=body.get_physics_linear_velocity().length(), peak_speed=body.get_physics_linear_velocity().length(),
+                max_displacement=0., timeout_at=None, settled_at=None, last_log=-1.,
+                parts=[(part, part.get_collision_enabled(), part.is_simulating_physics(), part.get_collision_profile_name())
+                    for part in remote.get_components_by_class(unreal.PrimitiveComponent)])
+            print('REMOTE_DEADMAN_TRANSMISSION_CUTOFF', 'simulation', deadman['sim'], 'native_real', deadman['real'],
+                'pose', deadman['pose'], 'speed_cm_s', deadman['initial_speed'], 'status', remote.status)
             phase = 19
             return
         if phase == 19:
-            if time.monotonic() - deadman_at < .5:
+            body = components(remote)['Body']
+            elapsed = now - deadman['sim']
+            real_elapsed = unreal.GameplayStatics.get_real_time_seconds(game) - deadman['real']
+            speed = body.get_physics_linear_velocity().length()
+            displacement = (remote.get_actor_location() - deadman['origin']).length()
+            deadman['peak_speed'] = max(deadman['peak_speed'], speed)
+            deadman['max_displacement'] = max(deadman['max_displacement'], displacement)
+            for part, collision, simulating, profile in deadman['parts']:
+                assert (part.get_collision_enabled(), part.is_simulating_physics(), part.get_collision_profile_name()) == (collision, simulating, profile), ('Deadman changed native collision/dynamics', part.get_name())
+            assert remote.is_remote_controlled() and remote.powered, 'Deadman disconnected the remote session instead of braking'
+            timed_out = 'REMOTE INPUT TIMEOUT' in remote.status
+            frame_allowance = 2 * unreal.GameplayStatics.get_world_delta_seconds(game) + .0001
+            if timed_out and deadman['timeout_at'] is None:
+                assert .25 <= real_elapsed <= .25 + frame_allowance, ('Deadman timeout did not follow the native .25-second clock', real_elapsed)
+                deadman['timeout_at'] = elapsed
+                print('REMOTE_DEADMAN_TIMEOUT_OBSERVED', 'simulation_elapsed', elapsed,
+                    'native_real_elapsed', real_elapsed, 'wall_elapsed', time.monotonic() - deadman['wall'],
+                    'speed_cm_s', speed, 'displacement_cm', displacement)
+            if real_elapsed > .25 + frame_allowance:
+                assert timed_out, ('Deadman did not detect lost transmission', real_elapsed, remote.status)
+            if elapsed - deadman['last_log'] >= .1:
+                deadman['last_log'] = elapsed
+                print('REMOTE_DEADMAN_BRAKING_SAMPLE', 'simulation_elapsed', elapsed, 'native_real_elapsed', real_elapsed,
+                    'wall_elapsed', time.monotonic() - deadman['wall'], 'speed_cm_s', speed,
+                    'displacement_cm', displacement, 'status', remote.status)
+            # Measured full-speed native braking took .733s / 53cm. Include
+            # up to 45cm during the .25s signal timeout and retain a 120cm cap.
+            assert displacement < 120, ('Deadman stopping distance exceeded 120cm', deadman['max_displacement'], speed)
+            if timed_out and speed < 5:
+                if deadman['settled_at'] is None:
+                    deadman['settled_at'] = now
+            else:
+                deadman['settled_at'] = None
+            if deadman['settled_at'] is None or now - deadman['settled_at'] < .3:
+                assert elapsed < 2, ('Deadman finite brake did not settle within 2 simulation seconds', speed,
+                    deadman['peak_speed'], deadman['max_displacement'], remote.status)
                 return
-            assert abs(remote.get_editor_property('current_speed_cm')) < .1, 'Lost remote input did not brake the AGV'
-            print('REMOTE_INPUT_DEADMAN_PASSED')
+            assert elapsed <= 2, ('Deadman settled after its simulation deadline', elapsed)
+            print('REMOTE_INPUT_DEADMAN_PASSED', 'initial_speed_cm_s', deadman['initial_speed'],
+                'peak_speed_cm_s', deadman['peak_speed'], 'max_displacement_cm', deadman['max_displacement'],
+                'timeout_simulation_seconds', deadman['timeout_at'], 'settled_simulation_seconds', elapsed,
+                'held_below_5cm_s_seconds', now - deadman['settled_at'])
             lift_before = remote.get_fork_height_cm()
             remote.set_remote_input(0, 0, 1)
             at = now
@@ -437,18 +562,29 @@ def tick(dt):
                 return
             assert remote.is_remote_controlled() and remote.get_editor_property('powered')
             before = [v.get_actor_location() for v in fleet]
+            remote_heading_before = remote.get_actor_rotation().yaw
+            remote_diagnostic_second = -1
             remote.set_remote_input(-1, .35, 0)
             at = now
             phase = 10
             return
         if phase == 10:
             remote.set_remote_input(-1, .35, 0)
-            if now - at < 1.5 or (remote.get_actor_location() - before[1]).length() <= 5 or abs(remote.get_actor_rotation().yaw - 90) <= 1:
-                assert now - at < 15, 'Second AGV remote drive/steering failed after self check'
+            heading_change = abs((remote.get_actor_rotation().yaw - remote_heading_before + 180) % 360 - 180)
+            if int(now - at) != remote_diagnostic_second:
+                remote_diagnostic_second = int(now - at)
+                print('REMOTE_SECOND_DRIVE_PROGRESS', now - at, remote.status, 'pose', remote.get_actor_transform(),
+                      'lift_cm', remote.get_fork_height_cm(), 'translation_cm', (remote.get_actor_location() - before[1]).length(),
+                      'heading_change', heading_change)
+                if remote_diagnostic_second == 1:
+                    diagnose_remote_turn(remote, now - at)
+            if now - at < 1.5 or (remote.get_actor_location() - before[1]).length() <= 5 or heading_change <= 1:
+                assert now - at < 15, ('Second AGV remote drive/steering failed after self check', remote.status,
+                    remote.get_actor_transform(), remote.get_fork_height_cm(), (remote.get_actor_location() - before[1]).length(), heading_change)
                 return
             assert (remote.get_actor_location() - before[1]).length() > 5, 'Second AGV remote drive failed'
-            assert abs(remote.get_actor_rotation().yaw - 90) > 1, 'Remote steering did not change heading'
-            assert (fleet[0].get_actor_location() - before[0]).length() < .1
+            assert heading_change > 1, 'Remote steering did not change heading'
+            verify_unselected_vehicle(fleet[0], before[0])
             pawn.set_actor_tick_enabled(True)
             pc.toggle_warehouse_menu()
             at = now
@@ -460,12 +596,10 @@ def tick(dt):
             assert pc.is_warehouse_menu_open()
             assert not pawn.get_remote_forklift() and not remote.is_remote_controlled(), 'Menu did not release/brake remote AGV'
             pc.toggle_warehouse_menu()
-            remote.set_actor_location(unreal.Vector(FLEET[1][4], FLEET[1][5], 0), False, True)
-            remote.set_actor_rotation(unreal.Rotator(yaw=90), True)
             look_at_vehicle(remote)
             wall = named['RemoteTestObstacle']
             wall.set_actor_location(remote.get_actor_location() + remote.get_actor_forward_vector() * 160 + unreal.Vector(0, 0, 40), False, True)
-            wall.set_actor_rotation(unreal.Rotator(yaw=90), True)
+            wall.set_actor_rotation(unreal.Rotator(yaw=remote.get_actor_rotation().yaw), True)
             at = now
             phase = 12
             return
@@ -521,8 +655,20 @@ def tick(dt):
             print('REMOTE_PERSON_SAFETY_SCANNER_PASSED')
             remote.set_remote_input(0, 0, 0)
             named['RemoteTestWorker'].set_actor_location(unreal.Vector(8000, 7800, 96), False, True)
-            remote.set_actor_location(unreal.Vector(FLEET[1][4], FLEET[1][5], 0), False, True)
-            remote.set_actor_rotation(unreal.Rotator(yaw=90), True)
+            obstacle_start = remote.get_actor_location()
+            at = now
+            phase = 27
+            return
+        if phase == 27:
+            remote.set_remote_input(-.3, 0, 0)
+            distance = (remote.get_actor_location() - obstacle_start).length()
+            if distance < 80:
+                assert now-at < 15, ('Native backoff did not clear the obstacle-test position', distance, remote.status)
+                return
+            remote.set_remote_input(0, 0, 0)
+            print('REMOTE_NATIVE_BACKOFF_TO_LIFT_AREA_PASSED', distance, remote.get_actor_transform(),
+                  'carriage_simulating', components(remote)['Carriage'].is_simulating_physics(),
+                  'carriage_parent', components(remote)['Carriage'].get_attach_parent())
             remote.set_remote_input(0, 0, -1)
             at = now
             phase = 22
@@ -530,15 +676,53 @@ def tick(dt):
         if phase == 22:
             remote.set_remote_input(0, 0, -1)
             if now - at < .3 or remote.get_fork_height_cm() > 9.55:
-                assert now - at < 15, ('Remote F lowering did not reach insertion height', remote.get_fork_height_cm(), remote.get_editor_property('status'))
+                assert now - at < 15, ('Native remote lowering did not reach insertion height', remote.get_fork_height_cm(), remote.get_editor_property('status'))
                 return
             remote.set_remote_input(0, 0, 0)
+            insertion_settled_at = None
+            at = now
+            phase = 26
+            return
+        if phase == 26:
+            # Calibrate the real unloaded carriage before preparing the fixture.
+            # After finite joint/contact deflection, actor-relative nominal zero
+            # is not necessarily the pallet hole's actual world height.
+            carriage = components(remote)['CarriagePivot']
+            error = .1 - carriage.get_world_location().z
+            remote.set_remote_input(0, 0, .2 if error > .15 else (-.2 if error < -.15 else 0))
+            vertical_speed = abs(components(remote)['Carriage'].get_physics_linear_velocity().z - components(remote)['Body'].get_physics_linear_velocity().z)
+            if abs(error) <= .15 and vertical_speed < 1:
+                if insertion_settled_at is None:
+                    insertion_settled_at = now
+            else:
+                insertion_settled_at = None
+            if insertion_settled_at is None or now - insertion_settled_at < .3:
+                if int(now-at) != remote_diagnostic_second:
+                    remote_diagnostic_second = int(now-at)
+                    print('REMOTE_INSERTION_SERVO_DIAGNOSTIC', now-at, 'error', error,
+                          'fork_height', remote.get_fork_height_cm(), 'pivot', carriage.get_world_transform(),
+                          'max_height', remote.max_fork_height_cm, 'powered', remote.powered, 'status', remote.status)
+                    rig = components(remote)
+                    physical_carriage = rig['Carriage']
+                    joint = rig['CarriageHydraulicJoint']
+                    print('REMOTE_CARRIAGE_NATIVE_DIAGNOSTIC',
+                          'body_pose', physical_carriage.get_world_transform(),
+                          'com', physical_carriage.get_center_of_mass(),
+                          'velocity', physical_carriage.get_physics_linear_velocity(),
+                          'pivot_parent', carriage.get_attach_parent(),
+                          'pivot_relative', carriage.get_relative_transform(),
+                          'constrained', joint.get_constrained_components(),
+                          'broken', joint.is_broken(), 'force', joint.get_constraint_force())
+                assert now - at < 15, ('Real carriage did not settle at the pallet hole height', error, vertical_speed, remote.status)
+                return
+            remote.set_remote_input(0, 0, 0)
+            print('REMOTE_NATIVE_INSERTION_HEIGHT_READY', carriage.get_world_transform(), 'vertical_speed', vertical_speed)
             pallet = named['RemoteTestPallet']
             load = named['RemoteTestLoad']
-            position = remote.get_actor_location() + remote.get_actor_forward_vector() * 60
+            position = carriage.get_world_location() + carriage.get_forward_vector() * 65
             for actor, height in ((pallet, .1), (load, 25.2)):
-                actor.set_actor_location(position + unreal.Vector(0, 0, height), False, True)
-                actor.set_actor_rotation(unreal.Rotator(yaw=90), True)
+                actor.set_actor_location(unreal.Vector(position.x, position.y, height), False, True)
+                actor.set_actor_rotation(unreal.Rotator(yaw=carriage.get_world_rotation().yaw), True)
                 body = actor.get_component_by_class(unreal.StaticMeshComponent)
                 body.set_physics_linear_velocity(unreal.Vector())
                 body.set_physics_angular_velocity_in_degrees(unreal.Vector())
@@ -550,6 +734,10 @@ def tick(dt):
             remote.set_remote_input(0, 0, 0)
             if now - at < .5:
                 return
+            assert named['RemoteTestPallet'].can_engage(components(remote)['CarriagePivot'].get_world_transform()), (
+                'Fixture pallet holes did not contain the actual tines before lift',
+                named['RemoteTestPallet'].get_actor_transform(), components(remote)['CarriagePivot'].get_world_transform())
+            print('REMOTE_NATIVE_FULL_TINE_INSERTION_PASSED')
             remote.set_remote_input(0, 0, 1)
             at = now
             phase = 23

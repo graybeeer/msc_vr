@@ -1,6 +1,7 @@
 #include "WarehouseLayoutEditor.h"
 #include "Components/SceneComponent.h"
 #include "WarehouseForklift.h"
+#include "WarehouseChargingStation.h"
 #include "WarehouseElevator.h"
 #include "WarehouseElevatorLayout.h"
 #include "WarehouseLayoutSnap.h"
@@ -58,7 +59,9 @@ void AWarehouseLayoutEditor::SetCategory(EWarehouseLayoutCategory Value)
 { if (bDragging) EndDrag(false);ClearSelection();Category=Value;MouseWasDown=false; }
 bool AWarehouseLayoutEditor::Eligible(AActor* Actor) const
 {
- if (!Actor || Actor==this || Actor->ActorHasTag(TEXT("LayoutFixed"))) return false;
+ // Older saved metadata may have marked a charging bay as fixed.
+ if (!Actor || Actor==this || (Actor->ActorHasTag(TEXT("LayoutFixed")) && !Actor->IsA<AWarehouseChargingStation>())) return false;
+ if (Actor->IsA<AWarehouseChargingStation>() && Category!=EWarehouseLayoutCategory::Charger) return false;
  const auto* PC=GetWorld()->GetFirstPlayerController();
  if (PC && (Actor==PC->GetPawn() || PC->HiddenActors.Contains(Actor))) return false;
  if (Actor->IsA<AWarehouseElevator>()) return Category==EWarehouseLayoutCategory::Elevator;
@@ -74,8 +77,24 @@ bool AWarehouseLayoutEditor::Eligible(AActor* Actor) const
  case EWarehouseLayoutCategory::Forklift:return Actor->IsA<AWarehouseForklift>();
  case EWarehouseLayoutCategory::Elevator:return Actor->ActorHasTag(TEXT("LayoutType:Elevator"));
  case EWarehouseLayoutCategory::Zone:return false;
+ case EWarehouseLayoutCategory::Charger:return Actor->IsA<AWarehouseChargingStation>();
  default:return Actor->ActorHasTag(TEXT("LayoutType:Other")) || Actor->IsA<AWarehouseCargo>() || Actor->IsA<AWarehousePallet>() || Actor->IsA<AWarehouseWorker>();
  }
+}
+bool AWarehouseLayoutEditor::ParkedAtCharger(AWarehouseForklift* Vehicle,AWarehouseChargingStation* Station) const
+{
+ if (!IsValid(Vehicle) || !IsValid(Station) || Vehicle->IsRemoteControlled() || Vehicle->bFloorTransfer ||
+     Vehicle->GetSupportedPallet() || !Vehicle->ActiveJob.JobId.IsEmpty() || IsValid(Vehicle->ActiveJob.Pallet)) return false;
+ if (IsValid(Vehicle->Elevator) && Vehicle->Elevator->ReservedVehicle==Vehicle) return false;
+ if (IsValid(Vehicle->TargetPallet) && Vehicle->PalletOnForks()) return false;
+ if (Vehicle->bAutonomousMode ? (Vehicle->AIState!=EWarehouseAIState::Off && Vehicle->AIState!=EWarehouseAIState::Ready && Vehicle->AIState!=EWarehouseAIState::Charging) :
+     (Vehicle->State!=EWarehouseCycle::Idle && Vehicle->State!=EWarehouseCycle::Complete && Vehicle->State!=EWarehouseCycle::Charging)) return false;
+ // Layout grouping tolerates native tyre settlement. Electrical docking keeps
+ // its separate, stricter 1cm/0.5-degree contact requirements.
+ if (FVector::Dist(Vehicle->GetActorLocation(),Station->GetActorLocation())>5.f || Vehicle->GetActorUpVector().Z<.999f ||
+     FVector::DotProduct(Vehicle->GetActorForwardVector(),Station->GetActorForwardVector())<FMath::Cos(FMath::DegreesToRadians(2.f))) return false;
+ const auto* Body=Cast<UPrimitiveComponent>(Vehicle->GetRootComponent());
+ return Body && Body->GetPhysicsLinearVelocity().Size()<5.f && Body->GetPhysicsAngularVelocityInDegrees().Size()<2.f;
 }
 int32 AWarehouseLayoutEditor::ZoneForActor(AActor* Actor) const
 {
@@ -103,6 +122,8 @@ FBox AWarehouseLayoutEditor::GroupBounds(AActor* Actor) const
  FBox Bounds(ForceInit);const FName Tag=GroupOf(Actor);
  if (Tag==NAME_None) { if (Actor) Bounds=Actor->GetComponentsBoundingBox(true); }
  else for (TActorIterator<AActor> It(GetWorld());It;++It) if (It->ActorHasTag(Tag)) Bounds+=It->GetComponentsBoundingBox(true);
+ if (auto* Station=Cast<AWarehouseChargingStation>(Actor))
+  for (auto* Vehicle:Station->GetLinkedVehicles()) if (ParkedAtCharger(Vehicle,Station)) Bounds+=Vehicle->GetComponentsBoundingBox(true);
  return Bounds;
 }
 AActor* AWarehouseLayoutEditor::SelectionActor(AActor* HitActor) const
@@ -221,6 +242,11 @@ bool AWarehouseLayoutEditor::BeginDrag(AActor* HitActor,FVector FloorPoint)
    const FBox Box=GroupBounds(Seed);if (Box.IsValid) { OriginalAreas.Add(Box);OriginalBounds+=Box; }
   }
  }
+ // A charging bay is also the parked vehicle's start/home pose. Use the same
+ // native transaction for its rig; vehicles doing work are never dragged.
+ for (int32 I=0;I<Members.Num();++I) if (auto* Station=Cast<AWarehouseChargingStation>(Members[I]))
+  for (auto* Vehicle:Station->GetLinkedVehicles()) if (ParkedAtCharger(Vehicle,Station))
+  { Members.AddUnique(Vehicle);OriginalBounds+=Vehicle->GetComponentsBoundingBox(true); }
  if (!OriginalBounds.IsValid) return false;
  OriginalSnapBounds=FBox(ForceInit);
  for (AActor* Member:Members)
@@ -398,6 +424,8 @@ void AWarehouseLayoutEditor::Restore(bool Rollback)
 void AWarehouseLayoutEditor::UpdateReferences()
 {
  TSet<AActor*> Members;for (const auto& A:Moving) if (A.Actor.IsValid()) Members.Add(A.Actor.Get());
+ TSet<FTransform*> MovedDockAnchors;
+ TSet<AWarehouseForklift*> RelocatedChargerVehicles;
  auto MovePose=[this](FTransform& Pose)
  { if (OriginalAreas.ContainsByPredicate([&](const FBox& Box) { return InsideXY(Box.ExpandBy(4),Pose.GetLocation()); }) && FMath::FloorToInt((FMath::Max(0.,Pose.GetLocation().Z)+1.)/400.)==FloorIndex) Pose.AddToTranslation(Delta); };
  for (TActorIterator<AWarehouseInboundZone> It(GetWorld());It;++It)
@@ -408,11 +436,38 @@ void AWarehouseLayoutEditor::UpdateReferences()
   if (Zones[ZoneIndex].Name==TEXT("Outbound")) for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It)
   { It->OutboundCentre+=Delta;for (auto& Pose:It->OutboundDestinations) Pose.AddToTranslation(Delta); }
  }
+ for (const auto& Member:Moving) if (auto* Station=Cast<AWarehouseChargingStation>(Member.Actor.Get()))
+  for (auto* Vehicle:Station->GetLinkedVehicles())
+  {
+   RelocatedChargerVehicles.Add(Vehicle);
+   const FVector OldDock=Member.Pose.GetLocation();
+   auto MoveDockReference=[&](FVector& Point) { if (FVector::Dist(Point,OldDock)<=5.f) Point+=Delta; };
+   MoveDockReference(Vehicle->StartLocation);MoveDockReference(Vehicle->ReturnLocation);
+   if (Members.Contains(Vehicle))
+   { Vehicle->StartLocation=Vehicle->GetActorLocation();Vehicle->ReturnLocation=Vehicle->GetActorLocation(); }
+   Vehicle->ChargeExitPose=Station->GetActorTransform();
+   Vehicle->ChargeExitPose.AddToTranslation(Station->GetActorForwardVector()*120.f);
+   const FVector OldExit=OldDock+Member.Pose.GetRotation().GetForwardVector()*120.f;
+   for (auto& Pose:Vehicle->NavigationAnchors)
+    if (FVector::Dist(Pose.GetLocation(),OldDock)<=5.f || FVector::Dist(Pose.GetLocation(),OldExit)<=5.f)
+    { Pose.AddToTranslation(Delta);MovedDockAnchors.Add(&Pose); }
+  }
  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
  {
-  MovePose(It->ActiveJob.Destination);for (auto& Job:It->PendingJobs) MovePose(Job.Destination);
-  for (auto& Pose:It->NavigationAnchors) MovePose(Pose);
-  It->RefreshAfterLayout();
+  if (Category!=EWarehouseLayoutCategory::Charger)
+  {
+   MovePose(It->ActiveJob.Destination);for (auto& Job:It->PendingJobs) MovePose(Job.Destination);
+   for (auto& Pose:It->NavigationAnchors) if (!MovedDockAnchors.Contains(&Pose)) MovePose(Pose);
+  }
+  if (Category==EWarehouseLayoutCategory::Charger)
+  {
+   // Moving a cabinet must not promote an unfinished lift to delivery. Only a
+   // charging trip needs a new route; ongoing work keeps its physical phase.
+   It->LastObstacleCheckSeconds=-1;It->ObstacleCheckFrame=MAX_uint64;
+   const bool ChargingPhase=It->AIState>=EWarehouseAIState::PlanCharge && It->AIState<=EWarehouseAIState::LeaveCharger;
+   if (RelocatedChargerVehicles.Contains(*It) && (ChargingPhase || (It->bChargePending && It->ActiveJob.JobId.IsEmpty()))) It->RefreshAfterLayout();
+  }
+  else It->RefreshAfterLayout();
  }
  for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) It->RefreshState();
 }
