@@ -4,6 +4,7 @@
 #include "WarehousePallet.h"
 #include "WarehouseDamageSystem.h"
 #include "WarehouseChargingStation.h"
+#include "WarehouseWaitingBay.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/TextRenderComponent.h"
@@ -132,6 +133,7 @@ void AWarehouseForklift::SetMechanicalFailure()
  bMechanicalFailure=true;
  bChargePending=false;
  if (IsValid(ChargingStation)) ChargingStation->Release(this);
+ if (IsValid(WaitingBay)) WaitingBay->Release(this);
  StopFor(TEXT("MECHANICAL FAILURE - REPAIR REQUIRED"));
  SetStatus(TEXT("MECHANICAL FAILURE - REPAIR REQUIRED"));
  Beacon->SetLightColor(FLinearColor::Red);
@@ -209,6 +211,7 @@ void AWarehouseForklift::EndPlay(const EEndPlayReason::Type Reason)
  if (FleetCoordinator) FleetCoordinator->Release(this);
  if (IsRemoteControlled()) EndRemoteControl(RemoteOperator);
  if (IsValid(ChargingStation)) ChargingStation->Release(this);
+ if (IsValid(WaitingBay)) WaitingBay->Release(this);
  Super::EndPlay(Reason);
 }
 void AWarehouseForklift::RequestCharging(bool ToFull)
@@ -421,7 +424,7 @@ bool AWarehouseForklift::MoveLift(float Height)
 bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt,float ArrivalTolerance)
 {
  const FVector Offset=Destination-GetActorLocation();
- const float LateralLimit=AIState==EWarehouseAIState::AlignUnload ? 15.f : 5.f;
+ const float LateralLimit=AIState==EWarehouseAIState::DockCharge ? ChargingDockLateralLimitCm : AIState==EWarehouseAIState::AlignUnload ? 15.f : 5.f;
  if (FMath::Abs(FVector::DotProduct(Offset,GetActorRightVector()))>LateralLimit || FMath::Abs(Offset.Z)>3)
  { StopFor(TEXT("ROUTE MISALIGNED")); return false; }
  const float Distance=FVector::DotProduct(Offset,GetActorForwardVector());
@@ -435,6 +438,20 @@ bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt,flo
  const float TargetSpeed=FMath::Sign(Distance)*FMath::Min(Speed,FMath::Sqrt(240.f*FMath::Abs(Distance)));
  const float Lateral=FVector::DotProduct(Offset,GetActorRightVector());
  float Curvature=FMath::Clamp(2.f*Lateral/FMath::Max(1600.f,Offset.SizeSquared2D()),-1.f/117.3f,1.f/117.3f);
+ if (AIState==EWarehouseAIState::DockCharge && IsValid(ChargingStation) && Wheels[1] && Wheels[2])
+ {
+  // Follow the dock's straight axle line, rather than chasing a point at the
+  // actor origin. A shrinking point lookahead turned the vehicle as it reached
+  // the contact, then the final pivot displaced that same contact sideways.
+  const FVector Axle=(Wheels[1]->GetComponentLocation()+Wheels[2]->GetComponentLocation())*.5f;
+  const FVector LocalAxle=GetActorTransform().InverseTransformPosition(Axle);
+  const FVector TargetAxle=FTransform(ChargingStation->GetActorQuat(),Destination).TransformPosition(LocalAxle);
+  const float Cross=FVector::DotProduct(TargetAxle-Axle,ChargingStation->GetActorRightVector());
+  const float LookAhead=FMath::Max(10.f,ChargingLineLookaheadCm);
+  const float Heading=ChargingStation->GetActorRotation().Yaw+FMath::RadiansToDegrees(FMath::Atan(FMath::Sign(Distance)*Cross/LookAhead));
+  const float Error=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,Heading));
+  Curvature=FMath::Sign(Distance)*FMath::Clamp(Error/LookAhead,-1.f/117.3f,1.f/117.3f);
+ }
  if (AIState==EWarehouseAIState::InsertFork)
  {
   const float HeadingError=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,ObservedPallet.Rotator().Yaw));

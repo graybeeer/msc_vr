@@ -13,7 +13,8 @@ enum class EWarehouseAIState : uint8
  PlanCharge, NavigateCharge, DockCharge, Charging, LeaveCharger,
  WaitingObstacle, Paused, Fault,
  ElevatorApproach, ElevatorCall, ElevatorWait, ElevatorBoard, ElevatorRide, ElevatorExit,
- RecoverLower, RecoverWithdraw, RecoverReplan
+ RecoverLower, RecoverWithdraw, RecoverReplan,
+ PlanParking, NavigateParking, AlignParking, WaitingCharger
 };
 
 USTRUCT(BlueprintType)
@@ -25,6 +26,10 @@ struct FWarehouseWorkOrder
  UPROPERTY(EditAnywhere, BlueprintReadWrite) TObjectPtr<AWarehousePallet> Pallet;
  // Desired pallet BASE pose, not the vehicle pose. UE centimetres.
  UPROPERTY(EditAnywhere, BlueprintReadWrite) FTransform Destination;
+ // Optional physical destination anchor; authored free-floor orders remain valid without it.
+ UPROPERTY(EditAnywhere, BlueprintReadWrite) TObjectPtr<AActor> DestinationResource;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bRequiresDestinationResource=false;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bRackDestination=false;
 };
 
 USTRUCT(BlueprintType)

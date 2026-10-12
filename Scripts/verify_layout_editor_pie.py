@@ -16,6 +16,7 @@ assert level.load_level(LEVEL)
 for actor in actors.get_all_level_actors():
     if isinstance(actor, unreal.WarehouseForklift):
         actor.set_editor_property('auto_start', False)
+        actor.set_editor_property('idle_parking_enabled',False) # Isolate rig restoration/restart from newly added automatic home trips.
     if isinstance(actor, unreal.WarehouseInboundZone):
         actor.set_editor_property('fleet', [])
 # A parked-at-base positive fixture is authored before PIE and never saved.
@@ -533,6 +534,10 @@ def tick(dt):
             if now < 3:
                 return
             live = list(unreal.GameplayStatics.get_all_actors_of_class(game, unreal.Actor))
+            # Fleet membership is now discovered dynamically. This geometry/
+            # restart test needs idle vehicles; full dispatch is tested separately.
+            for actor in live:
+                if isinstance(actor,unreal.WarehouseInboundZone):actor.set_actor_tick_enabled(False)
             layouts = [a for a in live if isinstance(a, unreal.WarehouseLayoutEditor)]
             assert len(layouts) == 1, 'Missing/duplicate saved layout metadata actor'
             layout = layouts[0]

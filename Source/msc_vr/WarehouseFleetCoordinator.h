@@ -5,6 +5,7 @@
 #include "WarehouseFleetCoordinator.generated.h"
 
 class AWarehouseForklift;
+class AWarehouseChargingStation;
 
 /** Server-owned passage leases. Local safety scanners and Chaos remain authoritative for contact. */
 UCLASS()
@@ -18,6 +19,7 @@ public:
  bool AdvanceYield(AWarehouseForklift* Vehicle,float Dt);
  bool PlanningClear(const AWarehouseForklift* Vehicle,const FBox& Box) const;
  void Release(AWarehouseForklift* Vehicle);
+ AWarehouseChargingStation* AllocateCharger(AWarehouseForklift* Vehicle);
  UFUNCTION(BlueprintCallable,Category="Traffic") void CloseSection(const FString& Id,FVector Min,FVector Max,const FString& Reason);
  UFUNCTION(BlueprintCallable,Category="Traffic") void ReopenSection(const FString& Id);
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Traffic") int32 WaitCount=0;

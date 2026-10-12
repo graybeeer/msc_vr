@@ -56,6 +56,7 @@ public:
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Console") FString LastMessage;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Console") int32 RefreshCount=0;
  UFUNCTION(BlueprintCallable,Category="Console") void RefreshState();
+ void RefreshLayoutDestinations();
  // Called at successful queue submission, including inbound and external FMS orders.
  void RecordJobSubmitted(AWarehouseForklift* Vehicle,const FWarehouseWorkOrder& Job);
  UFUNCTION(BlueprintPure,Category="Console") double GetTaskElapsedSeconds(const FString& JobId) const;
@@ -63,6 +64,8 @@ public:
  UFUNCTION(BlueprintCallable,Category="Console") bool IssueOutbound(AWarehouseCargo* Cargo,AWarehouseForklift* Vehicle,int32 DestinationIndex);
  UFUNCTION(BlueprintCallable,Category="Console") bool SetVehicleRunning(AWarehouseForklift* Vehicle,bool Running);
  UFUNCTION(BlueprintCallable,Category="Console") bool CancelQueuedJob(const FString& JobId);
+ UFUNCTION(BlueprintCallable,Category="Console") bool CreateHeldCargo(FName Id,FText Product,float MassKg,FVector SizeCm);
+ UFUNCTION(BlueprintCallable,Category="Console") bool DeleteHeldCargo(FName Id);
  UFUNCTION(BlueprintPure,Category="Console") bool CanUse() const;
 private:
  int32 NextJob=1;

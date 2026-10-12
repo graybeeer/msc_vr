@@ -11,7 +11,9 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
-| 관찰 시점 같은 층 드래그·다중 선택·랙/벽 스냅·내용물 이동·승강기 개구부·충전기/정차 차량 배치 | `WarehouseLayoutEditor.h/.cpp`, `WarehouseLayoutSnap.h/.cpp`, `WarehouseElevatorLayout.h/.cpp`, `WarehouseChargingStation.h/.cpp`, `Scripts/configure_warehouse_layout.py`, `Scripts/verify_layout_editor_pie.py` | Slate 포인터/선택 윤곽과 메뉴는 `msc_vrPlayerController`, 슬롯은 `WarehouseInboundZone`, 경로 갱신은 `WarehouseForkliftAI`, 사용 기준은 `WAREHOUSE.md` |
+| 배치 모드 재배치·추가·삭제·다중 선택·스냅 적재·시설 누락 | `WarehouseLayoutEditor.h/.cpp`, `WarehouseLayoutInventory.h/.cpp`, `WarehouseLayoutSnap.h/.cpp`, `Scripts/verify_layout_inventory_pie.py`, `Scripts/verify_layout_editor_pie.py` | 하단 Slate 도구·렌더링 검사는 `msc_vrPlayerController`, `Scripts/verify_layout_editing_ui_pie.py`, 승강기 개구부는 `WarehouseElevatorLayout`, 슬롯은 `WarehouseInboundZone`, 사용 기준은 `WAREHOUSE.md` |
+| 보류된 물류 FIFO·품목/질량/크기/재질 보존·컴퓨터 데이터 입력/삭제 | `WarehouseLayoutInventory.h/.cpp`, `WarehouseComputer.h/.cpp`, `WarehouseComputerUI.cpp`, `Scripts/verify_layout_inventory_pie.py` | 접촉/손상 참조는 `WarehouseDamageSystem`, 상품 생성 규칙은 `CARGO_RULES.md`, 사용자 조작은 `WAREHOUSE.md` |
+| 공유 충전소·일반 대기 자리·낮은 배터리 우선·기회 충전·작업 선점 | `WarehouseForkliftParking.cpp`, `WarehouseWaitingBay.h/.cpp`, `WarehouseChargingStation.h/.cpp`, `WarehouseFleetCoordinator`, `Scripts/verify_shared_charging_pie.py`, `Scripts/configure_warehouse_waiting_bays.py` | 작업 상태 전환은 `WarehouseForkliftAI`, 운영 정책은 `AUTONOMY.md`, 배터리 수치는 `VNSL14_SPEC.md` |
 | 기존 지게차 2대의 초기 위치를 연결 충전기로 통합 | `Scripts/configure_charger_start_positions.py`, `WarehouseChargingStation.h/.cpp` | 에디터에서 기존 차량과 분리된 부품까지 actor 기준 상대 자세·크기를 보존해 시작 위치를 저장. 실행 중 재배치는 `WarehouseLayoutEditor`, 사용·검증 범위는 `WAREHOUSE.md` |
 | 옮긴 충전기로 실제 주행·도킹·배터리 증가·출차 검사 | `Scripts/verify_native_charger_layout_pie.py` | 저장 원본 리그·충전기를 복사한 미저장 Entry PIE. 실제 저장 맵의 선택·그룹/물리 복원은 `verify_layout_editor_pie.py`, 충전 정책은 `VNSL14_SPEC.md` |
 | 1/2/4배 시뮬레이션·같은 물리 간격·실효 배속 | `WarehouseSimulationClock.h/.cpp`, `msc_vrPlayerController`, `Scripts/verify_simulation_speed_pie.py` | 물리/시간 기준은 `PHYSICS.md`, 작업 시간 UI는 `WarehouseComputerUI.cpp` |
@@ -127,6 +129,7 @@ msc_vr/
     configure_warehouse_computer.py
     configure_warehouse_layout.py
     configure_warehouse_strength.py
+    configure_warehouse_waiting_bays.py
     configure_warehouse_workers.py
     convert_agv_original5_cm.py
     convert_agv_refined_cm.py
@@ -175,7 +178,9 @@ msc_vr/
     verify_inbound_area_pie.py
     verify_interaction_movement_pie.py
     verify_large_cargo_pie.py
+    verify_layout_editing_ui_pie.py
     verify_layout_editor_pie.py
+    verify_layout_inventory_pie.py
     verify_mezzanine.py
     verify_mezzanine_pie.py
     verify_multi_truck_docks.py
@@ -188,6 +193,7 @@ msc_vr/
     verify_real_world_scale.py
     verify_refined_agv.py
     verify_refined_agv_pie.py
+    verify_shared_charging_pie.py
     verify_shipping_staging_pie.py
     verify_simulation_speed_pie.py
     verify_support_snapshot_pie.py
@@ -240,6 +246,7 @@ msc_vr/
       WarehouseForklift.cpp
       WarehouseForklift.h
       WarehouseForkliftAI.cpp
+      WarehouseForkliftParking.cpp
       WarehouseForkliftPhysics.cpp
       WarehouseForkliftRecovery.cpp
       WarehouseForkliftRemote.cpp
@@ -247,6 +254,8 @@ msc_vr/
       WarehouseInboundZone.h
       WarehouseLayoutEditor.cpp
       WarehouseLayoutEditor.h
+      WarehouseLayoutInventory.cpp
+      WarehouseLayoutInventory.h
       WarehouseLayoutSnap.cpp
       WarehouseLayoutSnap.h
       WarehousePallet.cpp
@@ -257,6 +266,8 @@ msc_vr/
       WarehouseSimulationClock.cpp
       WarehouseSimulationClock.h
       WarehouseUIStyle.h
+      WarehouseWaitingBay.cpp
+      WarehouseWaitingBay.h
       WarehouseWorker.cpp
       WarehouseWorker.h
       Agv/

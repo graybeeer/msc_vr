@@ -46,6 +46,8 @@ public:
  UFUNCTION(BlueprintCallable, Category="Strength") void InitializeStrength();
  // Rebind layout floor replacements without resetting any mass, damage or body motion.
  void RefreshLayoutBindings();
+ void RemoveLayoutActors(const TArray<AActor*>& Actors);
+ void RegisterLayoutProfile(const FWarehouseStrength& Profile);
  // Call after a runtime physics activation (for example a humanoid ragdoll). No mass/profile changes.
  UFUNCTION(BlueprintCallable, Category="Strength") void RegisterPhysicalContacts(AActor* Actor);
  UFUNCTION(BlueprintCallable, Category="Strength") void AdvanceStrength(float Seconds);

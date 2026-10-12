@@ -5,6 +5,7 @@
 #include "WarehousePallet.h"
 #include "WarehouseForklift.h"
 #include "WarehouseUIStyle.h"
+#include "WarehouseLayoutInventory.h"
 #include "Engine/GameViewportClient.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Widgets/SCompoundWidget.h"
@@ -15,6 +16,8 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SSearchBox.h"
+#include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SNumericEntryBox.h"
 #include "Widgets/Views/SListView.h"
 #include "Framework/Application/SlateApplication.h"
 
@@ -41,6 +44,7 @@ public:
   for (int32 I=0;I<Computer->OutboundDestinations.Num();++I) DestChoices.Add(MakeShared<FString>(FString::Printf(TEXT("출고 대기 %02d"),I+1)));
   if (!DestChoices.IsEmpty()) SelectedDest=DestChoices[0];
   RefreshInventory();
+  RefreshHeld();
   static const FSearchBoxStyle SearchStyle=[]()
   {
    FSearchBoxStyle Style=FCoreStyle::Get().GetWidgetStyle<FSearchBoxStyle>("SearchBox");
@@ -92,6 +96,27 @@ public:
   Text(TEXT("시뮬레이션 시간 기준 · 지시 접수부터 완료까지 대기·정지 포함\n진행 작업 전체와 최근 완료·취소 200건을 기록합니다."),WarehouseUIStyle::CompactSize);
   Right->AddSlot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
    .Text_Lambda([this]() { return FText::FromString(TasksText()); }).AutoWrapText(true)];
+  Text(TEXT("보류된 물류 · 데이터 관리"),WarehouseUIStyle::TitleSize);
+  Text(TEXT("상자 번호와 품목, 포장 포함 무게·크기를 입력하세요. 생성한 데이터는 배치 모드에서 순서대로 놓습니다."),WarehouseUIStyle::CompactSize);
+  Right->AddSlot().AutoHeight().Padding(0,4)[SAssignNew(NewIdInput,SEditableTextBox).Font(WarehouseUIStyle::Font()).HintText(FText::FromString(TEXT("고유 화물 번호")))];
+  Right->AddSlot().AutoHeight().Padding(0,4)[SAssignNew(NewProductInput,SEditableTextBox).Font(WarehouseUIStyle::Font()).HintText(FText::FromString(TEXT("물류 종류 / 상품명")))];
+  auto Number=[&](const TCHAR* Label,float* Value,float Min,float Max)
+  {
+   Right->AddSlot().AutoHeight().Padding(0,4)[SNew(SHorizontalBox)
+    +SHorizontalBox::Slot().FillWidth(1)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text(FText::FromString(Label))]
+    +SHorizontalBox::Slot().FillWidth(1)[SNew(SNumericEntryBox<float>).Font(WarehouseUIStyle::Font()).MinValue(Min).MaxValue(Max)
+     .Value_Lambda([Value]() { return TOptional<float>(*Value); }).OnValueChanged_Lambda([Value](float V) { *Value=V; })]];
+  };
+  Number(TEXT("총 무게 (kg)"),&NewMass,.1f,10000.f);
+  Number(TEXT("가로 (cm)"),&NewWidth,5.f,300.f);Number(TEXT("깊이 (cm)"),&NewDepth,5.f,300.f);Number(TEXT("높이 (cm)"),&NewHeight,5.f,300.f);
+  Button(TEXT("입력 데이터로 보류 물류 추가"),[this]()
+  {
+   if (Computer.IsValid()) Computer->CreateHeldCargo(FName(*NewIdInput->GetText().ToString().TrimStartAndEnd()),
+    FText::FromString(NewProductInput->GetText().ToString().TrimStartAndEnd()),NewMass,FVector(NewWidth,NewDepth,NewHeight));
+   RefreshHeld();
+  });
+  Button(TEXT("선택한 보류 물류 데이터 삭제"),[this]()
+  { if (Computer.IsValid()) Computer->DeleteHeldCargo(SelectedHeldId);RefreshHeld(); });
   ChildSlot[SNew(SBorder).Padding(24).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.012f,.022f,.035f,1.f))
    [SNew(SVerticalBox)
     +SVerticalBox::Slot().AutoHeight().Padding(0,0,0,16)
@@ -108,7 +133,7 @@ public:
       +SVerticalBox::Slot().AutoHeight().Padding(8,6)[SNew(SHorizontalBox)
        +SHorizontalBox::Slot().FillWidth(.54)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize,true)).ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("화물 번호 / 종류")))]
        +SHorizontalBox::Slot().FillWidth(.46)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize,true)).ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("현재 위치 / 무게")))]]
-      +SVerticalBox::Slot().FillHeight(1)[SAssignNew(List,SListView<TSharedPtr<FWarehouseInventoryItem>>).ListItemsSource(&Items).ItemHeight(74).SelectionMode(ESelectionMode::Single)
+      +SVerticalBox::Slot().FillHeight(1)[SAssignNew(List,SListView<TSharedPtr<FWarehouseInventoryItem>>).ListItemsSource(&Items).SelectionMode(ESelectionMode::Single)
        .OnSelectionChanged_Lambda([this](TSharedPtr<FWarehouseInventoryItem> Item,ESelectInfo::Type) { if (Item) SelectedCargo=Item->Cargo; })
        .OnGenerateRow_Lambda([](TSharedPtr<FWarehouseInventoryItem> Item,const TSharedRef<STableViewBase>& Owner)
        {
@@ -118,6 +143,16 @@ public:
            .Text_Lambda([Item]() { return FText::FromString(Item->CargoId+TEXT("\n")+Item->Product); }).AutoWrapText(true)]
           +SHorizontalBox::Slot().FillWidth(.46)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
            .Text_Lambda([Item]() { return FText::FromString(FString::Printf(TEXT("%s\n%.1f kg · %s"),*Item->Location,Item->MassKg,Item->bReserved ? TEXT("예약 / 작업 중") : (Item->Pallet ? TEXT("팔레트 적재") : TEXT("개별 상자")))); }).AutoWrapText(true)]];
+       })]
+      +SVerticalBox::Slot().AutoHeight().Padding(8,12)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize,true)).ColorAndOpacity(WarehouseUIStyle::Accent)
+       .Text_Lambda([this]() { return FText::FromString(FString::Printf(TEXT("보류된 물류 %d개 · 맨 위 항목부터 배치"),HeldItems.Num())); })]
+      +SVerticalBox::Slot().FillHeight(.6)[SAssignNew(HeldList,SListView<TSharedPtr<FWarehouseHeldCargo>>).ListItemsSource(&HeldItems).SelectionMode(ESelectionMode::Single)
+       .OnSelectionChanged_Lambda([this](TSharedPtr<FWarehouseHeldCargo> Item,ESelectInfo::Type) { SelectedHeldId=Item ? Item->CargoId : NAME_None; })
+       .OnGenerateRow_Lambda([](TSharedPtr<FWarehouseHeldCargo> Item,const TSharedRef<STableViewBase>& Owner)
+       {
+        return SNew(STableRow<TSharedPtr<FWarehouseHeldCargo>>,Owner).Padding(FMargin(8,8))
+         [SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity(WarehouseUIStyle::Text).AutoWrapText(true)
+          .Text(FText::FromString(FString::Printf(TEXT("%s · %s\n%.1f kg · %.0f × %.0f × %.0f cm"),*Item->CargoId.ToString(),*Item->Product.ToString(),Item->MassKg,Item->SizeCm.X,Item->SizeCm.Y,Item->SizeCm.Z)))];
        })]]
      +SHorizontalBox::Slot().FillWidth(.34)[SNew(SScrollBox)+SScrollBox::Slot()[Right]]]
     +SVerticalBox::Slot().AutoHeight().Padding(0,10,0,0)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Warning)
@@ -134,6 +169,7 @@ public:
  {
   SCompoundWidget::Tick(Geometry,Now,Dt);
   if (Computer.IsValid() && LastRefresh!=Computer->RefreshCount) RefreshInventory();
+  if (Computer.IsValid()) if (auto* Store=AWarehouseLayoutInventory::Find(Computer.Get());Store && LastHeldRevision!=Store->Revision) RefreshHeld();
  }
 private:
  TWeakObjectPtr<AWarehouseComputer> Computer;
@@ -147,6 +183,19 @@ private:
  TArray<TSharedPtr<FString>> DestChoices;
  TSharedPtr<FString> SelectedDest;
  FString Filter;int32 LastRefresh=-1;
+ TArray<TSharedPtr<FWarehouseHeldCargo>> HeldItems;
+ TSharedPtr<SListView<TSharedPtr<FWarehouseHeldCargo>>> HeldList;
+ FName SelectedHeldId;
+ int32 LastHeldRevision=-1;
+ TSharedPtr<SEditableTextBox> NewIdInput,NewProductInput;
+ float NewMass=12,NewWidth=40,NewDepth=30,NewHeight=25;
+ void RefreshHeld()
+ {
+  if (!Computer.IsValid()) return;auto* Store=AWarehouseLayoutInventory::Find(Computer.Get());if (!Store) return;
+  LastHeldRevision=Store->Revision;HeldItems.Reset();
+  for (const auto& Row:Store->HeldCargo) HeldItems.Add(MakeShared<FWarehouseHeldCargo>(Row));
+  if (HeldList.IsValid()) HeldList->RequestListRefresh();
+ }
  void RefreshInventory()
  {
   if (!Computer.IsValid()) return;

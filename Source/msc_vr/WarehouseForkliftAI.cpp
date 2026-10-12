@@ -13,6 +13,7 @@ static uint32 WarehouseNavigationQueryCount=0;
 #include "WarehousePhysics.h"
 #include "WarehouseChargingStation.h"
 #include "WarehouseElevator.h"
+#include "WarehouseWaitingBay.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/StaticMesh.h"
@@ -62,7 +63,7 @@ void AWarehouseForklift::ReportJob(const FString& Result,const FString& Detail)
 }
 void AWarehouseForklift::TransitionAI(EWarehouseAIState Next,const FString& Message)
 {
- AIState=Next; AIElapsed=0; DockStableSeconds=-1; bRouteStarted=false; BrakeDrive();
+ AIState=Next; AIElapsed=0; DockStableSeconds=-1;bDockPullout=false;bRouteTurning=false; bRouteStarted=false; BrakeDrive();
  if (FleetCoordinator && (Next==EWarehouseAIState::Ready || Next==EWarehouseAIState::Paused ||
      Next==EWarehouseAIState::Fault || Next==EWarehouseAIState::Off)) FleetCoordinator->Release(this);
  SetStatus(Message);
@@ -100,8 +101,10 @@ void AWarehouseForklift::ToggleAutonomy()
 bool AWarehouseForklift::SubmitJob(const FWarehouseWorkOrder& Job)
 {
  if (!HasAuthority()) return false;
- if (Job.JobId.IsEmpty() || !IsValid(Job.Pallet) || Job.Destination.ContainsNaN() ||
+ if (Job.JobId.IsEmpty() || Job.Destination.ContainsNaN() ||
      !Job.Destination.GetScale3D().Equals(FVector::OneVector,.001f) || PendingJobs.Num()>=32) return false;
+ const FString Resources=ValidateJobResources(Job);
+ if (!Resources.IsEmpty()) { SetOperationError(Resources.Contains(TEXT("NO_ELEVATOR")) ? FName(TEXT("NO_ELEVATOR")) : Resources.Contains(TEXT("NO_DESTINATION_RESOURCE")) ? FName(TEXT("NO_DESTINATION_RESOURCE")) : FName(TEXT("NO_PALLET")),Resources);return false; }
  if (ActiveJob.JobId==Job.JobId || CompletedJobIds.Contains(Job.JobId)) return false;
  for (const auto& Existing : PendingJobs) if (Existing.JobId==Job.JobId || Existing.Pallet==Job.Pallet) return false;
  if (!ActiveJob.JobId.IsEmpty() && ActiveJob.Pallet==Job.Pallet) return false;
@@ -113,6 +116,7 @@ bool AWarehouseForklift::SubmitJob(const FWarehouseWorkOrder& Job)
    if (Other.JobId==Job.JobId || Other.Pallet==Job.Pallet) return false;
  }
  PendingJobs.Add(Job);
+ LastErrorCode=NAME_None;LastErrorMessage.Reset();
  for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) It->RecordJobSubmitted(this,Job);
  return true;
 }
@@ -429,7 +433,8 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
 bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
 {
  if (PlannedRoute.IsEmpty()) { BrakeDrive(); return true; }
- const float HeadingTolerance=FMath::DegreesToRadians(AIState==EWarehouseAIState::AlignUnload ? .5f : 1.f);
+ const bool ChargingAlignment=AIState==EWarehouseAIState::NavigateCharge || (AIState==EWarehouseAIState::DockCharge && bDockPullout);
+ const float HeadingTolerance=FMath::DegreesToRadians(ChargingAlignment && RouteIndex>=PlannedRoute.Num()-1 ? .2f : AIState==EWarehouseAIState::AlignUnload ? .5f : 1.f);
  if (FleetCoordinator && !FleetCoordinator->Permit(this)) return false;
  RouteIndex=FMath::Min(RouteIndex,PlannedRoute.Num()-1);
  if (PlannedRoute[RouteIndex].bPivot)
@@ -460,7 +465,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  const float HeadingError=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,Goal.Pose.Rotator().Yaw));
  // Tighten heading for the loaded pallet's lever arm while retaining enough
  // position margin for nonholonomic steering. Final pallet acceptance stays 2cm.
- const float PositionTolerance=AIState==EWarehouseAIState::AlignUnload ? 1.5f : 5.f;
+ const float PositionTolerance=ChargingAlignment && SegmentEnd==PlannedRoute.Num()-1 ? .5f : AIState==EWarehouseAIState::AlignUnload ? 1.5f : 5.f;
  if (Remaining<80.f && Wheels.Num()>=3 && AIState!=EWarehouseAIState::AlignUnload)
  {
   // Finish a lane pose at the real load-wheel axle. Rotating at the actor
@@ -795,7 +800,13 @@ bool AWarehouseForklift::BeginFloorTransfer(float TargetZ,EWarehouseAIState Resu
 {
  const float Base=FloorBase(TargetZ);
  if (FMath::Abs(Base-GetActorLocation().Z)<1.f) return false;
- if (!IsValid(Elevator)) { FaultAI(TEXT("NO ELEVATOR FOR TARGET FLOOR")); return true; }
+ if (!IsValid(Elevator) || Elevator->FloorAtHeight(TargetZ)==INDEX_NONE || Elevator->FloorAtHeight(GetActorLocation().Z)==INDEX_NONE)
+ {
+  Elevator=nullptr;
+  for (TActorIterator<AWarehouseElevator> It(GetWorld());It;++It)
+   if (It->FloorAtHeight(TargetZ)!=INDEX_NONE && It->FloorAtHeight(GetActorLocation().Z)!=INDEX_NONE) { Elevator=*It;break; }
+ }
+ if (!IsValid(Elevator)) { SetOperationError(TEXT("NO_ELEVATOR"),TEXT("지게차가 올라갈 수 없다: 해당 층을 연결하는 승강기가 없습니다."));FaultAI(Status);return true; }
  TransferFromFloor=Elevator->FloorAtHeight(GetActorLocation().Z);
  TransferToFloor=Elevator->FloorAtHeight(TargetZ);
  if (TransferFromFloor==INDEX_NONE || TransferToFloor==INDEX_NONE || !IsLiftAtTravelHeight())
@@ -827,12 +838,23 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
  if (BatteryPercent<=0 && AIState!=EWarehouseAIState::Charging) { FaultAI(TEXT("BATTERY EMPTY")); return; }
  if (!ActiveJob.JobId.IsEmpty())
  {
-  if (!IsValid(TargetPallet)) { FaultAI(TEXT("TARGET LOST")); return; }
+  if (!IsValid(TargetPallet)) { SetOperationError(TEXT("NO_PALLET"),TEXT("운반할 수 없다: 대상 팔레트가 삭제되었습니다."));FaultAI(Status);return; }
+  if (ActiveJob.bRequiresDestinationResource && !IsValid(ActiveJob.DestinationResource))
+  { SetOperationError(TEXT("NO_DESTINATION_RESOURCE"),TEXT("운반할 수 없다: 목적지 랙 또는 입출고 구역이 삭제되었습니다."));FaultAI(Status);return; }
   if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->HasFailed(TargetPallet)) { FaultAI(TEXT("PALLET DAMAGED")); return; }
   if (GetLoadMassKg()>FMath::Min(1400.f,RatedLoadKg)) { FaultAI(TEXT("OVERLOAD - REMOVE LOAD")); return; }
  }
  if (!UpdateLoadSupport(Dt)) { FaultAI(TEXT("LOAD SLIPPED / SUPPORT LOST")); return; }
+ if (bOpportunityCharge && !PendingJobs.IsEmpty() && BatteryPercent>ChargeBelowPercent && !bChargeToFull)
+ {
+  bOpportunityCharge=false;bIdleChargeParking=false;bChargePending=false;
+  if (AIState==EWarehouseAIState::Charging || AIState==EWarehouseAIState::DockCharge)
+  { TransitionAI(EWarehouseAIState::LeaveCharger,TEXT("새 작업 수신 · 기회 충전을 종료하고 출차"));return; }
+  if (AIState==EWarehouseAIState::PlanCharge || AIState==EWarehouseAIState::NavigateCharge || AIState==EWarehouseAIState::WaitingCharger)
+  { if (IsValid(ChargingStation)) ChargingStation->Release(this);TransitionAI(EWarehouseAIState::Ready,TEXT("새 작업 수신 · 기회 충전 이동 취소"));return; }
+ }
  if (FleetCoordinator && FleetCoordinator->AdvanceYield(this,Dt)) return;
+ if (AdvanceIdleParking(Dt)) return;
  auto Next=[&](EWarehouseAIState Value,const TCHAR* Message) { TransitionAI(Value,Message); };
  auto Route=[&](const FTransform& Goal,EWarehouseAIState Done,const TCHAR* Message,float Speed)
  {
@@ -868,7 +890,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   {
    // Leave a settled parking pose with native wheels before applying the wider
    // travel envelope. This is not the stricter electrical docking approval.
-   if (IsValid(ChargingStation) && ChargingStation->AssignedVehicle==this && ActiveJob.JobId.IsEmpty() &&
+   if (IsValid(ChargingStation) && ActiveJob.JobId.IsEmpty() &&
        !bSupportingPallet && ChassisBody && FVector::Dist(GetActorLocation(),ChargingStation->GetActorLocation())<=5.f &&
        GetActorUpVector().Z>.999f && ChargingStation->GetActorUpVector().Z>.999f &&
        FVector::DotProduct(GetActorForwardVector(),ChargingStation->GetActorForwardVector())>=FMath::Cos(FMath::DegreesToRadians(2.f)))
@@ -882,13 +904,27 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
     Next(EWarehouseAIState::LeaveCharger,TEXT("WORK QUEUED - LEAVE PARKING DOCK"));
     break;
    }
+   if (IsValid(WaitingBay)) WaitingBay->Release(this);
    ActiveJob=PendingJobs[0]; PendingJobs.RemoveAt(0); TargetPallet=ActiveJob.Pallet; bPalletReleased=false;
    RecoveryAttempts=0; ForkInsertionRetries=0; WaitSeconds=0; ProgressLocation=GetActorLocation();
    Next(EWarehouseAIState::ValidateJob,TEXT("WORK ORDER RECEIVED")); ReportJob(TEXT("ACCEPTED"),ActiveJob.SourceSystem);
   }
+  else if (AIElapsed>.5f && GetWorld()->GetTimeSeconds()>=NextResourceCheck)
+  {
+   NextResourceCheck=GetWorld()->GetTimeSeconds()+1.;
+   if (bOpportunityChargingEnabled && AIElapsed>=OpportunityChargeIdleDelaySeconds && BatteryPercent<OpportunityChargeBelowPercent-1.f)
+   {
+    bOpportunityCharge=true;
+    if (TryAcquireCharger()) { bChargePending=true;Next(EWarehouseAIState::PlanCharge,TEXT("작업 없음 · 가능한 동안 기회 충전")); }
+    else { bOpportunityCharge=false;PlanIdleParking(false); }
+   }
+   else PlanIdleParking(false);
+  }
   break;
  case EWarehouseAIState::ValidateJob:
  {
+  const FString Resources=ValidateJobResources(ActiveJob);
+  if (!Resources.IsEmpty()) { SetOperationError(Resources.Contains(TEXT("NO_ELEVATOR")) ? FName(TEXT("NO_ELEVATOR")) : Resources.Contains(TEXT("NO_DESTINATION_RESOURCE")) ? FName(TEXT("NO_DESTINATION_RESOURCE")) : FName(TEXT("NO_PALLET")),Resources);FaultAI(Status);break; }
   if (PalletClaimedByOther(TargetPallet)) { FaultAI(TEXT("PALLET RESERVED BY ANOTHER AGV")); break; }
   const float SourceFloor=FloorBase(TargetPallet->GetActorLocation().Z);
   const float SourceLevel=TargetPallet->GetActorLocation().Z-SourceFloor;
@@ -1077,7 +1113,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    }
    break;
   }
-  if (ActiveJob.SourceSystem==TEXT("FMS-INBOUND-ZONE-1") && DropHeight>5 && RackLoadAligned() &&
+  if (ActiveJob.bRackDestination && DropHeight>5 && RackLoadAligned() &&
       FVector::Dist2D(TargetPallet->GetActorLocation(),ActiveJob.Destination.GetLocation())<=2.f)
   {
    BrakeDrive();
@@ -1139,7 +1175,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
      break;
     }
    }
-   if (ActiveJob.SourceSystem==TEXT("FMS-INBOUND-ZONE-1") && DropHeight>5)
+   if (ActiveJob.bRackDestination && DropHeight>5)
    {
     FHitResult Shelf;
     FCollisionQueryParams Params(SCENE_QUERY_STAT(RackLoadHandoff),false,this);
@@ -1188,7 +1224,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   bool bPlaced=FVector::Dist(TargetPallet->GetActorLocation(),ActiveJob.Destination.GetLocation())<=2 &&
       FMath::Abs(FMath::FindDeltaAngleDegrees(TargetPallet->GetActorRotation().Yaw,ActiveJob.Destination.Rotator().Yaw))<=2;
   if (DropHeight<=5.f) bPlaced=IsFloorPlacementValid(TargetPallet,ActiveJob.Destination,false,!SupportRefreshed);
-  if (ActiveJob.SourceSystem==TEXT("FMS-INBOUND-ZONE-1") && DropHeight>5)
+  if (ActiveJob.bRackDestination && DropHeight>5)
   {
    // 110cm pallets have a reserved 120cm footprint inside a 125cm pitch rack.
    // Judge real containment/support rather than faulting a harmless few degrees of yaw.
@@ -1224,7 +1260,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   break;
  case EWarehouseAIState::PlanCharge:
   if (bSupportingPallet) { FaultAI(TEXT("UNLOAD BEFORE CHARGING")); break; }
-  if (!IsValid(ChargingStation) || !ChargingStation->TryReserve(this)) { FaultAI(TEXT("CHARGER BUSY / OFFLINE")); break; }
+  if (!TryAcquireCharger()) { Next(EWarehouseAIState::WaitingCharger,TEXT("충전 자리 확인 · 일반 대기"));NextResourceCheck=-1;break; }
   if (!LiftTo(0)) break;
   if (BeginFloorTransfer(ChargingStation->GetActorLocation().Z,EWarehouseAIState::PlanCharge)) break;
   ChargeExitPose=ChargingStation->GetActorTransform(); ChargeExitPose.AddToTranslation(ChargingStation->GetActorForwardVector()*120);
@@ -1239,22 +1275,44 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   else StopFor(TEXT("OBSTACLE / NO CHARGER ROUTE"));
   break;
  case EWarehouseAIState::NavigateCharge:
+  if (!IsValid(ChargingStation)) { SetOperationError(TEXT("NO_CHARGER"),TEXT("충전할 수 없다: 충전기가 삭제되었습니다."));TransitionAI(EWarehouseAIState::WaitingCharger,Status);break; }
+  // A route endpoint is a capture region. The slow docking controller handles
+  // residual offset; native 1cm / 0.5-degree electrical contact remains strict.
+  if (FVector::Dist2D(GetActorLocation(),ChargeExitPose.GetLocation())<ChargingCaptureDistanceCm &&
+      FMath::Abs(GetActorLocation().Z-ChargeExitPose.GetLocation().Z)<1.f &&
+      FMath::Abs(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,ChargeExitPose.Rotator().Yaw))<ChargingCaptureHeadingDegrees &&
+      FMath::Abs(CurrentSpeedCm)<5.f && NavigationClear(GetActorTransform()))
+  { Next(EWarehouseAIState::DockCharge,TEXT("접근 구간 확인 · 저속 도킹 보정"));break; }
   Route(ChargeExitPose,EWarehouseAIState::DockCharge,TEXT("PRECISE CHARGER DOCKING"),EmptyTravelSpeedCm);
   break;
  case EWarehouseAIState::DockCharge:
  {
-  if (!IsValid(ChargingStation) || !ChargingStation->bMainsPower || ChargingStation->Occupant!=this) { FaultAI(TEXT("CHARGER LOST / OFFLINE")); break; }
-  if (AIElapsed>60.f) { FaultAI(TEXT("DOCK ALIGNMENT FAILED"));break; }
+  if (!IsValid(ChargingStation) || !ChargingStation->bMainsPower || ChargingStation->Occupant!=this) { SetOperationError(TEXT("NO_CHARGER"),TEXT("충전할 수 없다: 충전기가 삭제되거나 전원이 꺼졌습니다."));TransitionAI(EWarehouseAIState::WaitingCharger,Status);break; }
+  if (AIElapsed>180.f) { FaultAI(TEXT("DOCK ALIGNMENT FAILED"));break; }
   const FTransform ActualPose=GetActorTransform();
   const FVector Dock=ChargingStation->GetActorLocation();
   const float Heading=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,ChargingStation->GetActorRotation().Yaw));
+  if (FParse::Param(FCommandLine::Get(),TEXT("DriveDiagnostics")) && FMath::FloorToInt(GetWorld()->GetTimeSeconds())!=FMath::FloorToInt(GetWorld()->GetTimeSeconds()-Dt))
+   UE_LOG(LogTemp,Log,TEXT("AGV_DOCK_DIAG %s dt=%.5f pullout=%d turning=%d route=%d stable=%.3f along=%.3f side=%.3f heading=%.3f linear=%s angular=%s drive=%.3f turn=%.3f"),
+    *VehicleName,Dt,bDockPullout,bRouteTurning,bRouteStarted,DockStableSeconds,
+    FVector::DotProduct(Dock-GetActorLocation(),GetActorForwardVector()),FVector::DotProduct(Dock-GetActorLocation(),GetActorRightVector()),FMath::RadiansToDegrees(Heading),
+    *ChassisBody->GetPhysicsLinearVelocity().ToString(),*ChassisBody->GetPhysicsAngularVelocityInDegrees().ToString(),DesiredDriveSpeed,DesiredTurnRate);
+  if (bDockPullout)
+  {
+   // Correct with continuous low-speed steering on the dock line. A stationary
+   // 90-degree steering slew applies a reaction to the chassis and can shift
+   // the contact being aligned. Keep real sweeps/traffic/brakes throughout.
+   if (MoveToLine(ChargeExitPose.GetLocation(),15,Dt,.35f)) bDockPullout=false;
+   break;
+  }
   if (DockStableSeconds<0)
   {
-   MoveToLine(Dock,10,Dt,.35f);
-   if (AIState!=EWarehouseAIState::DockCharge || FMath::Abs(FVector::DotProduct(Dock-GetActorLocation(),GetActorForwardVector()))>=.35f) break;
-   if (FMath::Abs(Heading)>FMath::DegreesToRadians(.2f))
-   { CommandTurn(FMath::Sign(Heading)*FMath::Clamp(FMath::Abs(Heading)*2.f,.005f,.05f),Dt);break; }
-   if (!ChargingStation->IsDocked(this) || FVector::Dist(ActualPose.GetLocation(),Dock)>.7f) break;
+   if (!ChargingStation->IsDocked(this))
+   {
+    MoveToLine(Dock,10,Dt,.35f);
+    if (AIState!=EWarehouseAIState::DockCharge || FMath::Abs(FVector::DotProduct(Dock-GetActorLocation(),GetActorForwardVector()))>=.35f) break;
+   }
+   if (!ChargingStation->IsDocked(this)) { bDockPullout=true;bRouteStarted=false;break; }
    DockStablePose=ActualPose;DockStableSeconds=0;
    BrakeDrive();
    break;
@@ -1262,8 +1320,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   // Keep finite brakes applied without repeatedly chasing tyre-contact jitter.
   // Every sampled pose must remain inside this window and the strict contact.
   BrakeDrive();
-  if (!ChargingStation->IsDocked(this) || FVector::Dist(ActualPose.GetLocation(),Dock)>.7f ||
-      FMath::Abs(Heading)>FMath::DegreesToRadians(.2f) ||
+  if (!ChargingStation->IsDocked(this) ||
       FVector::Dist(ActualPose.GetLocation(),DockStablePose.GetLocation())>.25f ||
       ActualPose.GetRotation().AngularDistance(DockStablePose.GetRotation())>FMath::DegreesToRadians(.15f))
   { DockStableSeconds=-1;break; }
@@ -1274,13 +1331,28 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
  case EWarehouseAIState::Charging:
  {
   if (!IsValid(ChargingStation) || !ChargingStation->bMainsPower || ChargingStation->PowerKw<=0 || ChargingStation->Efficiency<=0 || ChargingStation->Occupant!=this || !ChargingStation->IsDocked(this))
-  { FaultAI(TEXT("CHARGING CONTACT / POWER LOST")); break; }
-  const float Target=bChargeToFull ? 100.f : FMath::Clamp(ResumeAtPercent,75.f,100.f);
-  BatteryPercent=FMath::Min(Target,BatteryPercent+100.f*ChargingStation->PowerKw*1000.f*FMath::Clamp(ChargingStation->Efficiency,0.f,1.f)*Dt*FMath::Clamp(BatteryTimeScale,1.f,3600.f)/(3600.f*BatteryVoltage*BatteryCapacityAh));
+  { SetOperationError(TEXT("CHARGER_UNAVAILABLE"),TEXT("충전할 수 없다: 충전기 연결·전원·예약을 확인하세요."));TransitionAI(EWarehouseAIState::WaitingCharger,Status);break; }
+  if (bIdleChargeParking && BatteryPercent>ChargeBelowPercent)
+  {
+   bIdleChargeParking=false;bChargePending=false;bOpportunityCharge=false;ChargingStation->Release(this);
+   Next(EWarehouseAIState::Ready,TEXT("충전 자리에서 다음 작업 대기 · 충전 필요 차량에 양보"));break;
+  }
+  bIdleChargeParking=false;
+  const float Target=bChargeToFull ? 100.f : bOpportunityCharge ? FMath::Clamp(OpportunityChargeBelowPercent,ChargeBelowPercent+1.f,100.f) : FMath::Clamp(ResumeAtPercent,75.f,100.f);
+  if (BatteryPercent<Target) BatteryPercent=FMath::Min(Target,BatteryPercent+100.f*ChargingStation->PowerKw*1000.f*FMath::Clamp(ChargingStation->Efficiency,0.f,1.f)*Dt*FMath::Clamp(BatteryTimeScale,1.f,3600.f)/(3600.f*BatteryVoltage*BatteryCapacityAh));
   ChargingStation->ShowCharge(BatteryPercent,true);
   if (BatteryPercent>=Target)
   {
-   bChargePending=false; bChargeToFull=false; ChargingStation->ShowCharge(BatteryPercent,false);
+   bChargePending=false; bChargeToFull=false;bOpportunityCharge=false; ChargingStation->ShowCharge(BatteryPercent,false);
+   bool OtherNeedsCharge=false,FreeWaitingBay=false;
+   for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
+    if (*It!=this && It->bPowered && (It->bChargePending || It->BatteryPercent<=It->ChargeBelowPercent || It->bOpportunityCharge)) { OtherNeedsCharge=true;break; }
+   for (TActorIterator<AWarehouseWaitingBay> It(GetWorld());It;++It)
+    if ((!IsValid(It->Occupant) || It->Occupant==this) && FMath::Abs(It->GetActorLocation().Z-GetActorLocation().Z)<5) { FreeWaitingBay=true;break; }
+   if (bIdleParkingEnabled && PendingJobs.IsEmpty() && !OtherNeedsCharge && !FreeWaitingBay)
+   {
+    ChargingStation->Release(this);Next(EWarehouseAIState::Ready,TEXT("충전 완료 · 충전 자리에서 다음 지시 대기"));break;
+   }
    Next(EWarehouseAIState::LeaveCharger,TEXT("CHARGE COMPLETE - LEAVE DOCK"));
   }
   break;

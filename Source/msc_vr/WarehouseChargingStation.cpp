@@ -56,7 +56,7 @@ TArray<AWarehouseForklift*> AWarehouseChargingStation::GetLinkedVehicles() const
 }
 bool AWarehouseChargingStation::TryReserve(AWarehouseForklift* Vehicle)
 {
- if (!bMainsPower || (IsValid(Occupant) && Occupant!=Vehicle)) return false;
+ if (!IsValid(Vehicle) || Vehicle->GetWorld()!=GetWorld() || !bMainsPower || PowerKw<=0 || Efficiency<=0 || (IsValid(Occupant) && Occupant!=Vehicle)) return false;
  Occupant=Vehicle;
  return true;
 }
@@ -72,5 +72,17 @@ void AWarehouseChargingStation::ShowCharge(float Percent, bool Charging)
 }
 void AWarehouseChargingStation::RequestManualCharge()
 {
- if (IsValid(AssignedVehicle)) AssignedVehicle->RequestCharging(true);
+ AWarehouseForklift* Vehicle=IsValid(Occupant) ? Occupant.Get() : AssignedVehicle.Get();
+ if (!IsValid(Vehicle))
+ {
+  double Nearest=MAX_dbl;
+  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
+   if (It->bAutonomousMode && !It->IsRemoteControlled())
+   {
+    const double Distance=FVector::DistSquared(It->GetActorLocation(),GetActorLocation());
+    if (Distance<Nearest) { Nearest=Distance;Vehicle=*It; }
+   }
+ }
+ if (IsValid(Vehicle)) Vehicle->RequestCharging(true);
+ else ShowCharge(0,false);
 }

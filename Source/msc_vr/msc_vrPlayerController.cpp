@@ -24,10 +24,12 @@
 #include "WarehouseComputer.h"
 #include "WarehouseUIStyle.h"
 #include "WarehouseLayoutEditor.h"
+#include "WarehouseLayoutInventory.h"
 #include "WarehouseSimulationClock.h"
 #include "Misc/App.h"
 #include "HAL/PlatformTime.h"
 #include "Widgets/SBoxPanel.h"
+#include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -147,24 +149,31 @@ void Amsc_vrPlayerController::BeginPlay()
 			[SNew(SBox).WidthOverride(820)
 				[SNew(SBorder).Padding(WarehouseUIStyle::PanelPadding).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 					.BorderBackgroundColor(WarehouseUIStyle::DangerPanel)
-					.Visibility_Lambda([this]() { return EmergencyAlertText.IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible; })
+				.Visibility_Lambda([this]() { return EmergencyAlertText.IsEmpty() && ResourceAlertText.IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible; })
 					[SNew(SVerticalBox)
 						+SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::TitleSize,true))
-							.ColorAndOpacity(WarehouseUIStyle::Warning).Text(FText::FromString(TEXT("비상 · 지게차 끼임 / 이동 불가")))]
+						.ColorAndOpacity(WarehouseUIStyle::Warning).Text_Lambda([this]() { return FText::FromString(EmergencyAlertText.IsEmpty() ? TEXT("운영 · 필요한 설비 확인") : TEXT("비상 · 지게차 끼임 / 이동 불가")); })]
 						+SVerticalBox::Slot().AutoHeight().Padding(0,8)[SNew(STextBlock).Font(WarehouseUIStyle::Font())
-							.ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(780).Text_Lambda([this]() { return FText::FromString(EmergencyAlertText); })]
+						.ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(780).Text_Lambda([this]() { return FText::FromString(EmergencyAlertText.IsEmpty() ? ResourceAlertText : EmergencyAlertText+TEXT("\n")+ResourceAlertText); })]
 						+SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font())
-							.ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(780).Text(FText::FromString(TEXT("주변 장애물을 제거하거나 G로 수동 탈출하세요. 해결 후 E로 재점검·재개합니다.")))]]]];
+						.ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(780).Text_Lambda([this]() { return FText::FromString(EmergencyAlertText.IsEmpty() ? TEXT("중앙 컴퓨터에서 작업을 확인하거나 배치 모드에서 필요한 설비를 추가하세요.") : TEXT("주변 장애물을 제거하거나 G로 수동 탈출하세요. 해결 후 E로 재점검·재개합니다.")); })]]]];
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(EmergencyAlertWidget.ToSharedRef(),200);
 		auto Tools=SNew(SVerticalBox);
 		LayoutCanvas=SNew(SWarehouseLayoutCanvas).Layout(LayoutEditor).Controller(this)
 			.OnEnded_Lambda([this]() { SetObserverRoofVisibility(false);SetObserverRoofVisibility(true); })
 			.Visibility_Lambda([this]() { return bObserverView && LayoutEditor && LayoutEditor->bEditing && !IsWarehouseMenuOpen() ? EVisibility::Visible:EVisibility::Collapsed; });
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(LayoutCanvas.ToSharedRef(),10);
-		auto Row=SNew(SHorizontalBox);
-		const TCHAR* Labels[]={TEXT("1 랙"),TEXT("2 지게차"),TEXT("3 승강기"),TEXT("4 입출고 구역"),TEXT("5 기타 물건"),TEXT("6 충전기")};
+		auto Actions=SNew(SHorizontalBox);
+		const TCHAR* ActionNames[]={TEXT("재배치"),TEXT("삭제"),TEXT("추가")};
+		for (int32 I=0;I<3;++I)
+			Actions->AddSlot().FillWidth(1).Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(12)
+				.OnClicked_Lambda([this,I]() { SetLayoutAction(I);return FReply::Handled(); })
+				[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity_Lambda([this,I]() { return LayoutEditor && int32(LayoutEditor->Action)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(ActionNames[I]))]];
+		Tools->AddSlot().AutoHeight()[Actions];
+		auto Row=SNew(SWrapBox).UseAllottedSize(true);
+		const TCHAR* Labels[]={TEXT("랙"),TEXT("지게차"),TEXT("승강기"),TEXT("입출고 구역"),TEXT("기타 물건"),TEXT("충전기"),TEXT("일반 대기 자리"),TEXT("상자"),TEXT("팔레트")};
 		for (int32 I=0;I<UE_ARRAY_COUNT(Labels);++I)
-			Row->AddSlot().AutoWidth().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			Row->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
 				.OnClicked_Lambda([this,I]() { SetLayoutCategory(I);return FReply::Handled(); })
 				[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity_Lambda([this,I]() { return LayoutEditor && int32(LayoutEditor->Category)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(Labels[I]))]];
 		Tools->AddSlot().AutoHeight()[Row];
@@ -178,13 +187,23 @@ void Amsc_vrPlayerController::BeginPlay()
 			.OnClicked_Lambda([this]() { if (LayoutEditor) LayoutEditor->bEdgeSnapEnabled=!LayoutEditor->bEdgeSnapEnabled;return FReply::Handled(); })
 			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text_Lambda([this]() { return FText::FromString(LayoutEditor && LayoutEditor->bEdgeSnapEnabled ? TEXT("스냅 켜짐"):TEXT("스냅 꺼짐")); })]];
 		Tools->AddSlot().AutoHeight()[SelectionRow];
+		Tools->AddSlot().AutoHeight()[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			.Visibility_Lambda([this]() { return LayoutEditor && LayoutEditor->Action==EWarehouseLayoutAction::Delete ? EVisibility::Visible : EVisibility::Collapsed; })
+			.OnClicked_Lambda([this]() { if (LayoutEditor) { LayoutEditor->DeleteSelection();SetObserverRoofVisibility(false);SetObserverRoofVisibility(true); }return FReply::Handled(); })
+			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text(FText::FromString(TEXT("선택한 요소 모두 삭제 · 상자는 보류 목록으로")))]];
+		Tools->AddSlot().AutoHeight()[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			.Visibility_Lambda([this]() { return LayoutEditor && LayoutEditor->Action==EWarehouseLayoutAction::Add ? EVisibility::Visible : EVisibility::Collapsed; })
+			.OnClicked_Lambda([this]() { if (LayoutEditor) LayoutEditor->CycleAddChoice();return FReply::Handled(); })
+			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text_Lambda([this]() { return FText::FromString(LayoutEditor ? TEXT("추가 대상: ")+LayoutEditor->GetAddChoiceLabel()+TEXT(" · 클릭하면 다음 종류") : FString()); })]];
+		Tools->AddSlot().AutoHeight().Padding(3)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
+			.Text_Lambda([this]() { auto* Store=AWarehouseLayoutInventory::Find(this);return FText::FromString(FString::Printf(TEXT("보류된 물류 %d개 · 상자 데이터 생성·영구 삭제는 중앙 컴퓨터에서"),Store ? Store->HeldCargo.Num() : 0)); })];
 		Tools->AddSlot().AutoHeight().Padding(3,8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(740)
 			.Text_Lambda([this]() { return FText::FromString(LayoutEditor ? LayoutEditor->Status : FString()); })];
 		Tools->AddSlot().AutoHeight()[SNew(SButton).IsFocusable(false).ContentPadding(8)
 			.OnClicked_Lambda([this]() { ToggleLayoutEditing();return FReply::Handled(); })
 			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(TEXT("재배치 종료 · 시뮬레이션 재개")))]
 			];
-		LayoutToolbar=SNew(SBox).HAlign(HAlign_Left).VAlign(VAlign_Top).Padding(20)
+		LayoutToolbar=SNew(SBox).HAlign(HAlign_Fill).VAlign(VAlign_Bottom).Padding(FMargin(20,0,20,20))
 			.Visibility_Lambda([this]() { return bObserverView && LayoutEditor && LayoutEditor->bEditing && !IsWarehouseMenuOpen() ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed; })
 			[SNew(SBorder).Padding(WarehouseUIStyle::PanelPadding).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(WarehouseUIStyle::Panel)[Tools]];
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(LayoutToolbar.ToSharedRef(),20);
@@ -434,7 +453,9 @@ void Amsc_vrPlayerController::ToggleLayoutEditing()
  UpdateInputMode();
 }
 void Amsc_vrPlayerController::SetLayoutCategory(int32 CategoryIndex)
-{ if (LayoutEditor && CategoryIndex>=0 && CategoryIndex<=int32(EWarehouseLayoutCategory::Charger)) LayoutEditor->SetCategory(EWarehouseLayoutCategory(CategoryIndex)); }
+{ if (LayoutEditor && CategoryIndex>=0 && CategoryIndex<=int32(EWarehouseLayoutCategory::Pallet)) LayoutEditor->SetCategory(EWarehouseLayoutCategory(CategoryIndex)); }
+void Amsc_vrPlayerController::SetLayoutAction(int32 ActionIndex)
+{ if (LayoutEditor && ActionIndex>=0 && ActionIndex<=int32(EWarehouseLayoutAction::Add)) LayoutEditor->SetAction(EWarehouseLayoutAction(ActionIndex)); }
 
 void Amsc_vrPlayerController::SetObserverRoofVisibility(bool Hide)
 {
@@ -596,6 +617,10 @@ void Amsc_vrPlayerController::UpdateEmergencyAlerts(float Dt)
   }
   if (EmergencyAlertText.IsEmpty() && !Notices.IsEmpty()) EmergencyAlarmElapsed=6.f;
   EmergencyAlertText=FString::Join(Notices,TEXT("\n\n"));
+  TArray<FString> Resources;
+  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
+   if (!It->LastErrorMessage.IsEmpty()) Resources.Add(It->VehicleName+TEXT(": ")+It->LastErrorMessage);
+  ResourceAlertText=FString::Join(Resources,TEXT("\n"));
   if (Notices.IsEmpty())
   {
    EmergencyAlarmElapsed=0;

@@ -31,12 +31,24 @@ flowchart TD
     Check -- 아니오 --> Fault["고장 보고·제동 요청<br/>원인 복구 후 재점검"]
     Check -- 예 --> Ready["READY · 작업 대기"]
     Ready --> Battery{"충전 필요?"}
-    Battery -- 예 --> Charge["충전소 경로·도킹 확인<br/>목표 잔량까지 충전"]
-    Charge --> Leave["LeaveCharger · 실제 바퀴로 출차<br/>출구 도착 후 충전소 예약 해제"]
+    Battery -- 예 --> Allocate["중앙 공유 충전 예약<br/>필수 충전·낮은 잔량 우선"]
+    Allocate --> Free{"사용 가능한 충전 자리?"}
+    Free -- 예 --> Charge["충전소 경로·도킹 확인<br/>목표 잔량까지 충전"]
+    Free -- 아니오 --> Waiting["일반 대기 자리에서 기다림<br/>시설 누락 오류·예약 재확인"]
+    Waiting --> Allocate
+    Charge --> ChargeDone{"충전 완료<br/>작업 또는 다른 충전 요청이 있나?"}
+    ChargeDone -- 예 --> Leave["LeaveCharger · 실제 바퀴로 출차<br/>출구 도착 후 충전소 예약 해제"]
+    ChargeDone -- 대기 자리 여유 --> Leave
+    ChargeDone -- 아니오 --> DockIdle["충전 자리에서 충전 없이 대기<br/>다른 차량의 충전 요청에는 출차"]
+    DockIdle --> Ready
     Leave --> Ready
     Battery -- 아니오 --> Queued{"대기 작업이 있는가?"}
-    Queued -- 아니오 --> Ready
-    Queued -- 예 --> Parked{"지정 충전기에<br/>무적재로 정차 중?"}
+    Queued -- 아니오 --> Idle{"유휴 기회 충전 대상?"}
+    Idle -- 예 --> Allocate
+    Idle -- 아니오 --> Parking["일반 대기 자리로 주행·정렬"]
+    Parking --> Ready
+    Charge -- 기회 충전 중 새 작업 --> Leave
+    Queued -- 예 --> Parked{"충전 자리에<br/>무적재로 정차 중?"}
     Parked -- 예 --> Leave
     Parked -- 아니오 --> Validate{"작업 검증 통과?<br/>중복·하중·포크 높이·목적지 지지"}
     Validate -- 아니오 --> Fault
@@ -71,7 +83,7 @@ flowchart TD
     Complete --> Ready
 ```
 
-충전기에 정차한 차량에 작업이 들어오면 대기 지시를 보존한 채 `LeaveCharger`로 출차하고, READY로 돌아온 뒤 지시를 수락한다. 충전 완료도 같은 출차 상태를 사용한다. 이 도식은 현재 코드 흐름이며 충전 전체 주기의 실제 검사 범위는 [WAREHOUSE.md](WAREHOUSE.md)를 따른다.
+충전소·일반 대기는 [AUTONOMY.md](AUTONOMY.md)의 공유 운영 정책을 따른다. 시설 존재 여부도 작업 검증에 포함한다. 충전기에 정차한 차량은 지시를 보존한 채 `LeaveCharger`로 출차하고 READY에서 작업을 수락한다. 충전 검증의 실제 범위는 [PHYSICS.md](PHYSICS.md)에 기록한다.
 
 삽입 재시도는 무한 반복하지 않는다. 재시도 한도를 넘거나 적재물 지지 상실·과적·전도·장비 고장이 확인되면 정지와 작업자 복구 요청으로 끝낸다. 팔레트·상자는 운반 중에도 동적 강체이며, 차체에 붙이거나 충돌을 꺼서 운반 성공을 만들지 않는다. 승강기 상태·상호 잠금의 상세 담당은 [MEZZANINE.md](MEZZANINE.md)다.
 

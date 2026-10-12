@@ -77,6 +77,10 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  case EWarehouseAIState::NavigateCharge:
  case EWarehouseAIState::DockCharge:
   RecoveryGoal=ChargeExitPose; RecoveryResume=EWarehouseAIState::NavigateCharge; break;
+ case EWarehouseAIState::PlanParking:
+ case EWarehouseAIState::NavigateParking:
+ case EWarehouseAIState::AlignParking:
+  RecoveryGoal=IdlePose;RecoveryResume=EWarehouseAIState::NavigateParking;break;
  case EWarehouseAIState::WithdrawFork:
   RecoveryResume=EWarehouseAIState::VerifyUnload; bRecoveryNeedsRoute=false; break;
  case EWarehouseAIState::LeaveCharger:

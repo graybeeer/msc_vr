@@ -156,6 +156,29 @@ void AWarehouseDamageSystem::RefreshLayoutBindings()
  Supports.SetNum(Objects.Num());Bounds.SetNum(Objects.Num());
  UpdateLoads();
 }
+void AWarehouseDamageSystem::RemoveLayoutActors(const TArray<AActor*>& Actors)
+{
+ for (int32 I=Objects.Num()-1;I>=0;--I)
+ {
+  auto& Spec=Objects[I];
+  for (int32 J=Spec.Members.Num()-1;J>=0;--J) if (Actors.Contains(Spec.Members[J]))
+  { Spec.Members.RemoveAt(J);if (Spec.PhysicsMeshes.IsValidIndex(J)) Spec.PhysicsMeshes.RemoveAt(J); }
+  if (Spec.Members.IsEmpty())
+  {
+   if (Labels.IsValidIndex(I)) { if (IsValid(Labels[I])) Labels[I]->DestroyComponent();Labels.RemoveAt(I); }
+   Objects.RemoveAt(I);
+  }
+ }
+ for (auto It=PrePhysicsMotion.CreateIterator();It;++It)
+  if (!It.Key().IsValid() || Actors.Contains(It.Key()->GetOwner())) It.RemoveCurrent();
+ RefreshLayoutBindings();
+}
+void AWarehouseDamageSystem::RegisterLayoutProfile(const FWarehouseStrength& Profile)
+{
+ Objects.Add(Profile);Labels.SetNum(Objects.Num());
+ for (AActor* Actor:Profile.Members) if (IsValid(Actor)) RegisterPhysicalContacts(Actor);
+ RefreshLayoutBindings();
+}
 
 void AWarehouseDamageSystem::InitializeStrength()
 {

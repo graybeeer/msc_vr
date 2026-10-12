@@ -1,6 +1,8 @@
 #include "WarehouseFleetCoordinator.h"
 #include "WarehousePerformance.h"
 #include "WarehouseForklift.h"
+#include "WarehouseChargingStation.h"
+#include "WarehouseWaitingBay.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Components/SceneComponent.h"
@@ -98,7 +100,8 @@ bool AWarehouseFleetCoordinator::Retreat(AWarehouseForklift* V,AWarehouseForklif
      V->bFloorTransfer || V->LiftOffset>20 || !V->CheckSystems().IsEmpty()) return false;
  if (V->AIState!=EWarehouseAIState::Ready && V->AIState!=EWarehouseAIState::NavigatePickup &&
      V->AIState!=EWarehouseAIState::NavigateDelivery && V->AIState!=EWarehouseAIState::PlanPickup &&
-     V->AIState!=EWarehouseAIState::PlanDelivery && V->AIState!=EWarehouseAIState::WaitingObstacle) return false;
+     V->AIState!=EWarehouseAIState::PlanDelivery && V->AIState!=EWarehouseAIState::WaitingObstacle &&
+     V->AIState!=EWarehouseAIState::PlanParking && V->AIState!=EWarehouseAIState::NavigateParking && V->AIState!=EWarehouseAIState::NavigateCharge) return false;
  const auto Saved=V->PlannedRoute;const int32 SavedIndex=V->RouteIndex;
  const auto Start=V->GetActorTransform();
  TGuardValue<bool> Escape(V->bTrafficEscape,true);

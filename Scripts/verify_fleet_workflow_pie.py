@@ -6,6 +6,7 @@ level=unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 editor=unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 actors=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 hands_only='-fleethandsonly' in unreal.SystemLibrary.get_command_line().lower()
+parking_only='-fleetparkingonly' in unreal.SystemLibrary.get_command_line().lower()
 simulation_speed=4 if '-fleetsimulationspeed4' in unreal.SystemLibrary.get_command_line().lower() else 1
 assert level.load_level('/Game/FirstPerson/Lvl_FirstPerson')
 unreal.get_default_object(unreal.load_class(None,'/Script/UnrealEd.EditorPerformanceSettings')).set_editor_property('bThrottleCPUWhenNotForeground',False)
@@ -14,7 +15,7 @@ if hands_only:
         if isinstance(a,unreal.WarehouseForklift):a.set_editor_property('auto_start',False)
 root=Path('C:/msc_UnrealProject/msc_vr/Saved/Testing/FleetWorkflow');root.mkdir(exist_ok=True)
 started=time.monotonic();phase='start';at=0;game=None;live=None;pc=None;pawn=None;clock=0;walk_points=[];next_phase=None;walk_at=0;sample_at=-10;job_id=None;rack_job_id=None;held=None;base=None;base_start=None;done_at=None
-report={'hands_only':hands_only,'requested_speed':simulation_speed,'events':[],'samples':[]};failure_detail=None
+report={'hands_only':hands_only,'parking_only':parking_only,'requested_speed':simulation_speed,'events':[],'samples':[]};failure_detail=None;parking_done_at=None
 
 def pos(v):return [round(v.x,2),round(v.y,2),round(v.z,2)]
 def event(name,**data):
@@ -41,12 +42,12 @@ def finish(ok,detail):
         report['completed_job_timings']=timings
         print('FLEET_TIMINGS',json.dumps(timings,ensure_ascii=False))
     report.update(ok=ok,detail=detail,simulation_seconds=round(clock,2),wall_seconds=round(time.monotonic()-started,2))
-    (root/('HandsReport.json' if hands_only else 'FullReport.json')).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+    (root/('ParkingReport.json' if parking_only else 'HandsReport.json' if hands_only else 'FullReport.json')).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     print('FLEET_WORKFLOW_PASSED' if ok else 'FLEET_WORKFLOW_FAILED',detail)
     unreal.unregister_slate_post_tick_callback(handle);level.editor_request_end_play();unreal.SystemLibrary.quit_editor()
 
 def tick(dt):
-    global game,live,pc,pawn,clock,sample_at,job_id,rack_job_id,held,base,base_start,done_at,failure_detail
+    global game,live,pc,pawn,clock,sample_at,job_id,rack_job_id,held,base,base_start,done_at,failure_detail,parking_done_at
     try:
         assert time.monotonic()-started<1200,'Wall-clock timeout'
         game=editor.get_game_world()
@@ -57,6 +58,8 @@ def tick(dt):
             return
         if live is None:
             live={a.get_actor_label():a for a in unreal.GameplayStatics.get_all_actors_of_class(game,unreal.Actor)}
+            if parking_only:
+                for dispatcher in unreal.GameplayStatics.get_all_actors_of_class(game,unreal.WarehouseInboundZone):dispatcher.set_actor_tick_enabled(False)
             pawn=unreal.GameplayStatics.get_player_character(game,0);pc=unreal.GameplayStatics.get_player_controller(game,0)
             clocks=unreal.GameplayStatics.get_all_actors_of_class(game,unreal.WarehouseSimulationClock)
             assert len(clocks)==1 and clocks[0].set_speed(simulation_speed),'Simulation speed setup rejected'
@@ -73,6 +76,20 @@ def tick(dt):
         for v in fleet:
             assert v.get_editor_property('ai_state')!=unreal.WarehouseAIState.FAULT,v.get_editor_property('vehicle_name')+': '+v.get_editor_property('status')
         age=clock-at
+        if parking_only:
+            parked=True
+            for vehicle in fleet:
+                bay=vehicle.get_editor_property('waiting_bay');assert bay,'Saved vehicle has no assigned ordinary waiting bay'
+                tolerance=bay.get_editor_property('position_tolerance_cm')
+                angle=abs(unreal.MathLibrary.normalized_delta_rotator(vehicle.get_actor_rotation(),bay.get_actor_rotation()).yaw)
+                parked &= vehicle.get_editor_property('ai_state')==unreal.WarehouseAIState.READY and (vehicle.get_actor_location()-bay.get_actor_location()).length()<=tolerance and angle<=bay.get_editor_property('heading_tolerance_degrees') and abs(vehicle.get_editor_property('current_speed_cm'))<1
+                assert vehicle.get_editor_property('battery_percent')>98 and not vehicle.get_editor_property('pending_jobs'),'Idle parking unexpectedly charged or acquired a job'
+            if parked:
+                if parking_done_at is None:parking_done_at=clock
+                if clock-parking_done_at>=8:finish(True,'Saved warehouse: both vehicles physically drove from their chargers to distinct ordinary waiting bays and maintained READY / finite braking for 8 simulation seconds');return
+            else:parking_done_at=None
+            assert clock<240,'Both vehicles failed to settle at their ordinary waiting bays'
+            return
         if phase=='start':
             if clock<2:return
             shot('Start')

@@ -4,7 +4,9 @@
 #include "WarehouseLayoutEditor.generated.h"
 
 UENUM(BlueprintType)
-enum class EWarehouseLayoutCategory:uint8 { Rack, Forklift, Elevator, Zone, Other, Charger };
+enum class EWarehouseLayoutCategory:uint8 { Rack, Forklift, Elevator, Zone, Other, Charger, WaitingBay, Cargo, Pallet };
+UENUM(BlueprintType)
+enum class EWarehouseLayoutAction:uint8 { Move, Delete, Add };
 
 USTRUCT(BlueprintType)
 struct FWarehouseLayoutZone
@@ -14,6 +16,7 @@ struct FWarehouseLayoutZone
  UPROPERTY(EditAnywhere,BlueprintReadWrite) FVector Centre=FVector::ZeroVector;
  UPROPERTY(EditAnywhere,BlueprintReadWrite) FVector HalfSize=FVector::ZeroVector;
  UPROPERTY(EditAnywhere,BlueprintReadWrite) TArray<TObjectPtr<AActor>> Members;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite) TArray<FTransform> Destinations;
 };
 
 /** Runtime layout experiment transaction. Never writes the saved level. */
@@ -27,6 +30,8 @@ public:
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Layout") TArray<FWarehouseLayoutZone> Zones;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Layout") bool bEditing=false;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Layout") EWarehouseLayoutCategory Category=EWarehouseLayoutCategory::Rack;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Layout") EWarehouseLayoutAction Action=EWarehouseLayoutAction::Move;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Layout") int32 AddChoice=0;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Layout") FString Status;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Layout") bool bDragging=false;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Layout") int32 MovedCount=0;
@@ -38,6 +43,12 @@ public:
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Layout") FVector2D MarqueeEnd=FVector2D::ZeroVector;
  UFUNCTION(BlueprintCallable,Category="Layout") void SetEditing(bool Enabled,int32 Floor);
  UFUNCTION(BlueprintCallable,Category="Layout") void SetCategory(EWarehouseLayoutCategory Value);
+ UFUNCTION(BlueprintCallable,Category="Layout") void SetAction(EWarehouseLayoutAction Value);
+ UFUNCTION(BlueprintCallable,Category="Layout") void CycleAddChoice();
+ UFUNCTION(BlueprintPure,Category="Layout") FString GetAddChoiceLabel() const;
+ UFUNCTION(BlueprintCallable,Category="Layout") bool DeleteSelection();
+ UFUNCTION(BlueprintCallable,Category="Layout") bool BeginAdd(FVector FloorPoint);
+ UFUNCTION(BlueprintCallable,Category="Layout") void UpdateSurfaceDrag(FVector FloorPoint,AActor* Support,FVector SurfacePoint);
  UFUNCTION(BlueprintCallable,Category="Layout") void SetSelection(const TArray<AActor*>& Actors);
  UFUNCTION(BlueprintPure,Category="Layout") TArray<AActor*> GetSelection() const;
  FBox GetSelectionBounds(AActor* Actor) const { return GroupBounds(Actor); }
@@ -76,6 +87,10 @@ private:
  FVector GrabPoint,Delta;
  int32 FloorIndex=0;
  bool WasPaused=false,MouseWasDown=false,MarqueeAdditive=false;
+ bool bAdding=false;
+ UPROPERTY(Transient) TArray<TObjectPtr<AActor>> AddedActors;
+ FName AddedCargoId;
+ void RefreshAfterEdit();
  bool Eligible(AActor* Actor) const;
  bool ParkedAtCharger(class AWarehouseForklift* Vehicle,class AWarehouseChargingStation* Station) const;
  AActor* SelectionActor(AActor* HitActor) const;

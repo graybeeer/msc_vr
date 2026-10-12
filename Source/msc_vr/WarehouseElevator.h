@@ -31,6 +31,10 @@ public:
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator", meta=(ClampMin="1",ClampMax="2000")) float RatedMassKg=2000;
  // Project assumption; actual manufacturer speed depends on the supplied configuration.
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator", meta=(ClampMin="1",ClampMax="50")) float TravelSpeedCm=35;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Layout") FVector2D GroundOpeningSizeCm=FVector2D(282,352);
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Layout") FVector2D UpperOpeningSizeCm=FVector2D(282,376);
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Layout") FVector2D UpperOpeningOffsetCm=FVector2D(0,12);
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Layout") FVector InitialShaftPosition;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Elevator") EWarehouseElevatorState State=EWarehouseElevatorState::Idle;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Elevator") TObjectPtr<AWarehouseForklift> ReservedVehicle;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Elevator") int32 CurrentFloor=0;

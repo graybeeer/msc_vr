@@ -65,6 +65,7 @@ floor.set_actor_scale3d(unreal.Vector(30, 20, .2))
 actors.spawn_actor_from_class(unreal.PlayerStart, unreal.Vector(-800, -600, 125))
 vehicle = actors.spawn_actor_from_class(unreal.WarehouseForklift, unreal.Vector(220, 0, 0))
 vehicle.set_actor_label('NativeChargerAGV')
+vehicle.set_editor_property('idle_parking_enabled',False) # This regression specifically verifies charging and departure, not dock-idle parking.
 station = actors.spawn_actor_from_class(unreal.WarehouseChargingStation, unreal.Vector())
 station.set_actor_label('NativeMovedCharger')
 

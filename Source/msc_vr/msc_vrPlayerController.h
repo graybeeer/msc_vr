@@ -40,6 +40,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Simulation") bool SetSimulationSpeed(int32 Multiplier);
 	UFUNCTION(BlueprintCallable, Category="Layout") void ToggleLayoutEditing();
 	UFUNCTION(BlueprintCallable, Category="Layout") void SetLayoutCategory(int32 CategoryIndex);
+	UFUNCTION(BlueprintCallable, Category="Layout") void SetLayoutAction(int32 ActionIndex);
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Settings") int32 ObserverFloor=-1;
 	UFUNCTION(BlueprintPure, Category="Settings") bool IsObserverView() const { return bObserverView; }
 	UFUNCTION(BlueprintPure, Category="Settings") bool IsWarehouseMenuOpen() const { return MenuWidget.IsValid() || ComputerWidget.IsValid(); }
@@ -49,6 +50,7 @@ public:
 	virtual void PlayerTick(float DeltaTime) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Alerts") FString EmergencyAlertText;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Alerts") FString ResourceAlertText;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Alerts") int32 EmergencyAlarmCount=0;
 	UFUNCTION(BlueprintPure, Category="Alerts") bool IsEmergencyAlarmPlaying() const;
 

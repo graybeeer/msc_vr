@@ -49,7 +49,7 @@
 2. `GenerateCargoRecipe(DeliverySeed, ItemIndex, ProductIndex, MaxSizeCm, AmountScale)`를 호출한다. `ProductIndex=-1`은 16종 중 동일 확률 선택, 0~15는 주문에서 지정한 상품이다. `MaxSizeCm`은 모델 로컬 X/Y/Z 기준 cm이며 트럭·팔레트의 실제 배치 여유를 전달한다. 이 함수 자체가 트럭 적재 배치를 계산하지는 않는다.
 3. 결과의 `bValid`를 확인한다. BeginPlay 전에 닫힌 상자 메시·고유 `CargoId`와 `ApplyCargoRecipe`를 적용한다. 메시·충돌 크기와 질량이 함께 반영된다. 이미 물리 계산 중인 화물의 변경은 거부한다. 런타임 입고는 지연 생성으로 준비한 뒤 생성을 완료한다. 접촉과 질량의 기준은 [PHYSICS.md](PHYSICS.md)를 따른다.
 4. 배송 기록에는 **전체 Recipe와 화물 ID**를 저장한다. 동일한 버전·배송 번호·순번·상품·크기 제한·수량 배율은 호출 순서와 무관하게 재현된다. 향후 규칙을 변경할 때는 버전을 올리고 저장된 기존 Recipe를 보존한다.
-5. 향후 런타임 입고 시스템은 새 화물을 `WarehouseDamageSystem.Objects`의 하중/손상 관리에도 증분 등록해야 한다. 생성 규칙과 적용 API는 구현됐지만 지속 입고 타이머·트럭 이동·방문별 런타임 등록/해제는 [트럭 설계](TRUCK_LOGISTICS_DESIGN.md)의 예정 기능이다. 취급 주의 정보는 현재 표시/분류용이며 파손 한계를 자동 변경하지 않는다.
+5. 새 화물은 `WarehouseDamageSystem.Objects`의 하중/손상 관리에도 증분 등록한다. 현재 배치 편집에서 보류 화물을 복원하거나 컴퓨터에서 입력한 데이터를 처음 배치할 때 이 등록을 수행한다. 기존 화물은 Recipe·ID·손상까지 보존하고, 직접 입력한 품목·질량·크기는 새 ID의 수동 데이터로 기록한다. 조작과 FIFO 목록은 [WAREHOUSE.md](WAREHOUSE.md)에 둔다. 지속 입고 타이머·트럭 이동·방문별 교대는 [트럭 설계](TRUCK_LOGISTICS_DESIGN.md)의 예정 기능이다. 취급 주의 정보는 현재 표시/분류용이며 파손 한계를 자동 변경하지 않는다.
 
 ## 현재 배치와 유지보수
 
