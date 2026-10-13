@@ -47,6 +47,10 @@ public:
 	UAgvShadowSensorsComponent();
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
+	/** Cargo may stand out over the carried pallet's edges by this much (cm); it is part of the load outline. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Shadow")
+	float LoadOverhangCm = 15.f;
+
 	/** Draw the safety fields (like the test vehicle) for watching in Play. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Shadow")
 	bool bDrawFields = false;

@@ -129,6 +129,10 @@ void UAgvSafetyComponent::Step(float Dt)
 	{
 		Limit = FMath::Min(Limit, ForksFirstMaxSpeedCm);
 	}
+	if (bApproachMode)
+	{
+		Limit = FMath::Min(Limit, ApproachMaxSpeedCm);
+	}
 	Drive->SetSafetySpeedLimit(Limit);
 
 	if (bDrawFields)
@@ -180,6 +184,10 @@ void UAgvSafetyComponent::BuildSweep()
 		// Parked with nothing planned: no motion to guard (a new order switches the set before the vehicle moves).
 		FieldSet = TEXT("STANDSTILL");
 	}
+	if (bApproachMode)
+	{
+		FieldSet = TEXT("APPROACH");
+	}
 	bRotating = FieldSet.StartsWith(TEXT("ROTATE"));
 
 	const UAgvTricycleDriveComponent* Tricycle = Cast<UAgvTricycleDriveComponent>(Drive);
@@ -191,6 +199,11 @@ void UAgvSafetyComponent::BuildSweep()
 	Sweep.Reset();
 	if (FieldSet == TEXT("STANDSTILL"))
 	{
+		return;
+	}
+	if (FieldSet == TEXT("APPROACH"))
+	{
+		Sweep.Add({ FVector2D::ZeroVector, 0.0, 0.0 }); // the outline where it is now, as a bumper
 		return;
 	}
 	if (bRotating)
@@ -263,22 +276,24 @@ void UAgvSafetyComponent::Evaluate()
 	// the vehicle's own outline right now are the vehicle or its load.
 	// Margins on the sides and the leading end only (all round when turning on the spot): what the vehicle has
 	// already passed must not stop it.
+	const FBox2D Outline = LoadBox.bIsValid ? Footprint + LoadBox : Footprint;
 	auto Grow = [&](double Margin)
 	{
-		FBox2D Box = Footprint.ExpandBy(Margin);
+		FBox2D Box = Outline.ExpandBy(Margin);
 		if (FieldSet == TEXT("BODY FIRST"))
 		{
-			Box.Max.X = Footprint.Max.X;
+			Box.Max.X = Outline.Max.X;
 		}
 		else if (FieldSet == TEXT("FORKS FIRST"))
 		{
-			Box.Min.X = Footprint.Min.X;
+			Box.Min.X = Outline.Min.X;
 		}
 		return Box;
 	};
-	const FBox2D Protective = Grow(SideMarginCm);
-	const FBox2D Warning = Grow(SideMarginCm + WarningExtraWidthCm);
-	const double ProtectiveReach = bRotating ? ProtectiveRotationDeg : ProtectiveLengthCm;
+	const bool bApproach = FieldSet == TEXT("APPROACH");
+	const FBox2D Protective = Grow(bApproach ? ApproachMarginCm : SideMarginCm);
+	const FBox2D Warning = bApproach ? FBox2D(ForceInit) : Grow(SideMarginCm + WarningExtraWidthCm);
+	const double ProtectiveReach = bRotating ? ProtectiveRotationDeg : bApproach ? 0.0 : ProtectiveLengthCm;
 	int32 ProtectiveHits = 0, WarningHits = 0;
 	FVector FirstProtective = FVector::ZeroVector;
 	// Where the vehicle believes it is, to look warning points up in the map.
@@ -293,9 +308,9 @@ void UAgvSafetyComponent::Evaluate()
 		for (const FVector& Point : Points)
 		{
 			const FVector2D Vehicle(Point);
-			if (Footprint.IsInside(Vehicle))
+			if (Outline.IsInside(Vehicle))
 			{
-				continue;
+				continue; // the vehicle itself or its load
 			}
 			// The two fields are judged separately: the wider warning outline reaches a point one pose earlier than the
 			// protective one, so stopping at the first warning pose would miss the protective field.
@@ -358,6 +373,7 @@ void UAgvSafetyComponent::DrawFields() const
 	for (int32 Index = 0; Index < Sweep.Num(); Index += 6)
 	{
 		const bool bProtective = Sweep[Index].Along <= ProtectiveReach;
-		Outline(Sweep[Index], Footprint.ExpandBy(SideMarginCm + (bProtective ? 0.0 : WarningExtraWidthCm)), bProtective ? Red : Yellow);
+		const FBox2D Shape = LoadBox.bIsValid ? Footprint + LoadBox : Footprint;
+		Outline(Sweep[Index], Shape.ExpandBy(FieldSet == TEXT("APPROACH") ? ApproachMarginCm : SideMarginCm + (bProtective ? 0.0 : WarningExtraWidthCm)), bProtective ? Red : Yellow);
 	}
 }

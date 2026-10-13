@@ -10,6 +10,8 @@
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
 #include "WarehouseForklift.h"
+#include "WarehouseAutonomyTypes.h"
+#include "WarehousePallet.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAgvShadow, Log, All);
 
@@ -225,6 +227,39 @@ void UAgvShadowSensorsComponent::TickComponent(float DeltaTime, ELevelTick TickT
 	{
 		bAsleep = false;
 		Safety->ResetScans();
+	}
+
+	// What the forklift is doing sets the field set: the carried pallet is part of the outline, and docking / fork
+	// work / unloading / tight elevator moves use the approach bumper (the vehicle's own task tells it, as on a real AGV).
+	if (const AWarehouseForklift* Forklift = Cast<AWarehouseForklift>(GetOwner()))
+	{
+		using EState = EWarehouseAIState;
+		static const EState Approach[] = { EState::SlowApproach, EState::DetectPallet, EState::EstimatePose, EState::AlignVehicle,
+			EState::CorrectFork, EState::InsertFork, EState::VerifyInsertion, EState::LiftLoad, EState::VerifyLoad, EState::DepartPickup,
+			EState::AlignUnload, EState::LowerLoad, EState::WithdrawFork, EState::VerifyUnload, EState::DockCharge, EState::Charging,
+			EState::LeaveCharger, EState::RecoverLower, EState::RecoverWithdraw, EState::AlignParking, EState::ElevatorBoard,
+			EState::ElevatorRide, EState::ElevatorExit };
+		Safety->bApproachMode = false;
+		for (const EState State : Approach)
+		{
+			Safety->bApproachMode |= Forklift->AIState == State;
+		}
+		Safety->LoadBox = FBox2D(ForceInit);
+		if (const AWarehousePallet* Pallet = Forklift->GetSupportedPallet())
+		{
+			// The pallet's outline in the vehicle frame, grown for cargo overhanging it.
+			FVector Center, Extent;
+			Pallet->GetActorBounds(true, Center, Extent);
+			const FTransform Vehicle = Forklift->GetActorTransform();
+			for (const double SX : { -1.0, 1.0 })
+			{
+				for (const double SY : { -1.0, 1.0 })
+				{
+					Safety->LoadBox += FVector2D(Vehicle.InverseTransformPosition(Center + FVector(SX * Extent.X, SY * Extent.Y, 0.0)));
+				}
+			}
+			Safety->LoadBox = Safety->LoadBox.ExpandBy(LoadOverhangCm);
+		}
 	}
 
 	const double Start = FPlatformTime::Seconds();

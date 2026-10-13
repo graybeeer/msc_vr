@@ -130,6 +130,27 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="1"))
 	float ForksFirstMaxSpeedCm = 50.f;
 
+	/**
+	 * Load carried on the forks, vehicle frame (cm); invalid = none. Its points are the load, not obstacles, and the
+	 * fields sweep the vehicle and load outline together (a loaded vehicle's field set, as real scanners switch).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
+	FBox2D LoadBox = FBox2D(ForceInit);
+
+	/**
+	 * Docking / fork insertion / unloading at creep speed: the fields shrink to a bumper of ApproachMarginCm around the
+	 * outline (no look-ahead; the target the vehicle is meant to reach is not an obstacle), speed capped at
+	 * ApproachMaxSpeedCm. Real forklift AGVs switch to such a field set (or mute the fork-side field) for this.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
+	bool bApproachMode = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
+	float ApproachMarginCm = 10.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="1"))
+	float ApproachMaxSpeedCm = 30.f;
+
 	/** Points between these heights above the floor are obstacles (below: the floor; above: clears the vehicle). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
 	float MinObstacleHeightCm = 5.f;
