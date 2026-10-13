@@ -2,7 +2,8 @@
 #include "AgvRouteNode.h"
 #include "EngineUtils.h"
 
-bool AgvRouteGraph::FindRoute(UWorld* World, const FVector2D& From, FName GoalId, double SnapDistanceCm, FAgvRoute& Out, FString& OutError)
+bool AgvRouteGraph::FindRoute(UWorld* World, const FVector2D& From, FName GoalId, double SnapDistanceCm, FAgvRoute& Out, FString& OutError,
+	double AtNodeCm)
 {
 	Out = FAgvRoute();
 	TArray<AAgvRouteNode*> Nodes;
@@ -65,7 +66,16 @@ bool AgvRouteGraph::FindRoute(UWorld* World, const FVector2D& From, FName GoalId
 			}
 		}
 	}
-	if (LaneA != INDEX_NONE && LaneDistance <= SnapDistanceCm)
+	// A vehicle that stopped at a node (within its stop accuracy) starts from that node. Joining the lane instead put a
+	// few-cm first segment in front of the path whose direction is whatever the stop error was, and lining up with it
+	// took a turn on the spot (2026-10-12, Chaos drive: ~5 cm stops, a half turn at node E into a pallet).
+	const double NearestDistance = FVector2D::Distance(From, Nodes[Nearest]->GetPoint());
+	if (NearestDistance <= AtNodeCm)
+	{
+		Out.Start = Nodes[Nearest]->GetPoint();
+		Cost[Nearest] = 0.0;
+	}
+	else if (LaneA != INDEX_NONE && LaneDistance <= SnapDistanceCm)
 	{
 		Out.Start = LanePoint;
 		Cost[LaneA] = FVector2D::Distance(LanePoint, Nodes[LaneA]->GetPoint());
