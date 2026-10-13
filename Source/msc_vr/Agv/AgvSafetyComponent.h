@@ -153,6 +153,15 @@ public:
 	UPROPERTY(Transient, BlueprintReadWrite, Category="AGV|Safety")
 	TArray<FVector> ExternalPathAhead;
 
+	/**
+	 * While following ExternalPathAhead, the protective field also leaves out points on the mapped permanent structure
+	 * (columns, racks, walls), as field sets are shaped around fixed obstacles along a planned route: that controller's
+	 * planner has checked the route against the exact geometry. Anything not in the map (people, vehicles, cargo) still
+	 * stops the vehicle. Off by default (the protective field normally never trusts the map).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
+	bool bPlannedPathIgnoresMappedStructure = false;
+
 	/** The object being worked on (pallet to pick up, slot to unload into, charger), vehicle frame; its points are not
 	 * obstacles. Set by the vehicle's task while the job has a target, not only in approach. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")

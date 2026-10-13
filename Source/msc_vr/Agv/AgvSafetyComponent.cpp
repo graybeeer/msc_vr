@@ -356,6 +356,12 @@ void UAgvSafetyComponent::Evaluate()
 					break;
 				}
 			}
+			if (bInProtective && bMapFilter && bPlannedPathIgnoresMappedStructure && !Navigator && ExternalPathAhead.Num() > 0
+				&& Localizer->IsMappedStructure(Origin + AgvMath::Rotate(Yaw, Vehicle), MappedStructureToleranceCm))
+			{
+				bInProtective = bInWarning = false;
+				++MappedPointsIgnored;
+			}
 			if (bInWarning && !bInProtective && bMapFilter
 				&& Localizer->IsMappedStructure(Origin + AgvMath::Rotate(Yaw, Vehicle), MappedStructureToleranceCm))
 			{
