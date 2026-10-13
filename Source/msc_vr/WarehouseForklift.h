@@ -76,6 +76,12 @@ public:
  UFUNCTION(BlueprintPure, Category="Autonomy") bool IsFloorPlacementValid(AWarehousePallet* Pallet,const FTransform& Destination,bool bForksStillInserted=false,bool Refresh=true) const;
  UFUNCTION(BlueprintCallable, Category="Autonomy") bool PlanAutonomousRoute(const FTransform& Goal);
  UFUNCTION(BlueprintCallable, Category="Layout") void RefreshAfterLayout();
+ /** AGV module LiDAR localization (Source/msc_vr/Agv, agv.localize): route travel decisions use its estimate instead of
+  * the exact pose. Off by default. The final approach (last 80 cm of a stop, rack/floor alignment, fork insertion,
+  * charger docking) keeps the exact pose, standing in for sensing the target directly. */
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV Localization") bool bUseAgvLocalization = false;
+ /** Pose for travel decisions: the AGV module's estimate when bUseAgvLocalization and available, else the actual one. */
+ UFUNCTION(BlueprintPure, Category="AGV Localization") FTransform NavigationTransform() const;
  UFUNCTION(BlueprintPure, Category="Autonomy") FString CheckSystems() const;
 
  UFUNCTION(BlueprintCallable, Category="Strength") void SetMechanicalFailure();
