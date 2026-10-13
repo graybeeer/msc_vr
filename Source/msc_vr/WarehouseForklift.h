@@ -82,6 +82,11 @@ public:
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV Localization") bool bUseAgvLocalization = false;
  /** Pose for travel decisions: the AGV module's estimate when bUseAgvLocalization and available, else the actual one. */
  UFUNCTION(BlueprintPure, Category="AGV Localization") FTransform NavigationTransform() const;
+ /** AGV module safety fields (agv.safety): a protective-field stop waits like an obstacle, a warning caps the speed. Off by default. */
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV Localization") bool bUseAgvSafety = false;
+ /** Travel speed cap from the AGV module (cm/s; 0 = stop, OutReason says why): safety fields when bUseAgvSafety,
+  * localization health when bUseAgvLocalization (lost = fault, odometry only = slow). Very large when neither. */
+ float AgvTravelSpeedLimit(FString& OutReason) const;
  UFUNCTION(BlueprintPure, Category="Autonomy") FString CheckSystems() const;
 
  UFUNCTION(BlueprintCallable, Category="Strength") void SetMechanicalFailure();

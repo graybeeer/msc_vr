@@ -90,6 +90,13 @@ public:
 	UFUNCTION(BlueprintPure, Category="AGV|Shadow")
 	FString Summary() const;
 
+	/** Speed cap while the localizer runs on odometry only (scans not matching for a while). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Shadow")
+	float OdometryOnlySpeedCm = 50.f;
+
+	/** The safety system's current speed cap (cm/s; 0 = protective stop). */
+	float GetSafetySpeedLimitCm() const;
+
 	/** The actor transform the LiDAR estimate implies (x, y, yaw estimated; height, pitch and roll as they are). */
 	bool GetEstimatedActorTransform(FTransform& Out) const;
 

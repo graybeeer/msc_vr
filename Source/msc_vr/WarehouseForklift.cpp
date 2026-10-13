@@ -435,6 +435,13 @@ bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt,flo
   if (!FleetCoordinator->Permit(this,&Goal)) return false;
  }
  Speed=FMath::Min(Speed,bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(180.f,EmptyTravelSpeedCm));
+ // AGV module safety fields / localization health (off unless bUseAgvSafety / bUseAgvLocalization).
+ {
+  FString AgvReason;
+  const float AgvLimit=AgvTravelSpeedLimit(AgvReason);
+  if (AgvLimit<=0.f) { StopFor(AgvReason); return false; }
+  Speed=FMath::Min(Speed,AgvLimit);
+ }
  const float TargetSpeed=FMath::Sign(Distance)*FMath::Min(Speed,FMath::Sqrt(240.f*FMath::Abs(Distance)));
  const float Lateral=FVector::DotProduct(Offset,GetActorRightVector());
  float Curvature=FMath::Clamp(2.f*Lateral/FMath::Max(1600.f,Offset.SizeSquared2D()),-1.f/117.3f,1.f/117.3f);

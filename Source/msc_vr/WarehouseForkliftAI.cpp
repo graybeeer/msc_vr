@@ -575,6 +575,11 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  float Curvature=2.f*Local.Y/FMath::Max(900.f,Local.SizeSquared2D());
  if (Remaining<40.f) Curvature+=Sign*HeadingError/40.f;
  Desired=FMath::Min(Desired,FMath::Sqrt((bSupportingPallet ? 40.f : 80.f)/FMath::Max(.0001f,FMath::Abs(Curvature))));
+ // AGV module safety fields / localization health (off unless bUseAgvSafety / bUseAgvLocalization).
+ FString AgvReason;
+ const float AgvLimit=AgvTravelSpeedLimit(AgvReason);
+ if (AgvLimit<=0.f) { StopFor(AgvReason); return false; }
+ Desired=FMath::Min(Desired,AgvLimit);
  const FVector Preview=GetActorLocation()+GetActorForwardVector()*Sign*Desired*Dt;
  if (RefreshObstacleChecks())
  {

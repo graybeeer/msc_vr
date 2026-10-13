@@ -45,6 +45,34 @@ namespace
 			UE_LOG(LogAgvShadow, Log, TEXT("AGV_SHADOW localization for travel %s"), bOn ? TEXT("ON") : TEXT("OFF"));
 		}));
 
+	// Usage in the console during play: agv.safety 1|0 (main forklifts obey the AGV module's safety fields)
+	FAutoConsoleCommandWithWorldAndArgs SafetyCommand(
+		TEXT("agv.safety"),
+		TEXT("agv.safety 1: the main warehouse forklifts obey the AGV module's safety fields (protective stop = obstacle "
+			"wait, warning = slow; adds the shadow sensors if needed). agv.safety 0: off."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
+		{
+			if (!World || !World->IsGameWorld())
+			{
+				return;
+			}
+			const bool bOn = Args.IsEmpty() || Args[0] != TEXT("0");
+			bool bHaveManager = false;
+			for (TActorIterator<AAgvShadowManager> It(World); It; ++It)
+			{
+				bHaveManager = true;
+			}
+			if (bOn && !bHaveManager)
+			{
+				World->SpawnActor<AAgvShadowManager>();
+			}
+			for (TActorIterator<AWarehouseForklift> It(World); It; ++It)
+			{
+				It->bUseAgvSafety = bOn;
+			}
+			UE_LOG(LogAgvShadow, Log, TEXT("AGV_SHADOW safety fields in control %s"), bOn ? TEXT("ON") : TEXT("OFF"));
+		}));
+
 	// Usage in the console during play: agv.shadow (adds shadow sensors to every main forklift; again = report)
 	FAutoConsoleCommandWithWorldAndArgs ShadowCommand(
 		TEXT("agv.shadow"),
@@ -221,13 +249,22 @@ void UAgvShadowSensorsComponent::TickComponent(float DeltaTime, ELevelTick TickT
 	const bool bMoving = FMath::Abs(Drive->SpeedCmS) > 2.f || FMath::Abs(Drive->YawRateDegS) > 1.f;
 
 	// Sleep the LiDARs while parked and settled (as the test vehicle); on waking drop the stale scans.
-	ParkedSeconds = bMoving ? 0.f : ParkedSeconds + DeltaTime;
+	// A forklift with work in hand may start any moment: keep its sensors awake (fresh scans before it moves).
+	bool bBusy = false;
+	if (const AWarehouseForklift* Forklift = Cast<AWarehouseForklift>(GetOwner()))
+	{
+		using EState = EWarehouseAIState;
+		const EState State = Forklift->AIState;
+		bBusy = State != EState::Off && State != EState::Ready && State != EState::Charging && State != EState::Paused
+			&& State != EState::Fault && State != EState::WaitingCharger;
+	}
+	ParkedSeconds = bMoving || bBusy ? 0.f : ParkedSeconds + DeltaTime;
 	const bool bSettled = Localizer->LastCorrectionCm < 0.5f && Localizer->LastCorrectionDeg < 0.05f;
 	if (!bAsleep && ParkedSeconds > 0.5f && bSettled)
 	{
 		bAsleep = true;
 	}
-	else if (bAsleep && bMoving)
+	else if (bAsleep && (bMoving || bBusy))
 	{
 		bAsleep = false;
 		Safety->ResetScans();
@@ -250,7 +287,22 @@ void UAgvShadowSensorsComponent::TickComponent(float DeltaTime, ELevelTick TickT
 		}
 		// The pallet being worked on (approach only): its outline in the vehicle frame plus 5 cm.
 		Safety->ApproachTargetBox = FBox2D(ForceInit);
-		if (Safety->bApproachMode && Forklift->TargetPallet)
+		const bool bUnloading = Forklift->AIState == EState::AlignUnload || Forklift->AIState == EState::LowerLoad
+			|| Forklift->AIState == EState::WithdrawFork || Forklift->AIState == EState::VerifyUnload;
+		if (Safety->bApproachMode && bUnloading)
+		{
+			// Unloading: the destination slot (pallet size plus its clearance to the rack or the next pallet).
+			const FTransform Vehicle = Forklift->GetActorTransform();
+			const FTransform& Slot = Forklift->ActiveJob.Destination;
+			for (const double SX : { -1.0, 1.0 })
+			{
+				for (const double SY : { -1.0, 1.0 })
+				{
+					Safety->ApproachTargetBox += FVector2D(Vehicle.InverseTransformPosition(Slot.TransformPosition(FVector(SX * 75.0, SY * 75.0, 0.0))));
+				}
+			}
+		}
+		else if (Safety->bApproachMode && Forklift->TargetPallet)
 		{
 			FVector Center, Extent;
 			Forklift->TargetPallet->GetActorBounds(true, Center, Extent);
@@ -321,6 +373,11 @@ void UAgvShadowSensorsComponent::TickComponent(float DeltaTime, ELevelTick TickT
 	bWasStopped = bStopped;
 	LocalizerStatus = Localizer->StatusText;
 	SafetyStatus = Safety->StatusText;
+}
+
+float UAgvShadowSensorsComponent::GetSafetySpeedLimitCm() const
+{
+	return bBuilt && Drive ? Drive->SafetySpeedLimitCmS : TNumericLimits<float>::Max();
 }
 
 bool UAgvShadowSensorsComponent::GetEstimatedActorTransform(FTransform& Out) const
@@ -410,4 +467,43 @@ FTransform AWarehouseForklift::NavigationTransform() const
 		}
 	}
 	return GetActorTransform();
+}
+
+float AWarehouseForklift::AgvTravelSpeedLimit(FString& OutReason) const
+{
+	float Limit = TNumericLimits<float>::Max();
+	if (!bUseAgvSafety && !bUseAgvLocalization)
+	{
+		return Limit;
+	}
+	const UAgvShadowSensorsComponent* Kit = FindComponentByClass<UAgvShadowSensorsComponent>();
+	if (!Kit)
+	{
+		return Limit; // sensors not attached yet (first frame)
+	}
+	if (bUseAgvLocalization)
+	{
+		// Lost: the vehicle no longer knows where it is: stop for an operator (a fault, not an obstacle wait).
+		if (Kit->LocalizerStatus == TEXT("LOST"))
+		{
+			OutReason = TEXT("AGV LOCALIZATION LOST");
+			return 0.f;
+		}
+		// Scans not matching for a while: dead reckoning only, so slow down until a match is back.
+		if (Kit->LocalizerStatus == TEXT("ODOMETRY ONLY"))
+		{
+			Limit = FMath::Min(Limit, Kit->OdometryOnlySpeedCm);
+		}
+	}
+	if (bUseAgvSafety)
+	{
+		const float Field = Kit->GetSafetySpeedLimitCm();
+		if (Field <= 0.f)
+		{
+			OutReason = TEXT("OBSTACLE - AGV SAFETY FIELD"); // waits and resumes as an obstacle
+			return 0.f;
+		}
+		Limit = FMath::Min(Limit, Field);
+	}
+	return Limit;
 }
