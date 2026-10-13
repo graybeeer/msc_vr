@@ -15,5 +15,6 @@ struct FAgvRoute
 namespace AgvRouteGraph
 {
 	/** Shortest route over the placed AAgvRouteNode network from a position to the node named GoalId. */
-	bool FindRoute(UWorld* World, const FVector2D& From, FName GoalId, double SnapDistanceCm, FAgvRoute& Out, FString& OutError);
+	bool FindRoute(UWorld* World, const FVector2D& From, FName GoalId, double SnapDistanceCm, FAgvRoute& Out, FString& OutError,
+		double AtNodeCm = 15.0);
 }

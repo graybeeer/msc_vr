@@ -130,6 +130,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Path", meta=(ClampMin="0"))
 	float NetworkSnapCm = 50.f;
 
+	/** Within this distance of a node the vehicle counts as standing on it (its stop accuracy) and starts from it. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Path", meta=(ClampMin="0"))
+	float AtNodeToleranceCm = 15.f;
+
 	// Tracking.
 	/** Travel distance over which a path error is steered out. Shorter = stiffer. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Tracking", meta=(ClampMin="5"))
@@ -195,9 +199,10 @@ public:
 private:
 	bool ResolveParts();
 	bool StartPath();
-	void ChooseLegDirections(FVector2D Position, double Yaw);
-	/** Whether turning on the spot about the reference point at Position from FromYaw to ToYaw (shortest way) has room. */
-	bool CanPivot(const FVector2D& Position, double FromYaw, double ToYaw) const;
+	/** False when no plan has room for its turns on the spot. */
+	bool ChooseLegDirections(FVector2D Position, double Yaw);
+	/** Whether turning on the spot about the reference point at Position from FromYaw through SweepRad (signed) has room. */
+	bool CanPivot(const FVector2D& Position, double FromYaw, double SweepRad) const;
 	void BeginLeg();
 	void BeginFollow();
 	void StepPivot(double Yaw);
@@ -219,6 +224,8 @@ private:
 	double LegS = 0.0;
 	double CommandSpeed = 0.0;
 	double PivotTargetYaw = 0.0;
+	/** Way the current turn on the spot must go (+1 left, -1 right, 0 shortest), as planned with the room check. */
+	int8 PivotSign = 0;
 	bool bFinalPivot = false;
 	/** Speed allowed at every ProfileStepCm along the current leg, already limited for braking. */
 	TArray<double> SpeedProfile;
