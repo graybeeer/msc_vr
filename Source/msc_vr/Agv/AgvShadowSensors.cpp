@@ -5,6 +5,7 @@
 #include "AgvSafetyComponent.h"
 #include "AgvTestVehicle.h"
 #include "Components/PrimitiveComponent.h"
+#include "Engine/OverlapResult.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
@@ -12,6 +13,7 @@
 #include "WarehouseForklift.h"
 #include "WarehouseAutonomyTypes.h"
 #include "WarehousePallet.h"
+#include "WarehouseChargingStation.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAgvShadow, Log, All);
 
@@ -289,7 +291,27 @@ void UAgvShadowSensorsComponent::TickComponent(float DeltaTime, ELevelTick TickT
 		Safety->ApproachTargetBox = FBox2D(ForceInit);
 		const bool bUnloading = Forklift->AIState == EState::AlignUnload || Forklift->AIState == EState::LowerLoad
 			|| Forklift->AIState == EState::WithdrawFork || Forklift->AIState == EState::VerifyUnload;
-		if (Safety->bApproachMode && bUnloading)
+		const bool bCharging = Forklift->AIState == EState::DockCharge || Forklift->AIState == EState::Charging
+			|| Forklift->AIState == EState::LeaveCharger;
+		const bool bPickupPending = Forklift->TargetPallet && !Forklift->GetSupportedPallet();
+		const bool bDelivering = Forklift->GetSupportedPallet() && (Forklift->AIState == EState::PlanDelivery
+			|| Forklift->AIState == EState::NavigateDelivery || bUnloading);
+		if (Safety->bApproachMode && bCharging && Forklift->ChargingStation)
+		{
+			// Docking / leaving the charger: the charger is what the vehicle docks against.
+			FVector Center, Extent;
+			Forklift->ChargingStation->GetActorBounds(true, Center, Extent);
+			const FTransform Vehicle = Forklift->GetActorTransform();
+			for (const double SX : { -1.0, 1.0 })
+			{
+				for (const double SY : { -1.0, 1.0 })
+				{
+					Safety->ApproachTargetBox += FVector2D(Vehicle.InverseTransformPosition(Center + FVector(SX * Extent.X, SY * Extent.Y, 0.0)));
+				}
+			}
+			Safety->ApproachTargetBox = Safety->ApproachTargetBox.ExpandBy(10.0);
+		}
+		else if (bDelivering)
 		{
 			// Unloading: the destination slot (pallet size plus its clearance to the rack or the next pallet).
 			const FTransform Vehicle = Forklift->GetActorTransform();
@@ -302,7 +324,7 @@ void UAgvShadowSensorsComponent::TickComponent(float DeltaTime, ELevelTick TickT
 				}
 			}
 		}
-		else if (Safety->bApproachMode && Forklift->TargetPallet)
+		else if (bPickupPending)
 		{
 			FVector Center, Extent;
 			Forklift->TargetPallet->GetActorBounds(true, Center, Extent);
@@ -331,6 +353,59 @@ void UAgvShadowSensorsComponent::TickComponent(float DeltaTime, ELevelTick TickT
 				}
 			}
 			Safety->LoadBox = Safety->LoadBox.ExpandBy(LoadOverhangCm);
+		}
+	}
+
+	// The forklift's planned route ahead, so the fields follow where it will drive (a column the route turns before is
+	// not in the way) and end at its next stop (a turn on the spot or a change of direction).
+	Safety->ExternalPathAhead.Reset();
+	if (const AWarehouseForklift* Forklift = Cast<AWarehouseForklift>(GetOwner()))
+	{
+		const TArray<FWarehouseRoutePoint>& Route = Forklift->PlannedRoute;
+		using EState = EWarehouseAIState;
+		const EState State = Forklift->AIState;
+		const bool bRouting = State == EState::NavigatePickup || State == EState::NavigateDelivery || State == EState::NavigateCharge
+			|| State == EState::NavigateParking || State == EState::ElevatorApproach;
+		if (bRouting && Route.Num() > 1)
+		{
+			const double Offset = Drive->ReferenceOffsetCm;
+			auto Reference = [Offset](const FTransform& Pose)
+			{
+				const double Yaw = FMath::DegreesToRadians(Pose.Rotator().Yaw);
+				return FVector(FVector2D(Pose.GetLocation()) + AgvMath::Dir(Yaw) * Offset, Yaw);
+			};
+			FVector2D Here;
+			double HereYaw;
+			if (!Localizer->GetPose(Here, HereYaw))
+			{
+				Drive->GetTruePose(Here, HereYaw);
+			}
+			// The route point the vehicle is at (nearest), then forward to the next pivot or direction change.
+			int32 Nearest = 0;
+			for (int32 Index = 1; Index < Route.Num(); ++Index)
+			{
+				if (FVector2D::DistSquared(FVector2D(Reference(Route[Index].Pose)), Here) < FVector2D::DistSquared(FVector2D(Reference(Route[Nearest].Pose)), Here))
+				{
+					Nearest = Index;
+				}
+			}
+			Safety->ExternalPathAhead.Add(FVector(Here, HereYaw));
+			for (int32 Index = Nearest + 1; Index < Route.Num(); ++Index)
+			{
+				if (Route[Index].bPivot || Route[Index].bReverse != Route[Nearest].bReverse)
+				{
+					break;
+				}
+				// Dense enough for the sweep (10 cm steps between route points).
+				const FVector From = Safety->ExternalPathAhead.Last();
+				const FVector To = Reference(Route[Index].Pose);
+				const int32 Steps = FMath::Max(1, FMath::CeilToInt32(FVector2D::Distance(FVector2D(From), FVector2D(To)) / 10.0));
+				for (int32 Step = 1; Step <= Steps; ++Step)
+				{
+					const double T = double(Step) / Steps;
+					Safety->ExternalPathAhead.Add(FVector(FMath::Lerp(FVector2D(From), FVector2D(To), T), From.Z + AgvMath::Wrap(To.Z - From.Z) * T));
+				}
+			}
 		}
 	}
 
@@ -369,6 +444,31 @@ void UAgvShadowSensorsComponent::TickComponent(float DeltaTime, ELevelTick TickT
 		MeanSensorMsMoving = (float)(SensorMsMovingSum / MovingFrames);
 	}
 	const bool bStopped = Safety->State == EAgvSafetyState::Stop;
+	if (bStopped && !bWasStopped)
+	{
+		// Diagnosis: what the protective field saw (the actor around the first point in it).
+		const FVector Point = Safety->LastProtectiveHit;
+		const FVector World = GetOwner()->GetActorTransform().TransformPosition(Point);
+		FString Seen = TEXT("nothing found");
+		TArray<FOverlapResult> Overlaps;
+		FCollisionQueryParams Query(SCENE_QUERY_STAT(AgvShadowDiag), false, GetOwner());
+		if (GetWorld()->OverlapMultiByObjectType(Overlaps, World, FQuat::Identity, FCollisionObjectQueryParams(FCollisionObjectQueryParams::AllObjects),
+			FCollisionShape::MakeSphere(6.f), Query))
+		{
+			for (const FOverlapResult& Overlap : Overlaps)
+			{
+				if (const AActor* Hit = Overlap.GetActor())
+				{
+					Seen = Hit->GetActorNameOrLabel();
+					break;
+				}
+			}
+		}
+		const AWarehouseForklift* Forklift = Cast<AWarehouseForklift>(GetOwner());
+		UE_LOG(LogAgvShadow, Log, TEXT("AGV_SHADOW_STOP %s: %s, speed %.0f cm/s, point (%.0f, %.0f, %.0f) vehicle frame, object %s, task state %d"),
+			*GetOwner()->GetName(), *Safety->FieldSet, Drive->SpeedCmS, Point.X, Point.Y, Point.Z, *Seen,
+			Forklift ? (int32)Forklift->AIState : -1);
+	}
 	StopEvents += bStopped && !bWasStopped;
 	bWasStopped = bStopped;
 	LocalizerStatus = Localizer->StatusText;

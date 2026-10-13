@@ -145,7 +145,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
 	bool bApproachMode = false;
 
-	/** In approach: the object being worked on (the pallet to pick up), vehicle frame; its points are not obstacles. */
+	/**
+	 * The path ahead from a vehicle controller other than UAgvNavigatorComponent (world X, Y of the reference point and
+	 * vehicle yaw in radians as Z, from where the vehicle is now to its next stop). Used like the navigator's path for
+	 * bFieldsFollowPath while not empty.
+	 */
+	UPROPERTY(Transient, BlueprintReadWrite, Category="AGV|Safety")
+	TArray<FVector> ExternalPathAhead;
+
+	/** The object being worked on (pallet to pick up, slot to unload into, charger), vehicle frame; its points are not
+	 * obstacles. Set by the vehicle's task while the job has a target, not only in approach. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
 	FBox2D ApproachTargetBox = FBox2D(ForceInit);
 
@@ -199,6 +208,10 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Safety|Status")
 	int32 SafetyStops = 0;
+
+	/** First point in the protective field at the last evaluation (vehicle frame, cm), for diagnosis. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Safety|Status")
+	FVector LastProtectiveHit = FVector::ZeroVector;
 
 	/** Warning-field points dropped in the last evaluation because they lie on mapped structure. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Safety|Status")

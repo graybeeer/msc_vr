@@ -235,7 +235,27 @@ void UAgvSafetyComponent::BuildSweep()
 	TArray<FVector> Ahead;
 	FVector2D Here;
 	double HereYaw;
-	if (bFieldsFollowPath && Navigator && Localizer && Navigator->GetPathAhead(WarningLengthCm, 10.0, Ahead) && Ahead.Num() > 0 && Localizer->GetPose(Here, HereYaw))
+	bool bHavePath = false;
+	if (bFieldsFollowPath && Localizer)
+	{
+		if (Navigator)
+		{
+			bHavePath = Navigator->GetPathAhead(WarningLengthCm, 10.0, Ahead) && Ahead.Num() > 0;
+		}
+		else if (ExternalPathAhead.Num() > 0 && FieldSet != TEXT("APPROACH"))
+		{
+			// Another controller's path: up to the warning length.
+			double Length = 0.0;
+			Ahead.Add(ExternalPathAhead[0]);
+			for (int32 Index = 1; Index < ExternalPathAhead.Num() && Length < WarningLengthCm; ++Index)
+			{
+				Length += FVector2D::Distance(FVector2D(ExternalPathAhead[Index]), FVector2D(ExternalPathAhead[Index - 1]));
+				Ahead.Add(ExternalPathAhead[Index]);
+			}
+			bHavePath = true;
+		}
+	}
+	if (bHavePath && Localizer->GetPose(Here, HereYaw))
 	{
 		double Along = 0.0;
 		for (int32 Index = 0; Index < Ahead.Num(); ++Index)
@@ -314,9 +334,9 @@ void UAgvSafetyComponent::Evaluate()
 		for (const FVector& Point : Points)
 		{
 			const FVector2D Vehicle(Point);
-			if (Outline.IsInside(Vehicle) || (bApproach && ApproachTargetBox.bIsValid && ApproachTargetBox.IsInside(Vehicle)))
+			if (Outline.IsInside(Vehicle) || (ApproachTargetBox.bIsValid && ApproachTargetBox.IsInside(Vehicle)))
 			{
-				continue; // the vehicle itself, its load, or (approaching) the pallet it is working on
+				continue; // the vehicle itself, its load, or the pallet / slot / charger it is working on
 			}
 			// The two fields are judged separately: the wider warning outline reaches a point one pose earlier than the
 			// protective one, so stopping at the first warning pose would miss the protective field.
@@ -350,6 +370,10 @@ void UAgvSafetyComponent::Evaluate()
 		}
 	}
 	bProtectiveHit = ProtectiveHits >= MinObjectPoints;
+	if (bProtectiveHit)
+	{
+		LastProtectiveHit = FirstProtective;
+	}
 	if (bProtectiveHit && State != EAgvSafetyState::Stop)
 	{
 		UE_LOG(LogAgvSafety, Verbose, TEXT("AGV_SAFETY %s: protective hit by %d points, first at vehicle (%.0f, %.0f, %.0f)"), *GetOwner()->GetName(), ProtectiveHits, FirstProtective.X, FirstProtective.Y, FirstProtective.Z);
