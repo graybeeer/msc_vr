@@ -66,6 +66,8 @@ samples = []
 feet = []
 stop_time = reach_time = None
 pivot_start = yaw_start = None
+jump_samples = []
+jump_return_time = None
 
 def finish():
     if rig and dummy:
@@ -140,6 +142,7 @@ def begin_response_checks():
 def tick(dt):
     global now, phase, game, person, rig, dummy, box, source, first_person, anim, capsule, chassis
     global stop_time, reach_time, pivot_start, yaw_start
+    global jump_samples, jump_return_time
     try:
         assert time.monotonic() - began < 210, ('Response PIE timeout', phase)
         if phase == 'start':
@@ -226,7 +229,15 @@ def tick(dt):
                 assert person.try_pickup_cargo(box), 'Pickup fixture out of reach'
                 enter('carry_settle')
             else:
+                before = capsule.get_physics_linear_velocity()
                 person.do_jump_start()
+                first = capsule.get_physics_linear_velocity()
+                person.do_jump_start()  # Duplicate callback in the same input frame.
+                second = capsule.get_physics_linear_velocity()
+                if first.z - before.z > 100:
+                    assert abs(second.z - first.z) < .01, 'Duplicate input stacked another take-off impulse'
+                jump_samples = []
+                jump_return_time = None
                 enter('jump')
             return
         if phase == 'carry_settle':
@@ -265,11 +276,28 @@ def tick(dt):
             enter('sprint_stop')
             return
         if phase == 'jump':
-            samples.append(person.get_actor_location().z - origin.z)
+            height = person.get_actor_location().z - origin.z
+            vertical_speed = capsule.get_physics_linear_velocity().z
+            samples.append(height)
+            jump_samples.append((age, height, vertical_speed))
+            if .12 < age < .45 and height > 15:
+                person.do_jump_start()  # A new press while airborne cannot add thrust.
+            if age > .4 and abs(height) < 5 and abs(vertical_speed) < 30 and jump_return_time is None:
+                jump_return_time = age
             if age < 2:
                 return
-            assert max(samples) > 35, ('Physical jump', max(samples))
-            print('CHARACTER_JUMP_PASSED', max(samples))
+            apex = max(jump_samples, key=lambda sample: sample[1])
+            accelerations = [(b[2] - a[2]) / (b[0] - a[0])
+                for a, b in zip(jump_samples, jump_samples[1:])
+                if .1 < a[0] < b[0] < .6 and min(a[1], b[1]) > 12 and b[0] - a[0] > .001]
+            assert accelerations, 'No airborne gravity samples'
+            gravity = sorted(accelerations)[len(accelerations) // 2]
+            assert 45 < apex[1] < 85 and .25 < apex[0] < .5, ('Jump height/time', apex)
+            assert -1100 < gravity < -850, ('Airborne acceleration should be close to -980 cm/s²', gravity)
+            assert jump_return_time is not None and .55 < jump_return_time < 1.05, ('Jump return duration', jump_return_time)
+            print('CHARACTER_JUMP_PASSED', 'apex_cm', apex[1], 'apex_seconds', apex[0],
+                  'return_seconds', jump_return_time, 'air_acceleration_cm_s2', gravity,
+                  'same-frame duplicate/airborne repeated inputs did not add thrust')
             person.set_locomotion_input(False, True)
             enter('crouch')
             return

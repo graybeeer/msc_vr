@@ -44,6 +44,10 @@ public:
  virtual void Tick(float DeltaSeconds) override;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Strength") TArray<FWarehouseStrength> Objects;
  UFUNCTION(BlueprintCallable, Category="Strength") void InitializeStrength();
+ // Rebind layout floor replacements without resetting any mass, damage or body motion.
+ void RefreshLayoutBindings();
+ void RemoveLayoutActors(const TArray<AActor*>& Actors);
+ void RegisterLayoutProfile(const FWarehouseStrength& Profile);
  // Call after a runtime physics activation (for example a humanoid ragdoll). No mass/profile changes.
  UFUNCTION(BlueprintCallable, Category="Strength") void RegisterPhysicalContacts(AActor* Actor);
  UFUNCTION(BlueprintCallable, Category="Strength") void AdvanceStrength(float Seconds);
@@ -68,6 +72,8 @@ private:
  TMap<uint64, double> LastContact;
  TMap<TWeakObjectPtr<UPrimitiveComponent>, FBodyMotion> PrePhysicsMotion;
  TArray<TArray<int32>> Supports;
+ // Parent -> children in profile index order, rebuilt with each exact support snapshot.
+ TArray<TArray<int32>> SupportedChildren;
  TArray<FBox> Bounds;
  UPROPERTY(Transient) TArray<TObjectPtr<UTextRenderComponent>> Labels;
  bool bInitialized = false;

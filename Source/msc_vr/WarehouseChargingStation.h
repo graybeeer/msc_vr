@@ -15,6 +15,7 @@ public:
  AWarehouseChargingStation();
  UFUNCTION(BlueprintCallable, Category="Charging") void RequestManualCharge();
  UFUNCTION(BlueprintPure, Category="Charging") bool IsDocked(const AWarehouseForklift* Vehicle) const;
+ UFUNCTION(BlueprintPure, Category="Layout") TArray<AWarehouseForklift*> GetLinkedVehicles() const;
  bool TryReserve(AWarehouseForklift* Vehicle);
  void Release(AWarehouseForklift* Vehicle);
  void ShowCharge(float Percent, bool Charging);

@@ -1,10 +1,12 @@
 #include "WarehouseComputer.h"
+#include "WarehousePerformance.h"
 #include "WarehouseCargo.h"
 #include "WarehousePallet.h"
 #include "WarehouseForklift.h"
 #include "WarehouseDamageSystem.h"
 #include "WarehouseInboundZone.h"
 #include "WarehouseWorker.h"
+#include "WarehouseLayoutInventory.h"
 #include "msc_vrCharacter.h"
 #include "Components/StaticMeshComponent.h"
 #include "Materials/MaterialInterface.h"
@@ -51,6 +53,11 @@ void AWarehouseComputer::BeginPlay()
   Label->InitWidget();if (auto* Widget=Cast<UWarehouseRoleWidget>(Label->GetUserWidgetObject()))
   { Widget->Label=FText::FromString(TEXT("관제 컴퓨터 · E 접속"));Widget->TextColor=WarehouseUIStyle::Accent; }
  }
+ if (auto* Layout=AWarehouseLayoutEditor::Find(this))
+  for (auto& Zone:Layout->Zones) if (Zone.Name==TEXT("Outbound") && Zone.Destinations.IsEmpty())
+   for (const auto& Pose:OutboundDestinations)
+    if (FMath::Abs(Pose.GetLocation().X-Zone.Centre.X)<=Zone.HalfSize.X && FMath::Abs(Pose.GetLocation().Y-Zone.Centre.Y)<=Zone.HalfSize.Y) Zone.Destinations.Add(Pose);
+ if (auto* Layout=AWarehouseLayoutEditor::Find(this);Layout && !Layout->Zones.IsEmpty()) RefreshLayoutDestinations();
  RefreshState();
 }
 bool AWarehouseComputer::CanUse() const
@@ -68,6 +75,49 @@ void AWarehouseComputer::Tick(float Dt)
    FVector::DistSquared(PC->GetPawn()->GetActorLocation(),GetActorLocation())<FMath::Square(700.f));
  }
 }
+void AWarehouseComputer::EndPlay(const EEndPlayReason::Type Reason)
+{
+ for (AWarehouseForklift* Vehicle : Fleet) if (IsValid(Vehicle))
+  Vehicle->OnJobReport.RemoveDynamic(this,&AWarehouseComputer::ReceiveJobReport);
+ Super::EndPlay(Reason);
+}
+void AWarehouseComputer::RememberJob(AWarehouseForklift* Vehicle,const FWarehouseWorkOrder& Job,bool SubmissionTimeKnown)
+{
+ if (!IsValid(Vehicle) || Job.JobId.IsEmpty()) return;
+ Fleet.AddUnique(Vehicle);
+ Vehicle->OnJobReport.AddUniqueDynamic(this,&AWarehouseComputer::ReceiveJobReport);
+ if (Tasks.ContainsByPredicate([&](const auto& Task) { return Task.JobId==Job.JobId; })) return;
+ FWarehouseComputerTask Task;Task.JobId=Job.JobId;Task.Pallet=Job.Pallet;Task.Vehicle=Vehicle;
+ const auto* InventoryRow=Inventory.FindByPredicate([&](const auto& Item) { return Item.Pallet==Job.Pallet; });
+ Task.Source=InventoryRow ? InventoryRow->Location : IsValid(Job.Pallet) ? Locate(Job.Pallet) : TEXT("대상 없음");
+ const FVector Destination=Job.Destination.GetLocation();
+ Task.Destination=FString::Printf(TEXT("(%0.f, %0.f, %0.f cm)"),Destination.X,Destination.Y,Destination.Z);
+ Task.State=TEXT("작업 대기");Task.bSubmissionTimeKnown=SubmissionTimeKnown;
+ Task.SubmittedSimulationSeconds=GetWorld()->GetTimeSeconds();Tasks.Add(Task);
+}
+void AWarehouseComputer::RecordJobSubmitted(AWarehouseForklift* Vehicle,const FWarehouseWorkOrder& Job)
+{
+ RememberJob(Vehicle,Job,true);
+}
+double AWarehouseComputer::GetTaskElapsedSeconds(const FString& JobId) const
+{
+ const auto* Task=Tasks.FindByPredicate([&](const auto& T) { return T.JobId==JobId; });
+ if (!Task || !Task->bSubmissionTimeKnown) return 0;
+ const double End=Task->FinishedSimulationSeconds>=0 ? Task->FinishedSimulationSeconds : GetWorld()->GetTimeSeconds();
+ return FMath::Max(0.,End-Task->SubmittedSimulationSeconds);
+}
+void AWarehouseComputer::ReceiveJobReport(const FWarehouseJobReport& Report)
+{
+ auto* Task=Tasks.FindByPredicate([&](const auto& T) { return T.JobId==Report.JobId; });
+ if (!Task || Task->bCompleted || Task->bCancelled) return;
+ if (Report.Result==TEXT("COMPLETED"))
+ {
+  Task->bCompleted=true;Task->State=TEXT("완료 · 재고 위치 갱신됨");
+  Task->FinishedSimulationSeconds=Report.SimulationSeconds;
+ }
+ else if (Report.Result==TEXT("STATE") || Report.Result==TEXT("FAULT")) Task->State=Report.Detail;
+ Task->ElapsedSimulationSeconds=GetTaskElapsedSeconds(Task->JobId);
+}
 bool AWarehouseComputer::Claimed(AWarehousePallet* Pallet) const
 {
  for (AWarehouseForklift* Vehicle : Fleet) if (IsValid(Vehicle))
@@ -80,6 +130,12 @@ bool AWarehouseComputer::Claimed(AWarehousePallet* Pallet) const
 FString AWarehouseComputer::Locate(AActor* Object) const
 {
  const FVector P=Object->GetActorLocation();const int32 Floor=FMath::FloorToInt(FMath::Max(0.,P.Z)/400.);
+ if (auto* Layout=AWarehouseLayoutEditor::Find(this)) for (const auto& Zone:Layout->Zones)
+ {
+  const FVector Local=P-Zone.Centre;
+  if (FMath::Abs(Local.X)<=Zone.HalfSize.X && FMath::Abs(Local.Y)<=Zone.HalfSize.Y && FMath::Abs(Local.Z)<20)
+   return Zone.Name==TEXT("Outbound") ? TEXT("출고 대기 구역") : TEXT("입고 대기 구역");
+ }
  for (AWarehouseForklift* Vehicle : Fleet) if (IsValid(Vehicle) && Vehicle->GetLoadMassKg()>0 && Vehicle->ActiveJob.Pallet==Object)
   return Vehicle->VehicleName+TEXT(" · 운반 중");
  for (TActorIterator<AWarehouseInboundZone> It(GetWorld());It;++It)
@@ -96,8 +152,12 @@ FString AWarehouseComputer::Locate(AActor* Object) const
 }
 void AWarehouseComputer::RefreshState()
 {
+ CSV_SCOPED_TIMING_STAT(Warehouse,InventoryRefresh);
  ++RefreshCount;Fleet.Reset();Inventory.Reset();
- for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) Fleet.Add(*It);
+ for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
+ {
+  Fleet.Add(*It);It->OnJobReport.AddUniqueDynamic(this,&AWarehouseComputer::ReceiveJobReport);
+ }
  auto* Strength=AWarehouseDamageSystem::Find(this);
  TMap<AWarehouseCargo*,AWarehousePallet*> Owners;TMap<AWarehousePallet*,FString> Racks;
  if (Strength)
@@ -135,46 +195,55 @@ void AWarehouseComputer::RefreshState()
   Item.bReserved=Item.Pallet && Claimed(Item.Pallet);Inventory.Add(Item);
  }
  Inventory.Sort([](const auto& A,const auto& B) { return A.CargoId<B.CargoId; });
- auto Remember=[&](AWarehouseForklift* Vehicle,const FWarehouseWorkOrder& Job)
- {
-  if (Job.JobId.IsEmpty()) return;
-  auto* Task=Tasks.FindByPredicate([&](const auto& T) { return T.JobId==Job.JobId; });
-  if (!Task)
-  {
-   FWarehouseComputerTask T;T.JobId=Job.JobId;T.Pallet=Job.Pallet;T.Vehicle=Vehicle;
-   T.Source=IsValid(Job.Pallet) ? Locate(Job.Pallet) : TEXT("대상 없음");
-   T.Destination=FString::Printf(TEXT("(%0.f, %0.f, %0.f cm)"),Job.Destination.GetLocation().X,Job.Destination.GetLocation().Y,Job.Destination.GetLocation().Z);
-   Tasks.Add(T);
-  }
- };
  for (AWarehouseForklift* Vehicle : Fleet)
  {
-  Remember(Vehicle,Vehicle->ActiveJob);for (const auto& Job : Vehicle->PendingJobs) Remember(Vehicle,Job);
+  // Authored initial queues or a console spawned after dispatch have no known submission timestamp.
+  RememberJob(Vehicle,Vehicle->ActiveJob,false);for (const auto& Job : Vehicle->PendingJobs) RememberJob(Vehicle,Job,false);
+  // Recover an exact completion timestamp if the console missed a delegate during initialization.
+  for (const auto& Report : Vehicle->JobReports) if (Report.Result==TEXT("COMPLETED")) ReceiveJobReport(Report);
  }
  for (auto& Task : Tasks)
  {
+  Task.ElapsedSimulationSeconds=GetTaskElapsedSeconds(Task.JobId);
+  if (Task.bCompleted || Task.bCancelled) continue;
   auto* V=Task.Vehicle.Get();if (!IsValid(V)) { Task.State=TEXT("차량 연결 끊김");continue; }
-  if (Task.State==TEXT("취소됨")) continue;
-  Task.bCompleted=V->CompletedJobIds.Contains(Task.JobId);
-  if (Task.bCompleted) Task.State=TEXT("완료 · 재고 위치 갱신됨");
-  else if (V->ActiveJob.JobId==Task.JobId) Task.State=V->Status;
-  else Task.State=TEXT("작업 대기");
+  if (V->ActiveJob.JobId==Task.JobId) Task.State=V->Status;
+  else if (V->PendingJobs.ContainsByPredicate([&](const auto& Job) { return Job.JobId==Task.JobId; })) Task.State=TEXT("작업 대기");
+  else if (V->CompletedJobIds.Contains(Task.JobId))
+  {
+   Task.bCompleted=true;Task.State=TEXT("완료 · 시각 보고 누락");Task.bSubmissionTimeKnown=false;
+  }
+  else Task.State=TEXT("작업 연결 끊김 · 확인 필요");
  }
- // ponytail: keep 200 session-local records; persistent WMS storage belongs to a later integration.
- if (Tasks.Num()>200) Tasks.RemoveAt(0,Tasks.Num()-200);
+ // ponytail: keep all unfinished orders and 200 finished session records; durable WMS storage is a later integration.
+ int32 FinishedCount=0;for (const auto& Task : Tasks) if (Task.bCompleted || Task.bCancelled) ++FinishedCount;
+ for (int32 I=0;I<Tasks.Num() && FinishedCount>200;)
+  if (Tasks[I].bCompleted || Tasks[I].bCancelled) { Tasks.RemoveAt(I);--FinishedCount; } else ++I;
+}
+void AWarehouseComputer::RefreshLayoutDestinations()
+{
+ auto* Layout=AWarehouseLayoutEditor::Find(this);OutboundDestinations.Reset();
+ for (const auto& Zone:Layout->Zones) if (Zone.Name==TEXT("Outbound"))
+ {
+  if (OutboundDestinations.IsEmpty()) { OutboundCentre=Zone.Centre;OutboundHalfSize=Zone.HalfSize; }
+  OutboundDestinations.Append(Zone.Destinations);
+ }
 }
 bool AWarehouseComputer::IssueOutbound(AWarehouseCargo* Cargo,AWarehouseForklift* Vehicle,int32 DestinationIndex)
 {
  auto Fail=[&](const TCHAR* Message) { LastMessage=Message;return false; };
  if (!CanUse()) return Fail(TEXT("컴퓨터가 손상되어 사용할 수 없습니다."));
+ if (OutboundDestinations.IsEmpty()) return Fail(TEXT("출고할 수 없다: 출고 대기 구역이 없습니다. [NO_OUTBOUND_ZONE]"));
  if (!IsValid(Cargo) || !OutboundDestinations.IsValidIndex(DestinationIndex)) return Fail(TEXT("상품과 출고 위치를 선택하세요."));
  RefreshState();
+ if (Fleet.IsEmpty()) return Fail(TEXT("운반할 수 없다: 지게차가 없습니다. [NO_FORKLIFT]"));
  const auto* Item=Inventory.FindByPredicate([&](const auto& Row) { return Row.Cargo==Cargo; });
  auto* Pallet=Item ? Item->Pallet.Get() : nullptr;
  auto* Strength=AWarehouseDamageSystem::Find(this);
  if (!Pallet || !Strength) return Fail(TEXT("이 상품을 팔레트 위에 올린 뒤 지시하세요."));
  if (Claimed(Pallet)) return Fail(TEXT("이 팔레트는 이미 다른 작업에 예약되어 있습니다."));
- const auto Loads=Strength->GetSupportedActors(Pallet);
+ // RefreshState above already refreshed support; the scene has not advanced.
+ const auto Loads=Strength->GetSupportedActors(Pallet,false);
  for (TActorIterator<Amsc_vrCharacter> It(GetWorld());It;++It)
   if (It->GetHeldCargo()==Pallet || Loads.Contains(It->GetHeldCargo())) return Fail(TEXT("사람이 들고 있는 물체는 운반할 수 없습니다."));
  if (Strength->HasFailed(Pallet) || Pallet->GetPalletBody()->GetPhysicsLinearVelocity().Size()>10 ||
@@ -189,18 +258,23 @@ bool AWarehouseComputer::IssueOutbound(AWarehouseCargo* Cargo,AWarehouseForklift
  }
  const float Mass=Pallet->PalletMassKg+Strength->GetSupportedMass(Pallet);
  const auto& Destination=OutboundDestinations[DestinationIndex];
- const FVector OutboundLocal=Destination.GetLocation()-OutboundCentre;
- if (FMath::Abs(OutboundLocal.X)>OutboundHalfSize.X-55 || FMath::Abs(OutboundLocal.Y)>OutboundHalfSize.Y-55 || FMath::Abs(OutboundLocal.Z)>5)
+ FVector Centre=OutboundCentre,Half=OutboundHalfSize;
+ if (auto* Layout=AWarehouseLayoutEditor::Find(this)) for (const auto& Zone:Layout->Zones)
+  if (Zone.Name==TEXT("Outbound") && Zone.Destinations.ContainsByPredicate([&](const FTransform& Pose) { return Pose.Equals(Destination,.01f); }))
+  { Centre=Zone.Centre;Half=Zone.HalfSize;break; }
+ const FVector OutboundLocal=Destination.GetLocation()-Centre;
+ const FVector SlotHalf=(Destination.GetUnitAxis(EAxis::X).GetAbs()+Destination.GetUnitAxis(EAxis::Y).GetAbs())*AWarehouseForklift::FloorSlotHalfExtentCm;
+ if (FMath::Abs(OutboundLocal.X)>Half.X-SlotHalf.X ||
+     FMath::Abs(OutboundLocal.Y)>Half.Y-SlotHalf.Y || FMath::Abs(OutboundLocal.Z)>5)
   return Fail(TEXT("출고 위치가 대기 구역 경계를 벗어났습니다."));
  if (Destination.ContainsNaN() || !Destination.GetScale3D().Equals(FVector::OneVector) ||
      FMath::Abs(Destination.Rotator().Pitch)>.1 || FMath::Abs(Destination.Rotator().Roll)>.1)
   return Fail(TEXT("출고 위치 설정이 올바르지 않습니다."));
  auto Eligible=[&](AWarehouseForklift* V,bool AllowQueue)
  {
-  return IsValid(V) && Fleet.Contains(V) && V->bAutonomousMode && V->bPowered && !V->IsRemoteControlled() &&
-   V->CheckSystems().IsEmpty() && !V->bChargePending && V->BatteryPercent>V->ChargeBelowPercent &&
+  return IsValid(V) && Fleet.Contains(V) && V->CanAcceptNewWork() &&
    Mass<=V->RatedLoadKg && FMath::Max(0.,Pallet->GetActorLocation().Z-400.*FMath::FloorToDouble((Pallet->GetActorLocation().Z+1.)/400.))+20<=V->MaxForkHeightCm &&
-   (AllowQueue || (V->AIState==EWarehouseAIState::Ready && V->ActiveJob.JobId.IsEmpty() && V->PendingJobs.IsEmpty()));
+   (AllowQueue || (V->ActiveJob.JobId.IsEmpty() && V->PendingJobs.IsEmpty()));
  };
  if (Vehicle && !Eligible(Vehicle,true)) return Fail(TEXT("선택한 차량의 전원·고장·원격 조작·배터리·하중·리프트 범위를 확인하세요."));
  if (!Vehicle)
@@ -213,9 +287,26 @@ bool AWarehouseComputer::IssueOutbound(AWarehouseCargo* Cargo,AWarehouseForklift
   }
  }
  if (!Vehicle) return Fail(TEXT("사용 가능한 차량이 없습니다. 작업 중인 차량을 직접 선택하면 대기열에 추가할 수 있습니다."));
+ if (!Vehicle->IsFloorFootprintValid(Pallet,Pallet->GetActorTransform(),false))
+  return Fail(TEXT("팔레트와 화물이 120cm 출고 예약 공간을 벗어납니다."));
  for (AWarehouseForklift* V : Fleet)
  {
-  auto Reserved=[&](const FWarehouseWorkOrder& Job) { return !Job.JobId.IsEmpty() && FVector::Dist2D(Job.Destination.GetLocation(),Destination.GetLocation())<110 && FMath::Abs(Job.Destination.GetLocation().Z-Destination.GetLocation().Z)<20; };
+  auto Reserved=[&](const FWarehouseWorkOrder& Job)
+  {
+   if (Job.JobId.IsEmpty() || FMath::Abs(Job.Destination.GetLocation().Z-Destination.GetLocation().Z)>=20) return false;
+   const FVector A=Destination.GetUnitAxis(EAxis::X),B=Destination.GetUnitAxis(EAxis::Y);
+   const FVector C=Job.Destination.GetUnitAxis(EAxis::X),D=Job.Destination.GetUnitAxis(EAxis::Y);
+   const FVector Delta=Job.Destination.GetLocation()-Destination.GetLocation();
+   // Four separating axes cover the two actual 120cm squares, including
+   // diagonal slots which a centre-distance reservation would miss.
+   for (const FVector Axis : {A,B,C,D})
+   {
+    const float Extent=AWarehouseForklift::FloorSlotHalfExtentCm*(FMath::Abs(FVector::DotProduct(A,Axis))+
+     FMath::Abs(FVector::DotProduct(B,Axis))+FMath::Abs(FVector::DotProduct(C,Axis))+FMath::Abs(FVector::DotProduct(D,Axis)));
+    if (FMath::Abs(FVector::DotProduct(Delta,Axis))>=Extent) return false;
+   }
+   return true;
+  };
   if (Reserved(V->ActiveJob)) return Fail(TEXT("출고 위치가 다른 작업에 예약되어 있습니다."));
   for (const auto& Job : V->PendingJobs) if (Reserved(Job)) return Fail(TEXT("출고 위치가 다른 작업에 예약되어 있습니다."));
  }
@@ -223,7 +314,7 @@ bool AWarehouseComputer::IssueOutbound(AWarehouseCargo* Cargo,AWarehouseForklift
  for (auto* Load : Loads) Params.AddIgnoredActor(Load);
  const FVector P=Destination.GetLocation();const float Height=Bounds.IsValid ? Bounds.GetSize().Z : 120;
  if (GetWorld()->OverlapBlockingTestByChannel(P+FVector(0,0,Height*.5+2),Destination.GetRotation(),ECC_Visibility,
-     FCollisionShape::MakeBox(FVector(54,54,FMath::Max(1.f,Height*.5f-1))),Params)) return Fail(TEXT("출고 위치에 물체가 있습니다. 먼저 비워 주세요."));
+     FCollisionShape::MakeBox(FVector(AWarehouseForklift::FloorSlotHalfExtentCm,AWarehouseForklift::FloorSlotHalfExtentCm,FMath::Max(1.f,Height*.5f-1))),Params)) return Fail(TEXT("출고 위치에 물체가 있습니다. 먼저 비워 주세요."));
  for (float X : {-40.f,40.f}) for (float Y : {-40.f,40.f})
  {
   FHitResult Hit;const FVector Probe=Destination.TransformPosition(FVector(X,Y,0));
@@ -232,7 +323,10 @@ bool AWarehouseComputer::IssueOutbound(AWarehouseCargo* Cargo,AWarehouseForklift
  }
  FWarehouseWorkOrder Job;Job.JobId=FString::Printf(TEXT("CONSOLE-%s-%06d"),*GetName(),NextJob++);
  Job.SourceSystem=TEXT("FMS-COMPUTER");Job.Pallet=Pallet;Job.Destination=Destination;
- if (!Vehicle->SubmitJob(Job)) return Fail(TEXT("작업이 거부되었습니다. 중복 지시 또는 대기열 한도를 확인하세요."));
+ if (auto* Layout=AWarehouseLayoutEditor::Find(this)) for (const auto& Zone:Layout->Zones)
+  if (Zone.Name==TEXT("Outbound") && !Zone.Members.IsEmpty() && Zone.Destinations.ContainsByPredicate([&](const FTransform& Pose) { return Pose.Equals(Destination,.01f); }))
+  { Job.DestinationResource=Zone.Members[0];Job.bRequiresDestinationResource=true;break; }
+ if (!Vehicle->SubmitJob(Job)) { LastMessage=Vehicle->LastErrorMessage.IsEmpty() ? TEXT("작업이 거부되었습니다. 중복 지시 또는 대기열 한도를 확인하세요.") : Vehicle->LastErrorMessage;return false; }
  RefreshState();
  if (auto* Task=Tasks.FindByPredicate([&](const auto& T) { return T.JobId==Job.JobId; })) Task->Destination=FString::Printf(TEXT("출고 대기 %02d"),DestinationIndex+1);
  LastMessage=Vehicle->VehicleName+TEXT("에 팔레트 전체 운반을 지시했습니다.");return true;
@@ -252,8 +346,24 @@ bool AWarehouseComputer::CancelQueuedJob(const FString& JobId)
  {
   const int32 Removed=Vehicle->PendingJobs.RemoveAll([&](const auto& Job) { return Job.JobId==JobId && Job.SourceSystem==TEXT("FMS-COMPUTER"); });
   if (!Removed) continue;
-  if (auto* Task=Tasks.FindByPredicate([&](const auto& T) { return T.JobId==JobId; })) Task->State=TEXT("취소됨");
+  if (auto* Task=Tasks.FindByPredicate([&](const auto& T) { return T.JobId==JobId; }))
+  {
+   Task->State=TEXT("취소됨");Task->bCancelled=true;Task->FinishedSimulationSeconds=GetWorld()->GetTimeSeconds();
+   Task->ElapsedSimulationSeconds=GetTaskElapsedSeconds(JobId);
+  }
   LastMessage=TEXT("대기 작업을 취소했습니다.");RefreshState();return true;
  }
  LastMessage=TEXT("관제 컴퓨터의 대기 작업만 취소할 수 있습니다. 진행 중이면 차량을 일시정지하세요.");return false;
+}
+bool AWarehouseComputer::CreateHeldCargo(FName Id,FText Product,float MassKg,FVector SizeCm)
+{
+ if (!HasAuthority() || !CanUse()) return false;
+ auto* Store=AWarehouseLayoutInventory::Find(this);const bool Result=Store->CreateHeldCargo(Id,Product,MassKg,SizeCm);
+ LastMessage=Store->LastMessage;RefreshState();return Result;
+}
+bool AWarehouseComputer::DeleteHeldCargo(FName Id)
+{
+ if (!HasAuthority() || !CanUse()) return false;
+ auto* Store=AWarehouseLayoutInventory::Find(this);const bool Result=Store->DeleteHeldCargo(Id);
+ LastMessage=Store->LastMessage;RefreshState();return Result;
 }

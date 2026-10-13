@@ -194,6 +194,8 @@ def configure_inbound_area():
     system.modify();system.set_editor_property('objects',specs)
     from configure_area_labels import configure_area_labels
     configure_area_labels()
+    from configure_fleet_corridors import configure_fleet_corridors
+    configure_fleet_corridors()
     print('INBOUND_AREA_CONFIGURED','dock-side inbound/outbound waiting, 3 inbound + 3 outbound pallets, 4 racks / 16 slots, 2 AGVs')
     return zone
 

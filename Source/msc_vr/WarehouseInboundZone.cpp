@@ -1,4 +1,5 @@
 #include "WarehouseInboundZone.h"
+#include "WarehousePerformance.h"
 #include "WarehouseForklift.h"
 #include "WarehousePallet.h"
 #include "WarehouseCargo.h"
@@ -26,7 +27,7 @@ bool AWarehouseInboundZone::SlotClear(int32 Index,AWarehousePallet* Pallet,const
  auto* Strength=AWarehouseDamageSystem::Find(this);
  if (!IsValid(Slot.Rack) || !Strength || Strength->HasFailed(Slot.Rack) || Height>Slot.ClearHeightCm || Mass>Slot.CapacityKg) return false;
  for (const auto& Entry : Reservations)
-  if (Entry.Slot==Index || (RackSlots.IsValidIndex(Entry.Slot) && RackSlots[Entry.Slot].Rack==Slot.Rack)) return false;
+  if (Entry.Rack==Slot.Rack && Entry.Pose.Equals(Slot.Pose,.1f)) return false;
  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
  {
   const FVector Approach=Slot.Pose.GetLocation()-Slot.Pose.GetUnitAxis(EAxis::X)*220;
@@ -45,9 +46,8 @@ bool AWarehouseInboundZone::SlotClear(int32 Index,AWarehousePallet* Pallet,const
       FMath::Abs(It->GetActorLocation().Z-Slot.Pose.GetLocation().Z)<5)
    Used+=It->PalletMassKg+Strength->GetSupportedMass(*It);
  for (const auto& Entry : Reservations)
-  if (Entry.Slot!=Index && RackSlots.IsValidIndex(Entry.Slot) &&
-      RackSlots[Entry.Slot].Rack==Slot.Rack &&
-      FMath::Abs(RackSlots[Entry.Slot].Pose.GetLocation().Z-Slot.Pose.GetLocation().Z)<5)
+  if (!Entry.Pose.Equals(Slot.Pose,.01f) && Entry.Rack==Slot.Rack &&
+      FMath::Abs(Entry.Pose.GetLocation().Z-Slot.Pose.GetLocation().Z)<5)
    if (auto* Load=Entry.Pallet.Get()) Used+=Load->PalletMassKg+Strength->GetSupportedMass(Load);
  if (Used+Mass>Slot.CapacityKg) return false;
  FCollisionQueryParams Params(SCENE_QUERY_STAT(InboundRackSlot),false,this);
@@ -68,20 +68,33 @@ bool AWarehouseInboundZone::SlotClear(int32 Index,AWarehousePallet* Pallet,const
 }
 void AWarehouseInboundZone::ScanInbound()
 {
+ CSV_SCOPED_TIMING_STAT(Warehouse,InboundScan);
  auto* Strength=AWarehouseDamageSystem::Find(this);
  if (!Strength) { Status=TEXT("입고 대기 구역: 하중 검사 시스템 없음"); return; }
+ Fleet.Reset();for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) Fleet.Add(*It);
+ if (Fleet.IsEmpty()) { Status=TEXT("운반할 수 없다: 지게차가 없습니다. [NO_FORKLIFT]");return; }
+ RackSlots.RemoveAll([](const auto& Slot) { return !IsValid(Slot.Rack); });
+ if (RackSlots.IsEmpty()) { Status=TEXT("운반할 수 없다: 적재할 랙이 없습니다. [NO_RACK]");return; }
  for (int32 I=Reservations.Num()-1;I>=0;--I)
  {
-  const auto& Entry=Reservations[I];
+  auto& Entry=Reservations[I];
   auto* Vehicle=Entry.Vehicle.Get();
   if (!Vehicle || !Entry.Pallet.IsValid()) { Reservations.RemoveAt(I); continue; }
+  if (!Entry.Rack.IsValid() || !RackSlots.ContainsByPredicate([&](const auto& Slot) { return Slot.Rack==Entry.Rack; }))
+  { Reservations.RemoveAt(I);continue; }
   if (Vehicle->CompletedJobIds.Contains(Entry.JobId))
   { ++CompletedCount; Reservations.RemoveAt(I); }
+  else
+  {
+   if (Vehicle->ActiveJob.JobId==Entry.JobId) Entry.Pose=Vehicle->ActiveJob.Destination;
+   else for (const auto& Job:Vehicle->PendingJobs) if (Job.JobId==Entry.JobId) { Entry.Pose=Job.Destination;break; }
+  }
   // A paused/faulted job retains its destination. E/recovery can safely resume it.
  }
  const double Now=GetWorld()->GetTimeSeconds();
  TSet<TWeakObjectPtr<AWarehousePallet>> Present;
  int32 Loaded=0;
+ bool RefreshLoads=true;
  for (TActorIterator<AWarehousePallet> It(GetWorld());It;++It)
  {
   auto* Pallet=*It;
@@ -89,7 +102,9 @@ void AWarehouseInboundZone::ScanInbound()
   if (FMath::Abs(Local.X)>HalfSizeCm.X-55 || FMath::Abs(Local.Y)>HalfSizeCm.Y-55 ||
       FMath::Abs(Local.Z)>5 || Strength->HasFailed(Pallet)) continue;
   Present.Add(Pallet);
-  const TArray<AActor*> Loads=Strength->GetSupportedActors(Pallet);
+  // No physics step occurs inside this scan; all pallets share one fresh snapshot.
+  const TArray<AActor*> Loads=Strength->GetSupportedActors(Pallet,RefreshLoads);
+  RefreshLoads=false;
   bool bCargo=false,bHeld=false,bStable=Pallet->GetPalletBody()->GetPhysicsLinearVelocity().Size()<10 &&
    Pallet->GetPalletBody()->GetPhysicsAngularVelocityInDegrees().Size()<5 &&
    FMath::Abs(Pallet->GetActorRotation().Pitch)<2 && FMath::Abs(Pallet->GetActorRotation().Roll)<2;
@@ -128,9 +143,7 @@ void AWarehouseInboundZone::ScanInbound()
   for (const auto& VehiclePtr : Fleet)
   {
    auto* Vehicle=VehiclePtr.Get();
-   if (!IsValid(Vehicle) || !Vehicle->bAutonomousMode || !Vehicle->bPowered || Vehicle->IsRemoteControlled() ||
-       Vehicle->AIState!=EWarehouseAIState::Ready || !Vehicle->PendingJobs.IsEmpty() || !Vehicle->ActiveJob.JobId.IsEmpty() ||
-       Vehicle->bChargePending || Vehicle->BatteryPercent<=Vehicle->ChargeBelowPercent || Mass>Vehicle->RatedLoadKg) continue;
+   if (!IsValid(Vehicle) || !Vehicle->CanAcceptNewWork() || !Vehicle->PendingJobs.IsEmpty() || !Vehicle->ActiveJob.JobId.IsEmpty() || Mass>Vehicle->RatedLoadKg) continue;
    for (int32 Slot=0;Slot<RackSlots.Num();++Slot)
    {
     if (RackSlots[Slot].Pose.GetLocation().Z-GetActorLocation().Z+20>Vehicle->MaxForkHeightCm || !SlotClear(Slot,Pallet,Loads,Height,Mass)) continue;
@@ -143,10 +156,12 @@ void AWarehouseInboundZone::ScanInbound()
   if (!BestVehicle) continue;
   FWarehouseWorkOrder Job;
   Job.JobId=FString::Printf(TEXT("INBOUND-%s-%06d"),*GetName(),DispatchedCount+1);
-  Job.SourceSystem=TEXT("FMS-INBOUND-ZONE-1"); Job.Pallet=Pallet; Job.Destination=RackSlots[BestSlot].Pose;
+  Job.SourceSystem=TEXT("FMS-INBOUND-")+GetName(); Job.Pallet=Pallet; Job.Destination=RackSlots[BestSlot].Pose;
+  Job.DestinationResource=RackSlots[BestSlot].Rack;Job.bRequiresDestinationResource=true;
+  Job.bRackDestination=true;
   if (BestVehicle->SubmitJob(Job))
   {
-   FReservation Entry; Entry.Vehicle=BestVehicle; Entry.Pallet=Pallet; Entry.JobId=Job.JobId; Entry.Slot=BestSlot;
+   FReservation Entry; Entry.Vehicle=BestVehicle; Entry.Pallet=Pallet; Entry.JobId=Job.JobId; Entry.Rack=RackSlots[BestSlot].Rack;Entry.Pose=RackSlots[BestSlot].Pose;
    Reservations.Add(Entry); ++DispatchedCount;
    UE_LOG(LogTemp,Log,TEXT("INBOUND_DISPATCH %s pallet=%s rack=%s vehicle=%s mass=%.1f"),
     *Job.JobId,*Pallet->GetName(),*RackSlots[BestSlot].Name,*BestVehicle->VehicleName,Mass);

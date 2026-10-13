@@ -16,6 +16,7 @@ world=editor.get_editor_world()
 unreal.GameplayStatics.get_all_actors_of_class(world,unreal.WorldSettings)[0].set_editor_property('default_game_mode',unreal.load_class(None,'/Game/FirstPerson/Blueprints/BP_FirstPersonGameMode.BP_FirstPersonGameMode_C'))
 cube=unreal.load_asset('/Engine/BasicShapes/Cube')
 floor=actors.spawn_actor_from_class(unreal.StaticMeshActor,unreal.Vector(0,0,-10))
+floor.set_actor_label('IntervalFloor')
 floor.static_mesh_component.set_static_mesh(cube)
 floor.static_mesh_component.set_collision_profile_name('BlockAll')
 floor.set_actor_scale3d(unreal.Vector(80,80,.2))
@@ -29,6 +30,16 @@ auto.set_actor_label('IntervalAuto')
 auto.set_editor_property('auto_start',True)
 pallet=actors.spawn_actor_from_class(unreal.WarehousePallet,unreal.Vector(1000,1600,.1))
 pallet.set_actor_label('IntervalPallet')
+# Floor placement now uses the production support contract. Keep a real
+# bearing floor and dynamic 25kg pallet instead of bypassing that validator.
+strength=actors.spawn_actor_from_class(unreal.WarehouseDamageSystem,unreal.Vector())
+strength.set_actor_label('IntervalStrength')
+strength.set_editor_property('objects',[
+    unreal.WarehouseStrength(name='IntervalFloor',members=[floor],physics_meshes=[cube],mass_kg=50000,
+        rated_load_kg=100000,impact_yield_j=100000,impact_failure_j=1000000,failure=unreal.WarehouseFailure.STRUCTURE),
+    unreal.WarehouseStrength(name='IntervalPallet',members=[pallet],physics_meshes=[pallet.get_component_by_class(unreal.StaticMeshComponent).static_mesh],mass_kg=25,
+        rated_load_kg=100000,impact_yield_j=100000,impact_failure_j=1000000,failure=unreal.WarehouseFailure.CRUSH)
+])
 job=unreal.WarehouseWorkOrder()
 job.set_editor_property('job_id','INTERVAL-AUTO')
 job.set_editor_property('pallet',pallet)
@@ -61,6 +72,8 @@ def finish():
     unreal.SystemLibrary.quit_editor()
 
 def read_samples():
+    for probe in (person,box):
+        assert probe.static_mesh_component.get_collision_enabled()==unreal.CollisionEnabled.QUERY_ONLY, ('Sensor-only test probe gained physical contact',probe.get_actor_label())
     for name,v in (('remote',rig),('auto',autorig)):
         n=v.get_editor_property('ObstacleCheckCount')
         if n==counts[name]:continue
@@ -85,9 +98,20 @@ def tick(dt):
         if phase=='wait':
             named={a.get_actor_label():a for a in unreal.GameplayStatics.get_all_actors_of_class(game,unreal.Actor)}
             rig,autorig,operator,person,box=(named[n] for n in ('IntervalRemote','IntervalAuto','IntervalOperator','IntervalPerson','IntervalBox'))
+            # Production initialization makes ordinary solid meshes physical.
+            # These two artificial probes isolate sensing from contact forces.
+            for probe in (person,box):
+                probe.static_mesh_component.set_collision_enabled(unreal.CollisionEnabled.QUERY_ONLY)
+            print('OBSTACLE_INTERVAL_QUERY_ONLY_PROBES_READY','after native world initialization')
             enter('settle',now);return
         if phase=='settle':
             if now-at<1.5:return
+            named={a.get_actor_label():a for a in unreal.GameplayStatics.get_all_actors_of_class(game,unreal.Actor)}
+            live_pallet=named['IntervalPallet']
+            pallet_body=live_pallet.get_component_by_class(unreal.StaticMeshComponent)
+            assert live_pallet in named['IntervalStrength'].get_supported_actors(named['IntervalFloor']), 'Native test pallet has no actual floor support'
+            assert pallet_body.is_simulating_physics() and abs(pallet_body.get_mass()-25)<.1, 'Native pallet physics/mass changed'
+            print('OBSTACLE_INTERVAL_SUPPORT_WORLD_PASSED','real 80m floor, supported dynamic 25kg pallet')
             assert rig.begin_remote_control(operator),(rig.status,operator.get_actor_location(),rig.get_actor_location())
             enter('remote_check',now);return
         read_samples()

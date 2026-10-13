@@ -39,7 +39,8 @@ private:
   TWeakObjectPtr<AWarehouseForklift> Vehicle;
   TWeakObjectPtr<AWarehousePallet> Pallet;
   FString JobId;
-  int32 Slot=INDEX_NONE;
+  TWeakObjectPtr<AActor> Rack;
+  FTransform Pose;
  };
  TArray<FReservation> Reservations;
  TMap<TWeakObjectPtr<AWarehousePallet>, double> StableSince;

@@ -63,6 +63,7 @@
 | --- | --- |
 | 복층 건축 배치 | `Scripts/configure_mezzanine.py` |
 | 플랫폼·문·사용권·신호 | `Source/msc_vr/WarehouseElevator.h/.cpp` |
+| 승강기 추가·삭제·재배치와 모든 층 개구부 | `WarehouseElevatorLayout.h/.cpp`, [WAREHOUSE.md](WAREHOUSE.md)의 배치 편집 |
 | 층 판정·탑승·하차·경로 복귀 | `Source/msc_vr/WarehouseForkliftAI.cpp` |
 | 현재 1층 두 차량 배치·작업 | `Scripts/configure_dual_forklifts.py`, [AUTONOMY.md](AUTONOMY.md) |
 
@@ -71,6 +72,8 @@
 `configure_mezzanine.py`는 `MZ_` 액터를 재생성하고 건물 높이·일부 대기 구역·작업 큐를 바꾼다. 실행하면 기존 1호 작업을 과거 층간 시범으로 바꾸므로 일반 설치에서 실행하지 않는다. 현재 두 차량 시범을 복원하려면 이후 `configure_dual_forklifts.py`가 필요하며 이 작업도 시작 위치·작업 큐를 재설정한다. 전체 맵 생성 스크립트는 복층 설정을 마지막에 적용한다.
 
 상층 랙과 건축 구조의 하중·손상 집계는 [WAREHOUSE.md](WAREHOUSE.md)에 둔다. 서브스텝·마찰·조인트 설정은 [PHYSICS.md](PHYSICS.md)의 공통 기준을 따른다.
+
+배치 편집의 개구부는 고정된 승강기 좌표나 한 대라는 가정 대신 현재 존재하는 승강기별 위치·개구부 치수를 읽는다. 같은 설비의 모든 층 진입부를 함께 갱신하고 삭제하면 원래 구멍을 바닥으로 채운다. 여러 설비의 샤프트 겹침·승강 전체 공간·층별 진입 지지를 검사한다. 운반 명령의 승강기 누락 오류는 [AUTONOMY.md](AUTONOMY.md)의 시설 검증을 따른다.
 
 ## 검증과 과거 기록
 

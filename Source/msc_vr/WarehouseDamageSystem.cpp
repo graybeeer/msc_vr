@@ -1,4 +1,7 @@
 #include "WarehouseDamageSystem.h"
+#include "WarehousePerformance.h"
+
+CSV_DEFINE_CATEGORY(Warehouse,true);
 #include "WarehouseCargo.h"
 #include "WarehouseForklift.h"
 #include "WarehousePallet.h"
@@ -145,6 +148,38 @@ void AWarehouseDamageSystem::RegisterPhysicalContacts(AActor* Actor)
  TArray<UPrimitiveComponent*> Parts; Actor->GetComponents(Parts);
  for (auto* Part : Parts) RegisterContact(Part);
 }
+void AWarehouseDamageSystem::RefreshLayoutBindings()
+{
+ Lookup.Reset();
+ for (int32 I=0;I<Objects.Num();++I)
+  for (AActor* Actor:Objects[I].Members) if (IsValid(Actor)) Lookup.Add(Actor,I);
+ Supports.SetNum(Objects.Num());Bounds.SetNum(Objects.Num());
+ UpdateLoads();
+}
+void AWarehouseDamageSystem::RemoveLayoutActors(const TArray<AActor*>& Actors)
+{
+ for (int32 I=Objects.Num()-1;I>=0;--I)
+ {
+  auto& Spec=Objects[I];
+  for (int32 J=Spec.Members.Num()-1;J>=0;--J) if (Actors.Contains(Spec.Members[J]))
+  { Spec.Members.RemoveAt(J);if (Spec.PhysicsMeshes.IsValidIndex(J)) Spec.PhysicsMeshes.RemoveAt(J); }
+  if (Spec.Members.IsEmpty())
+  {
+   if (Labels.IsValidIndex(I)) { if (IsValid(Labels[I])) Labels[I]->DestroyComponent();Labels.RemoveAt(I); }
+   Objects.RemoveAt(I);
+  }
+ }
+ for (auto It=PrePhysicsMotion.CreateIterator();It;++It)
+  if (!It.Key().IsValid() || Actors.Contains(It.Key()->GetOwner())) It.RemoveCurrent();
+ RefreshLayoutBindings();
+}
+void AWarehouseDamageSystem::RegisterLayoutProfile(const FWarehouseStrength& Profile)
+{
+ Objects.Add(Profile);Labels.SetNum(Objects.Num());
+ for (AActor* Actor:Profile.Members) if (IsValid(Actor)) RegisterPhysicalContacts(Actor);
+ RefreshLayoutBindings();
+}
+
 void AWarehouseDamageSystem::InitializeStrength()
 {
  Lookup.Reset();
@@ -208,15 +243,20 @@ void AWarehouseDamageSystem::InitializeStrength()
 }
 void AWarehouseDamageSystem::Tick(float Dt)
 {
+ CSV_SCOPED_TIMING_STAT(Warehouse,DamageTick);
  Super::Tick(Dt);
  for (auto& Entry : PrePhysicsMotion) if (auto* Part=Entry.Key.Get()) Entry.Value=ReadMotion(Part);
  AdvanceStrength(Dt);
 }
 void AWarehouseDamageSystem::UpdateLoads()
 {
+ CSV_SCOPED_TIMING_STAT(Warehouse,LoadGraph);
+ CSV_CUSTOM_STAT(Warehouse,LoadGraphBuilds,1,ECsvCustomStatOp::Accumulate);
+ int32 TraceCount=0;
  TArray<int32> Order;
  TArray<TArray<float>> Levels;
  Levels.SetNum(Objects.Num());
+ SupportedChildren.SetNum(Objects.Num());
  for (int32 I=0; I<Objects.Num(); ++I)
  {
   auto& Spec=Objects[I];
@@ -224,6 +264,7 @@ void AWarehouseDamageSystem::UpdateLoads()
   Levels[I].SetNumZeroed(Spec.ShelfHeightsCm.Num());
   Bounds[I]=FBox(ForceInit);
   Supports[I].Reset();
+  SupportedChildren[I].Reset();
   for (AActor* Actor : Spec.Members) if (IsValid(Actor))
   {
    if (auto* Cargo=Cast<AWarehouseCargo>(Actor)) Spec.MassKg=Cargo->GrossMassKg;
@@ -254,6 +295,7 @@ void AWarehouseDamageSystem::UpdateLoads()
   // Start inside the footprint; an open crate can support a box only along its narrow rim.
   auto Sample=[&](float Inset)
   {
+    TraceCount+=9;
    for (float X : {Inset,.5f,1.f-Inset}) for (float Y : {Inset,.5f,1.f-Inset})
    {
     FVector Point(FMath::Lerp(Box.Min.X,Box.Max.X,X),FMath::Lerp(Box.Min.Y,Box.Max.Y,Y),Box.Min.Z+1);
@@ -283,6 +325,11 @@ void AWarehouseDamageSystem::UpdateLoads()
    }
   }
  }
+ // Preserve the previous ascending child iteration order without searching every
+ // profile for each pallet/rack inventory read. Multi-supported loads appear once.
+ for (int32 Child=0;Child<Supports.Num();++Child)
+  for (int32 Parent:Supports[Child]) SupportedChildren[Parent].Add(Child);
+ CSV_CUSTOM_STAT(Warehouse,SupportTraceCount,TraceCount,ECsvCustomStatOp::Accumulate);
 }
 void AWarehouseDamageSystem::AdvanceStrength(float Seconds)
 {
@@ -424,17 +471,23 @@ void AWarehouseDamageSystem::ShowDamage(int32 Index)
 
 TArray<AActor*> AWarehouseDamageSystem::GetSupportedActors(AActor* Object,bool Refresh)
 {
+ CSV_SCOPED_TIMING_STAT(Warehouse,SupportedActors);
+ CSV_CUSTOM_STAT(Warehouse,SupportedActorQueries,1,ECsvCustomStatOp::Accumulate);
  if (!bInitialized) InitializeStrength();
  if (Refresh) UpdateLoads();
+ CSV_SCOPED_TIMING_STAT(Warehouse,SupportTraversal);
  TArray<AActor*> Result;
  TArray<int32> Stack;
  const int32 Root=IndexOf(Object);
  if (Root==INDEX_NONE) return Result;
+ TBitArray<> Seen(false,Objects.Num());
+ Seen[Root]=true;
  Stack.Add(Root);
  for (int32 At=0; At<Stack.Num(); ++At)
-  for (int32 Child=0; Child<Supports.Num(); ++Child)
-   if (!Stack.Contains(Child) && Supports[Child].Contains(Stack[At]))
+  for (int32 Child:SupportedChildren[Stack[At]])
+   if (!Seen[Child])
    {
+    Seen[Child]=true;
     Stack.Add(Child);
     for (AActor* Actor : Objects[Child].Members) if (IsValid(Actor)) Result.Add(Actor);
    }

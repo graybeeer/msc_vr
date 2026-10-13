@@ -16,7 +16,9 @@ public:
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Area", meta=(ClampMin="100")) float ViewDistanceCm=2500.f;
  virtual void BeginPlay() override;
  virtual void Tick(float DeltaSeconds) override;
- bool ReplacesWorkerLabel(FVector Head) const;
+ bool ReplacesWorkerLabel(FVector Head,const FText& WorkerTitle) const;
 private:
+ bool CandidateVisible(const class APlayerController* PC,bool Observer,FVector Eye) const;
+ bool ScreenRect(const class APlayerController* PC,bool Observer,FBox2D& Rect) const;
  UPROPERTY(VisibleAnywhere) TObjectPtr<class UWidgetComponent> AreaLabel;
 };

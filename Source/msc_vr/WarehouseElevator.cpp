@@ -47,6 +47,7 @@ AWarehouseElevator::AWarehouseElevator()
 }
 void AWarehouseElevator::BeginPlay()
 {
+ InitialShaftPosition=GetActorLocation();
  Super::BeginPlay();
  TArray<UStaticMeshComponent*> Parts; GetComponents(Parts);
  UStaticMeshComponent* Anchor=nullptr;

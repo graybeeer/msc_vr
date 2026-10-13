@@ -94,6 +94,7 @@ protected:
 	FVector CarryHands[2] = {FVector::ZeroVector,FVector::ZeroVector};
 	FVector CarryElbows[2] = {FVector::ZeroVector,FVector::ZeroVector};
 	FQuat CarryFacing = FQuat::Identity;
+	float CarryTargetYaw=0.f;
 	FTransform PickupTransform;
 	FTransform LastCarryPose;
 	bool TryPickupObject(AActor* Object);
@@ -101,7 +102,7 @@ protected:
 	bool InitializeCarryMesh();
 	UPROPERTY(Transient) TObjectPtr<AWarehousePallet> PlacementPallet;
 	FTransform PlacementStart, PlacementTarget, PlacementPalletPose;
-	float PlacementLowerTime=-1.f, PlacementLowerStartZ=0.f;
+	float PlacementRotateTime=-1.f, PlacementLowerTime=-1.f, PlacementLowerStartZ=0.f;
 	float PlacementTime = -1.f;
 	float BaseWalkSpeed = 0.f;
 	UPROPERTY(VisibleAnywhere, Category="Carry") TObjectPtr<UPhysicsConstraintComponent> CarryGrip;
@@ -119,6 +120,7 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 	virtual FVector GetVelocity() const override;
 	UFUNCTION(BlueprintPure, Category="Carry") AActor* GetHeldCargo() const { return HeldCargo; }
+	UFUNCTION(BlueprintPure, Category="Carry") bool IsPlacingCargo() const { return PlacementTime>=0.f; }
 	UFUNCTION(BlueprintPure, Category="Human Physics") bool IsPhysicalRagdoll() const { return bPhysicalRagdoll; }
 	FQuat GetCarryTorsoLean() const;
 	virtual void OnStartCrouch(float HeightAdjust, float ScaledHeightAdjust) override;

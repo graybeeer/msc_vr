@@ -9,8 +9,11 @@ class UPointLightComponent;
 class UTextRenderComponent;
 class UStaticMeshComponent;
 class AWarehouseChargingStation;
+class AWarehouseWaitingBay;
 class AWarehouseElevator;
 class UPhysicsConstraintComponent;
+class AWarehouseFleetCoordinator;
+struct FWarehouseNavigationQuery;
 
 UENUM(BlueprintType)
 enum class EWarehouseCycle : uint8 { Idle, Approach, Lift, TravelLower, Reverse, Lower, Withdraw, Complete, ToCharger, Docking, Charging, Returning };
@@ -30,6 +33,7 @@ public:
  UFUNCTION(BlueprintPure, Category="Remote") bool IsRemoteControlled() const { return IsValid(RemoteOperator); }
  UFUNCTION(BlueprintPure, Category="Remote") AActor* GetRemoteOperator() const { return RemoteOperator; }
  UFUNCTION(BlueprintPure, Category="Remote") float GetForkHeightCm() const { return LiftOffset+9.5f; }
+ UFUNCTION(BlueprintPure, Category="Layout") AWarehousePallet* GetSupportedPallet() const { return bSupportingPallet ? TargetPallet.Get() : nullptr; }
  UFUNCTION(BlueprintCallable, Category="Editor") static void RebuildEditedMesh(UStaticMesh* Mesh);
  UFUNCTION(BlueprintCallable, Category="Editor") static void ConfigureForkCollision(UStaticMesh* Mesh);
  UFUNCTION(BlueprintCallable, Category="Editor") static void ConfigureWheelCollision(UStaticMesh* Mesh);
@@ -66,7 +70,12 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") TArray<FString> CompletedJobIds;
  UPROPERTY(BlueprintAssignable, Category="Autonomy") FWarehouseReportEvent OnJobReport;
  UFUNCTION(BlueprintCallable, Category="Autonomy") bool SubmitJob(const FWarehouseWorkOrder& Job);
+ // Floor handoff uses a reserved 120cm square, not a centre-only tolerance.
+ static constexpr float FloorSlotHalfExtentCm = 60.f;
+ UFUNCTION(BlueprintPure, Category="Autonomy") bool IsFloorFootprintValid(AWarehousePallet* Pallet,const FTransform& Reference,bool Refresh=true) const;
+ UFUNCTION(BlueprintPure, Category="Autonomy") bool IsFloorPlacementValid(AWarehousePallet* Pallet,const FTransform& Destination,bool bForksStillInserted=false,bool Refresh=true) const;
  UFUNCTION(BlueprintCallable, Category="Autonomy") bool PlanAutonomousRoute(const FTransform& Goal);
+ UFUNCTION(BlueprintCallable, Category="Layout") void RefreshAfterLayout();
  UFUNCTION(BlueprintPure, Category="Autonomy") FString CheckSystems() const;
 
  UFUNCTION(BlueprintCallable, Category="Strength") void SetMechanicalFailure();
@@ -79,6 +88,22 @@ public:
  UFUNCTION(BlueprintPure, Category="Battery") float GetBatteryEnergyWh() const;
  UFUNCTION(BlueprintPure, Category="Training") float GetLoadMassKg() const;
  UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="Battery") TObjectPtr<AWarehouseChargingStation> ChargingStation;
+ UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="Parking") TObjectPtr<AWarehouseWaitingBay> WaitingBay;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Parking") bool bIdleParkingEnabled=true;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery") bool bOpportunityChargingEnabled=true;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery",meta=(ClampMin="30",ClampMax="100")) float OpportunityChargeBelowPercent=80;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery",meta=(ClampMin="0")) float OpportunityChargeIdleDelaySeconds=10;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Battery|Docking",meta=(ClampMin=".2",ClampMax="2")) float ChargingCaptureDistanceCm=.5f;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Battery|Docking",meta=(ClampMin=".1",ClampMax="1")) float ChargingCaptureHeadingDegrees=.2f;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Battery|Docking",meta=(ClampMin="5",ClampMax="30")) float ChargingDockLateralLimitCm=15;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Battery|Docking",meta=(ClampMin="10",ClampMax="150")) float ChargingLineLookaheadCm=50;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Errors") FName LastErrorCode;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Errors") FString LastErrorMessage;
+ UFUNCTION(BlueprintPure,Category="Autonomy") FString ValidateJobResources(const FWarehouseWorkOrder& Job) const;
+ void SetOperationError(FName Code,const FString& Message);
+ bool TryAcquireCharger();
+ bool IsIdleForLayout() const;
+ UFUNCTION(BlueprintPure,Category="Autonomy") bool CanAcceptNewWork() const;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery", meta=(ClampMin="0", ClampMax="100")) float BatteryPercent = 100;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery", meta=(ClampMin="1")) float BatteryVoltage = 24;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery", meta=(ClampMin="1")) float BatteryCapacityAh = 180;
@@ -110,7 +135,17 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") bool bPowered = false;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") EWarehouseCycle State = EWarehouseCycle::Idle;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Training") FString Status = TEXT("E : START");
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Traffic") bool bTrafficWaiting=false;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Traffic") bool bTrafficYielding=false;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Traffic") FString TrafficStatus;
 private:
+ friend class AWarehouseFleetCoordinator;
+ friend class AWarehouseLayoutEditor;
+ UPROPERTY(Transient) TObjectPtr<AWarehouseFleetCoordinator> FleetCoordinator;
+ bool bPlanningRoute=false,bAvoidTrafficReservations=false,bTrafficEscape=false;
+ bool bEndpointDriving=false,bEndpointOrienting=false,bRouteTurning=false;
+ int32 EndpointSegment=-1;
+ FBox NavigationEnvelope() const;
  // Commands are actuator targets. Telemetry and fork pose always come from Chaos.
  UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> ChassisBody;
  UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> SteeringBody;
@@ -123,7 +158,6 @@ private:
  float DesiredTurnRate=0;
  float DesiredLift=0, LiftMotorTarget=0;
  float SteeringAngle=0;
- float DriveSpinIntegral=0;
  bool bPhysicsReady=false;
  void InitializePhysicalRig();
  void UpdatePhysicalRig(float Dt);
@@ -138,7 +172,7 @@ private:
  bool bRemoteLoadFault=false;
  void AdvanceRemote(float Dt);
  bool RemotePoseClear(const FTransform& Pose);
- bool PhysicalPoseClear(const FTransform& Pose) const;
+ bool PhysicalPoseClear(const FTransform& Pose,bool CheckTranslation=false) const;
  bool PalletClaimedByOther(AWarehousePallet* Pallet) const;
  bool UpdateLoadSupport(float Dt);
  bool BeginFloorTransfer(float TargetZ, EWarehouseAIState Resume);
@@ -152,15 +186,21 @@ private:
  void TransitionAI(EWarehouseAIState Next,const FString& Message);
  void FaultAI(const FString& Reason);
  void ReportJob(const FString& Result,const FString& Detail);
- bool NavigationClear(const FTransform& Pose) const;
- bool ConnectPoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost) const;
+ bool RackLoadAligned() const;
+ FWarehouseNavigationQuery BuildNavigationQuery() const;
+ bool NavigationClear(const FTransform& Pose,const FWarehouseNavigationQuery* Query=nullptr) const;
+ bool ConnectPoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost,const FWarehouseNavigationQuery* Query=nullptr) const;
+ bool ConnectLanePoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost,const FWarehouseNavigationQuery* Query=nullptr) const;
  bool FollowRoute(float Speed,float Dt);
  bool MovePrecise(FVector Destination,float Speed,float Dt);
  bool SeePallet(FTransform& Pose) const;
- bool DestinationClear() const;
+ bool DestinationClear(const TArray<AActor*>* Traffic=nullptr) const;
+ bool WaitForDestinationClear(float Dt);
+ float DestinationTrafficSeconds=0;
  void TrackCargo();
  bool PalletOnForks() const;
  float LostSupportSeconds = 0;
+ float LiftInitialHeight=0,LiftProgressHeight=0,LiftProgressAt=0;
  FTransform PalletApproach(const FTransform& PalletPose,float Distance) const;
  EWarehouseAIState ResumeAI = EWarehouseAIState::Ready;
  EWarehouseAIState WaitResumeAI = EWarehouseAIState::Ready;
@@ -168,6 +208,15 @@ private:
  FTransform ObservedPallet;
  FVector RetractLocation = FVector::ZeroVector;
  FTransform ChargeExitPose;
+ FTransform IdlePose;
+ bool bOpportunityCharge=false;
+ bool bIdleChargeParking=false;
+ double NextResourceCheck=-1;
+ bool AdvanceIdleParking(float Dt);
+ bool PlanIdleParking(bool WaitingForCharge);
+ FTransform DockStablePose;
+ float DockStableSeconds = -1; // Negative until the brake-only settling window starts.
+ bool bDockPullout=false;
  float AIElapsed = 0;
  float AITotalSeconds = 0;
  float WaitSeconds = 0;
@@ -214,7 +263,7 @@ private:
  bool bRouteObstacleClear=true, bTurnObstacleClear=true;
  FString MovementObstacleReason, LiftObstacleReason;
  bool MoveVehicle(FVector Delta);
- bool MoveToLine(FVector Destination, float Speed, float Dt);
+ bool MoveToLine(FVector Destination, float Speed, float Dt, float ArrivalTolerance=1.f);
  bool BeginChargeTrip();
  void ConsumeEnergy(float Wh);
  void RefreshDisplay();
