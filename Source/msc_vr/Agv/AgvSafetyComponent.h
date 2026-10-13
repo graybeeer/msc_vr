@@ -145,6 +145,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
 	bool bApproachMode = false;
 
+	/** In approach: the object being worked on (the pallet to pick up), vehicle frame; its points are not obstacles. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
+	FBox2D ApproachTargetBox = FBox2D(ForceInit);
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
 	float ApproachMarginCm = 10.f;
 

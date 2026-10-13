@@ -195,6 +195,10 @@ void UAgvShadowSensorsComponent::Build()
 	Safety->Footprint = FBox2D(FVector2D(-97.4, -49.7), FVector2D(115.0, 49.7));
 	Safety->ForksFirstMaxSpeedCm = 60.f;
 	Safety->WarningFieldLengthCm = 480.f;
+	// Speed-dependent fields down to creep speed, as safety scanners switch field sets by speed: at 20 cm/s the stop
+	// takes about 8 cm, so a fixed 1 m minimum (the test vehicle's) stopped the forklift at every slow manoeuvre.
+	Safety->MinProtectiveLengthCm = 40.f;
+	Safety->FieldMarginCm = 20.f;
 	Safety->bDrawFields = bDrawFields;
 	Safety->RegisterComponent();
 	bBuilt = true;
@@ -243,6 +247,22 @@ void UAgvShadowSensorsComponent::TickComponent(float DeltaTime, ELevelTick TickT
 		for (const EState State : Approach)
 		{
 			Safety->bApproachMode |= Forklift->AIState == State;
+		}
+		// The pallet being worked on (approach only): its outline in the vehicle frame plus 5 cm.
+		Safety->ApproachTargetBox = FBox2D(ForceInit);
+		if (Safety->bApproachMode && Forklift->TargetPallet)
+		{
+			FVector Center, Extent;
+			Forklift->TargetPallet->GetActorBounds(true, Center, Extent);
+			const FTransform Vehicle = Forklift->GetActorTransform();
+			for (const double SX : { -1.0, 1.0 })
+			{
+				for (const double SY : { -1.0, 1.0 })
+				{
+					Safety->ApproachTargetBox += FVector2D(Vehicle.InverseTransformPosition(Center + FVector(SX * Extent.X, SY * Extent.Y, 0.0)));
+				}
+			}
+			Safety->ApproachTargetBox = Safety->ApproachTargetBox.ExpandBy(5.0);
 		}
 		Safety->LoadBox = FBox2D(ForceInit);
 		if (const AWarehousePallet* Pallet = Forklift->GetSupportedPallet())

@@ -291,7 +291,13 @@ void UAgvSafetyComponent::Evaluate()
 		return Box;
 	};
 	const bool bApproach = FieldSet == TEXT("APPROACH");
-	const FBox2D Protective = Grow(bApproach ? ApproachMarginCm : SideMarginCm);
+	// Approach: a bumper on the sides and the body end; the fork end is muted (the forks are meant to meet the pallet,
+	// rack or charger they are working on), as forklift AGVs mute the fork-side field for insertion.
+	FBox2D Protective = Grow(bApproach ? ApproachMarginCm : SideMarginCm);
+	if (bApproach)
+	{
+		Protective.Max.X = Outline.Max.X;
+	}
 	const FBox2D Warning = bApproach ? FBox2D(ForceInit) : Grow(SideMarginCm + WarningExtraWidthCm);
 	const double ProtectiveReach = bRotating ? ProtectiveRotationDeg : bApproach ? 0.0 : ProtectiveLengthCm;
 	int32 ProtectiveHits = 0, WarningHits = 0;
@@ -308,9 +314,9 @@ void UAgvSafetyComponent::Evaluate()
 		for (const FVector& Point : Points)
 		{
 			const FVector2D Vehicle(Point);
-			if (Outline.IsInside(Vehicle))
+			if (Outline.IsInside(Vehicle) || (bApproach && ApproachTargetBox.bIsValid && ApproachTargetBox.IsInside(Vehicle)))
 			{
-				continue; // the vehicle itself or its load
+				continue; // the vehicle itself, its load, or (approaching) the pallet it is working on
 			}
 			// The two fields are judged separately: the wider warning outline reaches a point one pose earlier than the
 			// protective one, so stopping at the first warning pose would miss the protective field.

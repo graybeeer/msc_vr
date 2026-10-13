@@ -49,7 +49,7 @@ public:
 
 	/** Cargo may stand out over the carried pallet's edges by this much (cm); it is part of the load outline. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Shadow")
-	float LoadOverhangCm = 15.f;
+	float LoadOverhangCm = 5.f;
 
 	/** Draw the safety fields (like the test vehicle) for watching in Play. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Shadow")
