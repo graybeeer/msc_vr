@@ -7,12 +7,7 @@
 #include "Materials/MaterialInterface.h"
 #include "Components/WidgetComponent.h"
 #include "WarehouseWorker.h"
-#include "CollisionQueryParams.h"
-
-void AWarehouseWaitingBay::IgnoreNavigationMarkers(UWorld* World, FCollisionQueryParams& Params)
-{
- for (TActorIterator<AWarehouseWaitingBay> It(World); It; ++It) Params.AddIgnoredActor(*It);
-}
+#include "WarehousePhysics.h"
 
 AWarehouseWaitingBay::AWarehouseWaitingBay()
 {
@@ -24,19 +19,26 @@ AWarehouseWaitingBay::AWarehouseWaitingBay()
  {
   auto* Part=CreateDefaultSubobject<UStaticMeshComponent>(*FString::Printf(TEXT("ParkingLine%d"),I));
   Part->SetupAttachment(RootComponent);Part->SetStaticMesh(Cube.Object);Part->SetMaterial(0,Paint.Object);
-  Part->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-  Part->SetCollisionResponseToAllChannels(ECR_Ignore);Part->SetCollisionResponseToChannel(ECC_Visibility,ECR_Block);
+  Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
  }
  auto* Pick=CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ParkingSelection"));Pick->SetupAttachment(RootComponent);
  Pick->SetStaticMesh(Cube.Object);Pick->SetVisibility(false);Pick->SetCastShadow(false);
- Pick->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Pick->SetCollisionResponseToAllChannels(ECR_Ignore);Pick->SetCollisionResponseToChannel(ECC_Visibility,ECR_Block);
+ WarehousePhysics::ConfigureLayoutSelection(Pick);
  auto* Label=CreateDefaultSubobject<UWidgetComponent>(TEXT("ParkingLabel"));Label->SetupAttachment(RootComponent);
  Label->SetRelativeLocation(FVector(0,0,70));Label->SetWidgetSpace(EWidgetSpace::Screen);Label->SetWidgetClass(UWarehouseRoleWidget::StaticClass());
  Label->SetDrawSize(FVector2D(260,42));Label->SetDrawAtDesiredSize(true);Label->SetCollisionEnabled(ECollisionEnabled::NoCollision);Label->SetWindowFocusable(false);
 }
+void AWarehouseWaitingBay::ConfigureMarkerCollision()
+{
+ TArray<UStaticMeshComponent*> Parts;GetComponents(Parts);
+ for (auto* Part:Parts)
+  if (Part->GetFName()==TEXT("ParkingSelection")) WarehousePhysics::ConfigureLayoutSelection(Part);
+  else Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+}
 void AWarehouseWaitingBay::OnConstruction(const FTransform& Transform)
 {
  Super::OnConstruction(Transform);
+ ConfigureMarkerCollision();
  TArray<UStaticMeshComponent*> Parts;GetComponents(Parts);
  for (int32 I=0;I<Parts.Num();++I)
  {
@@ -51,6 +53,7 @@ void AWarehouseWaitingBay::OnConstruction(const FTransform& Transform)
 void AWarehouseWaitingBay::BeginPlay()
 {
  Super::BeginPlay();
+ ConfigureMarkerCollision(); // Also repair legacy saved prototypes without resaving the warehouse.
  if (auto* Component=GetComponentByClass<UWidgetComponent>())
  {
   Component->InitWidget();if (auto* Widget=Cast<UWarehouseRoleWidget>(Component->GetUserWidgetObject()))

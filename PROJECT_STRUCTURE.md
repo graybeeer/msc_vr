@@ -11,6 +11,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
+| 충돌/비충돌 공통 기준·선택 전용 판·모든 판정의 대상 분류 | `COLLISION_POLICY.md`, `WarehousePhysics.h/.cpp`, `Scripts/verify_collision_policy_pie.py` | `WarehouseWaitingBay`, `WarehouseDamageSystem`, `WarehouseLayoutEditor`, `WarehouseForklift*`, `WarehouseElevator`, `Config/DefaultEngine.ini` |
 | 배치 모드 재배치·추가·삭제·다중 선택·스냅 적재·시설 누락 | `WarehouseLayoutEditor.h/.cpp`, `WarehouseLayoutInventory.h/.cpp`, `WarehouseLayoutSnap.h/.cpp`, `Scripts/verify_layout_inventory_pie.py`, `Scripts/verify_layout_editor_pie.py` | 하단 Slate 도구·렌더링 검사는 `msc_vrPlayerController`, `Scripts/verify_layout_editing_ui_pie.py`, 승강기 개구부는 `WarehouseElevatorLayout`, 슬롯은 `WarehouseInboundZone`, 사용 기준은 `WAREHOUSE.md` |
 | 보류된 물류 FIFO·품목/질량/크기/재질 보존·컴퓨터 데이터 입력/삭제 | `WarehouseLayoutInventory.h/.cpp`, `WarehouseComputer.h/.cpp`, `WarehouseComputerUI.cpp`, `Scripts/verify_layout_inventory_pie.py` | 접촉/손상 참조는 `WarehouseDamageSystem`, 상품 생성 규칙은 `CARGO_RULES.md`, 사용자 조작은 `WAREHOUSE.md` |
 | 공유 충전소·일반 대기 자리·낮은 배터리 우선·기회 충전·작업 선점 | `WarehouseForkliftParking.cpp`, `WarehouseWaitingBay.h/.cpp`, `WarehouseChargingStation.h/.cpp`, `WarehouseFleetCoordinator`, `Scripts/verify_shared_charging_pie.py`, `Scripts/configure_warehouse_waiting_bays.py` | 작업 상태 전환은 `WarehouseForkliftAI`, 운영 정책은 `AUTONOMY.md`, 배터리 수치는 `VNSL14_SPEC.md` |
@@ -84,6 +85,7 @@ msc_vr/
   AGENTS.md
   AUTONOMY.md
   CARGO_RULES.md
+  COLLISION_POLICY.md
   FLEET_ALGORITHM_COMPARISON.md
   MEZZANINE.md
   msc_vr.uproject
@@ -165,6 +167,7 @@ msc_vr/
     verify_cargo_rules.py
     verify_cargo_variety_pie.py
     verify_character_drive_response_pie.py
+    verify_collision_policy_pie.py
     verify_dual_forklifts_remote_pie.py
     verify_dynamic_forklift_transfer_pie.py
     verify_dynamic_warehouse_startup.py

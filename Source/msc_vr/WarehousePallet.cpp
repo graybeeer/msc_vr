@@ -72,6 +72,7 @@ void AWarehousePallet::FitCollisionBounds(UStaticMesh* Mesh)
 
 float AWarehousePallet::GetSupportLiftOffset(const FTransform& Frame) const
 {
+ if (!WarehousePhysics::IsPhysicalContact(Body)) return -1.f;
  // Sweep each full tine against this mesh; point samples miss worn board edges.
  float Contact=FLT_MAX;
  for (float Side : {-1.f,1.f})

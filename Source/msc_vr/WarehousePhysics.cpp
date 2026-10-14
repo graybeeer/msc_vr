@@ -1,7 +1,6 @@
 #include "WarehousePhysics.h"
 #include "WarehouseCargo.h"
 #include "WarehousePallet.h"
-#include "WarehouseWaitingBay.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
@@ -11,11 +10,21 @@
 
 bool WarehousePhysics::IsPhysicalContact(const UPrimitiveComponent* Component)
 {
- return Component && Component->GetCollisionEnabled()!=ECollisionEnabled::NoCollision &&
-  !Cast<AWarehouseWaitingBay>(Component->GetOwner()) &&
+ return Component && Component->IsPhysicsCollisionEnabled() &&
+  Component->GetCollisionObjectType()!=QueryMarkerObject &&
   Component->GetCollisionProfileName()!=TEXT("Trigger") &&
   !Component->IsA<UWidgetComponent>() && !Component->IsA<UTextRenderComponent>() &&
   Component->GetPhysicsBodySetup()!=nullptr;
+}
+
+void WarehousePhysics::ConfigureLayoutSelection(UPrimitiveComponent* Component)
+{
+ if (!Component) return;
+ Component->SetSimulatePhysics(false);
+ Component->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+ Component->SetCollisionObjectType(QueryMarkerObject);
+ Component->SetCollisionResponseToAllChannels(ECR_Ignore);
+ Component->SetCollisionResponseToChannel(LayoutPickChannel,ECR_Block);
 }
 
 EWarehouseSurface WarehousePhysics::SurfaceFor(const UPrimitiveComponent* Component)
