@@ -273,6 +273,7 @@
 - **안전 필드 제어 연결**(`agv.safety 1|0`, `AWarehouseForklift::bUseAgvSafety`, 기본 꺼짐): `AgvTravelSpeedLimit`가 메인 지게차의 경로 추종(`FollowRoute`)·직선 이동(`MoveToLine`) 속도 상한이 된다. 보호 필드에 점이 있으면 `OBSTACLE - AGV SAFETY FIELD`로 정지(메인 지게차의 장애물 대기 상태), 경고 필드는 감속. 위치 추정 상실은 `AGV LOCALIZATION LOST` 고장, 오도메트리 단독은 50 cm/s 제한.
 - **필드가 메인 지게차의 계획 경로를 따름**(`ExternalPathAhead`): 지금 위치에서 다음 제자리 회전·방향 전환까지의 `PlannedRoute`를 10 cm 간격으로 넘긴다. 경로가 꺾이기 전의 기둥은 필드 밖이다. 이 경로 위의 보호 필드에서는 지도의 고정 구조물(기둥·벽·랙) 점을 무시한다(`bPlannedPathIgnoresMappedStructure`, 메인 지게차의 경로 계획이 구조물 여유를 책임진다는 가정). 사람·차량·화물·지도에 없는 물체는 그대로 정지한다. 정지 원인은 `AGV_SHADOW_STOP` 로그(점 위치, 물체 이름, 작업 단계)로 남는다.
 - **제외 대상**: 충전 중 충전기, 하역 중 목적지 칸(`ActiveJob.Destination` ±75 cm), 집으러 가는 대상 팔레트.
+- **랙 작업 중 구조물 뮤팅**(`bApproachIgnoresMappedStructure`, 2026-10-14): 접근 필드(삽입·짐 든 채 빼기·하역·도킹)에서도 지도의 고정 구조물 점을 무시한다. 짐이 랙 기둥 사이를 10 cm보다 가깝게 지나가므로, 이전에는 랙에서 짐을 들고 뒤로 빼다 옆 기둥(`WH_Rack_Left_00_G`, 차 중심에서 63 cm)에 정지했고, 메인 지게차는 짐을 높이 든 상태라 복구하지 못하고 고장(`RECOVERY REQUIRES SAFE FLOOR / LOW LOAD`)으로 끝났다. 사람·차량·화물은 그대로 정지한다.
 - **안전 필드 추가 기능**: 실은 짐(`LoadBox`)을 외곽에 포함하고 장애물에서 제외, 접근 단계(`bApproachMode`: 접근·삽입·하역·도킹·승강기 탑승 등 메인 지게차 작업 단계로 판단)는 측면·본체 끝만 10 cm 범퍼(포크 쪽 뮤팅), 작업 대상 팔레트(`ApproachTargetBox`) 제외, 30 cm/s 제한. 그림자 키트는 저속에서 필드가 작아지도록 최소 보호 길이 40 cm, 여유 20 cm(시험 차량은 기존 100 cm, 50 cm 유지).
 
 검증(NullRHI PIE 60 Hz, 저장 창고, 메인 지게차 2대가 `Scripts/verify_fleet_workflow_pie.py`의 입고 2·도크 출고·랙 출고를 수행, 경로만 이 PC로 바꾼 사본):

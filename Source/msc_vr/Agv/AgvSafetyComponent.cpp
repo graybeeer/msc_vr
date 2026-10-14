@@ -356,7 +356,8 @@ void UAgvSafetyComponent::Evaluate()
 					break;
 				}
 			}
-			if (bInProtective && bMapFilter && bPlannedPathIgnoresMappedStructure && !Navigator && ExternalPathAhead.Num() > 0
+			if (bInProtective && bMapFilter
+				&& (bPlannedPathIgnoresMappedStructure && !Navigator && ExternalPathAhead.Num() > 0 || bApproachIgnoresMappedStructure && bApproach)
 				&& Localizer->IsMappedStructure(Origin + AgvMath::Rotate(Yaw, Vehicle), MappedStructureToleranceCm))
 			{
 				bInProtective = bInWarning = false;

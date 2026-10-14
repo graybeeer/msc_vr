@@ -162,6 +162,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
 	bool bPlannedPathIgnoresMappedStructure = false;
 
+	/**
+	 * In the approach field set (forks into a rack slot, withdrawing a pallet from it, docking), the bumper also leaves
+	 * out points on the mapped permanent structure: the load passes between rack uprights with a few centimetres to
+	 * spare, closer than ApproachMarginCm, and the task aligns to the slot itself. People, vehicles and cargo still stop.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
+	bool bApproachIgnoresMappedStructure = false;
+
 	/** The object being worked on (pallet to pick up, slot to unload into, charger), vehicle frame; its points are not
 	 * obstacles. Set by the vehicle's task while the job has a target, not only in approach. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")

@@ -233,6 +233,7 @@ void UAgvShadowSensorsComponent::Build()
 	// The forklift's planner clears its route against the exact geometry; fixed structure along it is shaped out of
 	// the protective field (people, vehicles and cargo still stop it).
 	Safety->bPlannedPathIgnoresMappedStructure = true;
+	Safety->bApproachIgnoresMappedStructure = true;
 	Safety->RegisterComponent();
 	bBuilt = true;
 	UE_LOG(LogAgvShadow, Log, TEXT("AGV_SHADOW %s: sensors, localizer and safety attached (measure only)"), *Owner->GetName());
