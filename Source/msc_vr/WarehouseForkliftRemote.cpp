@@ -1,5 +1,5 @@
 #include "WarehouseForklift.h"
-#include "WarehouseWaitingBay.h"
+#include "WarehousePhysics.h"
 #include "WarehouseFleetCoordinator.h"
 #include "WarehousePallet.h"
 #include "WarehouseDamageSystem.h"
@@ -24,7 +24,7 @@ namespace
 bool WheelBearingOnCoplanarFloor(UWorld* World,const AActor* Vehicle,UStaticMeshComponent* Wheel,
  UPrimitiveComponent* Surface,const FTransform& Candidate,const TArray<AActor*>& Loads)
 {
- if (!Surface || Surface->IsSimulatingPhysics() || !Surface->IsQueryCollisionEnabled() ||
+ if (!WarehousePhysics::IsPhysicalContact(Wheel) || !WarehousePhysics::IsPhysicalContact(Surface) || Surface->IsSimulatingPhysics() || !Surface->IsQueryCollisionEnabled() ||
      Surface->GetCollisionResponseToChannel(ECC_Visibility)!=ECR_Block) return false;
  const auto* Body=Wheel->GetBodyInstance();
  if (!Body || !Body->IsValidBodyInstance()) return false;
@@ -41,7 +41,6 @@ bool WheelBearingOnCoplanarFloor(UWorld* World,const AActor* Vehicle,UStaticMesh
      Tread.ImpactNormal.Z>=-.98f) return false;
  const FVector Contact=Candidate.TransformPosition(Wheel->GetComponentTransform().InverseTransformPosition(Tread.ImpactPoint));
  FCollisionQueryParams Query(SCENE_QUERY_STAT(TurningTyreSupport),false,Vehicle);
- AWarehouseWaitingBay::IgnoreNavigationMarkers(World,Query);
  Query.AddIgnoredActors(Loads);
  const FVector Start=Bounds.GetCenter(),End(Start.X,Start.Y,Bounds.Min.Z-5.f);
  FHitResult Below;
@@ -62,6 +61,12 @@ bool WheelBearingOnCoplanarFloor(UWorld* World,const AActor* Vehicle,UStaticMesh
  return Surface->LineTraceComponent(Bearing,Point+FVector(0,0,2),Point-FVector(0,0,2),Query) &&
   Bearing.ImpactNormal.Z>.98f && FMath::Abs(Bearing.ImpactPoint.Z-Below.ImpactPoint.Z)<.5f;
 }
+}
+
+bool AWarehouseForklift::WheelBearingOnFloor(UStaticMeshComponent* Wheel,UPrimitiveComponent* Surface,
+ const FTransform& Candidate,const TArray<AActor*>& Ignored) const
+{
+ return WheelBearingOnCoplanarFloor(GetWorld(),this,Wheel,Surface,Candidate,Ignored);
 }
 
 void AWarehouseForklift::BeginPlay()
@@ -164,7 +169,6 @@ bool AWarehouseForklift::RemotePoseClear(const FTransform& Pose)
 bool AWarehouseForklift::PhysicalPoseClear(const FTransform& Pose,bool CheckTranslation) const
 {
  FCollisionQueryParams FloorParams(SCENE_QUERY_STAT(RemoteFloor),false,this);
- AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),FloorParams);
  FloorParams.AddIgnoredActors(GetPhysicalLoads());
  FHitResult Ground;
  const FVector P=Pose.GetLocation();
@@ -174,7 +178,6 @@ bool AWarehouseForklift::PhysicalPoseClear(const FTransform& Pose,bool CheckTran
  // cannot distinguish bearing contact from a jam on a continuously dynamic load.
  if (!CheckTranslation && Pose.GetRotation().Equals(GetActorQuat(),1.e-5f)) return true;
  FComponentQueryParams Params(SCENE_QUERY_STAT(RemoteTurn),this);
- AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
  Params.AddIgnoredComponent(Ground.GetComponent());
  const TArray<AActor*> Loads=GetPhysicalLoads();
  Params.AddIgnoredActors(Loads);
@@ -185,7 +188,7 @@ bool AWarehouseForklift::PhysicalPoseClear(const FTransform& Pose,bool CheckTran
  }
  for (auto* Part : Parts)
  {
-  if (!Part->IsQueryCollisionEnabled() || Part->BodyInstance.WeldParent) continue;
+  if (!WarehousePhysics::IsPhysicalContact(Part) || !Part->IsQueryCollisionEnabled() || Part->BodyInstance.WeldParent) continue;
   const FTransform Candidate=Part->GetComponentTransform().GetRelativeTransform(GetActorTransform())*Pose;
   TArray<FOverlapResult> Hits;
   GetWorld()->ComponentOverlapMultiByChannel(Hits,Part,Candidate.GetLocation(),Candidate.GetRotation(),Part->GetCollisionObjectType(),Params);
@@ -252,7 +255,6 @@ void AWarehouseForklift::AdvanceRemote(float Dt)
   if (RemoteLift<0 && bSupportingPallet)
   {
    FCollisionQueryParams SupportParams(SCENE_QUERY_STAT(RemoteUnload),false,this);
-   AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),SupportParams);
    SupportParams.AddIgnoredActors(GetPhysicalLoads());
    FHitResult Floor;
    const FVector Base=TargetPallet->GetActorLocation();

@@ -184,6 +184,8 @@ private:
  void AdvanceRemote(float Dt);
  bool RemotePoseClear(const FTransform& Pose);
  bool PhysicalPoseClear(const FTransform& Pose,bool CheckTranslation=false) const;
+ bool WheelBearingOnFloor(UStaticMeshComponent* Wheel,UPrimitiveComponent* Surface,
+  const FTransform& Candidate,const TArray<AActor*>& Ignored) const;
  bool PalletClaimedByOther(AWarehousePallet* Pallet) const;
  bool UpdateLoadSupport(float Dt);
  bool BeginFloorTransfer(float TargetZ, EWarehouseAIState Resume);

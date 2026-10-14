@@ -49,6 +49,12 @@ selection_camera = actors.spawn_actor_from_class(unreal.CameraActor, unreal.Vect
 selection_camera.set_actor_label('LayoutSelectionTestCamera')
 selection_camera.get_component_by_class(unreal.CameraComponent).set_editor_property('field_of_view', 60.)
 selection_camera.get_component_by_class(unreal.CameraComponent).set_editor_property('constrain_aspect_ratio', False)
+step_fixture = actors.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector(-30000, -30000, -2000))
+step_fixture.set_actor_label('LayoutWheelStepFixture')
+step_fixture.static_mesh_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Cube'))
+step_fixture.static_mesh_component.set_mobility(unreal.ComponentMobility.MOVABLE)
+step_fixture.static_mesh_component.set_collision_profile_name('BlockAll')
+step_fixture.set_actor_scale3d(unreal.Vector(.2, .2, .05))  # A real 20x20x5cm solid step, not a floor-name exception.
 
 started = time.monotonic()
 phase = 0
@@ -194,6 +200,89 @@ def find_accepted(actor, point, snapshot, candidates):
 
 def rollback_committed(actor, point, delta):
     assert drag(actor, point + delta, -delta, True), ('Cannot return committed object to the original clear layout', str(layout.get_editor_property('status')))
+
+
+def wheel_floor_checks():
+    # A rolling round tyre keeps its contact geometry, but its render bounds
+    # grow below the floor at intermediate axle angles. Exercise both saved rigs.
+    layout.set_category(unreal.WarehouseLayoutCategory.FORKLIFT)
+    step = next(a for a in live if a.get_actor_label() == 'LayoutWheelStepFixture')
+    for vehicle in [a for a in live if isinstance(a, unreal.WarehouseForklift)]:
+        original = capture([vehicle])
+        wheels = [p for p in vehicle.get_components_by_class(unreal.StaticMeshComponent)
+                  if p.get_name() in ('DriveWheel', 'LoadWheelL', 'LoadWheelR')]
+        assert len(wheels) == 3
+        point = vehicle.get_actor_location()
+        for angle in (0, 30, 45, 60, 135):
+            spin = unreal.MathLibrary.rotator_from_axis_and_angle(vehicle.get_actor_right_vector(), angle)
+            for wheel in wheels:
+                saved = original[vehicle]['components'][wheel.get_name()]['pose']
+                wheel.set_world_rotation(unreal.MathLibrary.compose_rotators(saved.rotation.rotator(), spin), False, True)
+            state = capture([vehicle])
+            print('LAYOUT_WHEEL_CONTACT_FIXTURE', vehicle.get_actor_label(), angle,
+                  [(w.get_name(), unreal.SystemLibrary.get_component_bounds(w)[0].z -
+                    unreal.SystemLibrary.get_component_bounds(w)[1].z) for w in wheels])
+            assert drag(vehicle, point, unreal.Vector(), True), ('Valid rolling wheel rejected at its current floor pose',
+                vehicle.get_actor_label(), angle, str(layout.get_editor_property('status')))
+            translated(state, unreal.Vector())
+            restored(state)
+            delta = find_accepted(vehicle, point, state, [(0, 30), (0, -30), (-50, 0), (50, 0)])
+            rollback_committed(vehicle, point, delta)
+            restored(state)
+
+        # Supporting contact must not turn into a blanket floor/obstacle ignore.
+        wheel = next(w for w in wheels if w.get_name() == 'LoadWheelR')
+        wheel_centre = unreal.SystemLibrary.get_component_bounds(wheel)[0]
+        step.set_actor_location(unreal.Vector(wheel_centre.x, wheel_centre.y, point.z + 2.5), False, True)
+        assert not drag(vehicle, point, unreal.Vector(), True), 'Wheel was allowed through a raised solid step'
+        assert '겹침' in str(layout.get_editor_property('status'))
+        translated(state, unreal.Vector())
+        restored(state)
+        step.set_actor_location(unreal.Vector(-30000, -30000, -2000), False, True)
+
+        # Lower only the free axle bodies by 1cm as a penetration fixture. Moving
+        # welded children separately would also move their parent a second time.
+        down = unreal.Vector(0, 0, -1)
+        for wheel in wheels:
+            pose = state[vehicle]['components'][wheel.get_name()]['pose'].copy()
+            pose.translation += down
+            wheel.set_world_transform(pose, False, True)
+        penetrating = capture([vehicle])
+        assert not drag(vehicle, vehicle.get_actor_location(), unreal.Vector(), True), 'Wheel penetration into the actual floor was ignored'
+        assert '겹침' in str(layout.get_editor_property('status'))
+        translated(penetrating, unreal.Vector())
+        restored(penetrating)
+        for wheel in wheels:
+            wheel.set_world_transform(state[vehicle]['components'][wheel.get_name()]['pose'], False, True)
+
+        assert not drag(vehicle, point, unreal.Vector(30000, 30000, 0), True), 'Vehicle accepted unsupported floor'
+        translated(state, unreal.Vector())
+        restored(state)
+        wall = next(a for a in live if a.get_actor_label().startswith('WH_Wall_') and a.get_actor_enable_collision()
+                    and a.get_actor_bounds(False)[1].z > 100)
+        chassis = vehicle.root_component
+        shift = wall.get_actor_bounds(False)[0] - unreal.SystemLibrary.get_component_bounds(chassis)[0]
+        shift.z = 0
+        assert not drag(vehicle, point, shift, True), 'Vehicle was allowed through a real warehouse wall'
+        assert '겹침' in str(layout.get_editor_property('status'))
+        translated(state, unreal.Vector())
+        restored(state)
+        station = vehicle.get_editor_property('charging_station')
+        if station and station.is_docked(vehicle):
+            layout.set_category(unreal.WarehouseLayoutCategory.CHARGER)
+            paired = capture([station, vehicle])
+            dock_point = station.get_actor_location()
+            delta = find_accepted(station, dock_point, paired, [(30, 0), (-30, 0), (0, 30), (0, -30)])
+            rollback_committed(station, dock_point, delta)
+            translated(paired, unreal.Vector())
+            restored(paired)
+            layout.set_category(unreal.WarehouseLayoutCategory.FORKLIFT)
+        for wheel in wheels:
+            wheel.set_world_transform(original[vehicle]['components'][wheel.get_name()]['pose'], False, True)
+        translated(original, unreal.Vector())
+        restored(original)
+    layout.clear_selection()
+    print('LAYOUT_ROLLING_WHEEL_FLOOR_CONTACT_PASSED', '2 saved rigs; 5 axle angles; move/return; step/wall/1cm penetration/unsupported floor rejected; collision/mass/joints retained')
 
 
 def charger_checks():
@@ -557,6 +646,10 @@ def tick(dt):
             others = capture([a for a in live if 'WarehouseFloor1' in tag_values(a) or 'WarehouseFloor2' in tag_values(a)])
             layout.set_editing(True, 0)
             assert unreal.GameplayStatics.is_game_paused(game)
+            wheel_floor_checks()
+            if '-LayoutWheelContactOnly' in unreal.SystemLibrary.get_command_line():
+                finish(True, 'Saved rolling-wheel floor contact transactions')
+                return
             layout.set_category(unreal.WarehouseLayoutCategory.RACK)
             point = selected.get_actor_location()
             assert layout.begin_drag(selected, point)

@@ -3,7 +3,6 @@
 #include "GameFramework/Actor.h"
 #include "WarehouseWaitingBay.generated.h"
 class AWarehouseForklift;
-struct FCollisionQueryParams;
 
 /** A parking pose with no electrical charging equipment. */
 UCLASS()
@@ -12,8 +11,6 @@ class MSC_VR_API AWarehouseWaitingBay : public AActor
  GENERATED_BODY()
 public:
  AWarehouseWaitingBay();
- // Keep layout picking enabled without treating paint/selection slabs as obstacles or floor.
- static void IgnoreNavigationMarkers(UWorld* World, FCollisionQueryParams& Params);
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Parking") FString BayName=TEXT("일반 대기 자리");
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Parking") FVector2D SizeCm=FVector2D(250,160);
  // Parking marks allow modest alignment error; electrical docks stay stricter.
@@ -25,4 +22,6 @@ public:
  bool IsParked(const AWarehouseForklift* Vehicle) const;
  virtual void OnConstruction(const FTransform& Transform) override;
  virtual void BeginPlay() override;
+private:
+ void ConfigureMarkerCollision();
 };

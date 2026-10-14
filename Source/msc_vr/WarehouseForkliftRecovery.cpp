@@ -1,5 +1,4 @@
 #include "WarehouseForklift.h"
-#include "WarehouseWaitingBay.h"
 #include "WarehousePallet.h"
 #include "WarehouseChargingStation.h"
 #include "WarehouseFleetCoordinator.h"
@@ -216,7 +215,6 @@ void AWarehouseForklift::AdvanceRecovery(float Dt)
    FHitResult Ground;
    const FVector Preview=GetActorLocation()+Forward*RecoveryDirection*35.f*Dt;
    FCollisionQueryParams Params(SCENE_QUERY_STAT(RecoveryFloor),false,this);
-   AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
    if (!GetWorld()->LineTraceSingleByChannel(Ground,Preview+FVector(0,0,3),Preview-FVector(0,0,5),ECC_Visibility,Params) || Ground.ImpactNormal.Z<.98f)
    { RecoveryFault(TEXT("RECOVERY FLOOR UNSUPPORTED"),TEXT("탈출 방향에 안전한 바닥이 없습니다.")); return; }
    if (CommandDrive(RecoveryDirection*FMath::Min(35.f,Remaining*2.f),0,Dt) && Status.StartsWith(TEXT("RECOVERY BLOCKED:")))

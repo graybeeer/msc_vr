@@ -54,7 +54,7 @@ void AWarehouseElevator::BeginPlay()
  for (auto* Part : Parts)
  {
   if (Part->GetName().StartsWith(TEXT("Column_")) && !Anchor) Anchor=Part;
-  if (Part->IsCollisionEnabled()) WarehousePhysics::ConfigureContact(Part,EWarehouseSurface::Steel);
+  if (WarehousePhysics::IsPhysicalContact(Part)) WarehousePhysics::ConfigureContact(Part,EWarehouseSurface::Steel);
  }
  if (!Anchor) return;
  GuideAnchor=Anchor;
@@ -137,8 +137,8 @@ void AWarehouseElevator::SetState(EWarehouseElevatorState Next,const TCHAR* Mess
 bool AWarehouseElevator::PortalClear() const
 {
  FCollisionQueryParams Params(SCENE_QUERY_STAT(LiftLightCurtain),false,this);
- return !GetWorld()->OverlapAnyTestByObjectType(
-  GetActorTransform().TransformPosition(FVector(-205,0,CurrentFloor*400+135)),GetActorQuat(),FCollisionObjectQueryParams(FCollisionObjectQueryParams::AllObjects),
+ return !GetWorld()->OverlapBlockingTestByChannel(
+  GetActorTransform().TransformPosition(FVector(-205,0,CurrentFloor*400+135)),GetActorQuat(),ECC_Visibility,
   FCollisionShape::MakeBox(FVector(15,119,134)),Params);
 }
 bool AWarehouseElevator::CabinClear() const
@@ -149,8 +149,8 @@ bool AWarehouseElevator::CabinClear() const
   Params.AddIgnoredActor(ReservedVehicle);
   Params.AddIgnoredActors(ReservedVehicle->GetPhysicalLoads());
  }
- return !GetWorld()->OverlapAnyTestByObjectType(
-  GetActorTransform().TransformPosition(FVector(0,0,PlatformHeight+136)),GetActorQuat(),FCollisionObjectQueryParams(FCollisionObjectQueryParams::AllObjects),
+ return !GetWorld()->OverlapBlockingTestByChannel(
+  GetActorTransform().TransformPosition(FVector(0,0,PlatformHeight+136)),GetActorQuat(),ECC_Visibility,
   FCollisionShape::MakeBox(FVector(173,118,134)),Params);
 }
 bool AWarehouseElevator::FitsInside(AWarehouseForklift* Vehicle) const
@@ -160,7 +160,7 @@ bool AWarehouseElevator::FitsInside(AWarehouseForklift* Vehicle) const
  for (AActor* Body : Bodies)
  {
   TArray<UStaticMeshComponent*> Parts; Body->GetComponents(Parts);
-  for (auto* Part : Parts) if (Part->IsCollisionEnabled())
+  for (auto* Part : Parts) if (WarehousePhysics::IsPhysicalContact(Part))
   {
    FTransform Pose=Part->GetComponentTransform();
    // A rotated wheel's render AABB extends below the tyre (up to sqrt(2)*radius).
@@ -255,7 +255,7 @@ bool AWarehouseElevator::MovePlatform(int32 Floor,float Dt)
  }
  TArray<FHitResult> Hits;
  const FVector Start=Platform->GetComponentLocation(),Delta(0,0,Next-PlatformHeight);
- GetWorld()->SweepMultiByObjectType(Hits,Start,Start+Delta,GetActorQuat(),FCollisionObjectQueryParams(FCollisionObjectQueryParams::AllObjects),FCollisionShape::MakeBox(FVector(174.5,119.5,4.9)),Params);
+ GetWorld()->SweepMultiByChannel(Hits,Start,Start+Delta,GetActorQuat(),ECC_Visibility,FCollisionShape::MakeBox(FVector(174.5,119.5,4.9)),Params);
  for (const auto& Hit : Hits)
   if (Hit.bBlockingHit && FVector::DotProduct(Delta,Hit.Normal)<-.001f)
   { Status=TEXT("PLATFORM PATH OBSTRUCTED"); return false; }

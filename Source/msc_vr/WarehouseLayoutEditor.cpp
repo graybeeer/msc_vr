@@ -457,7 +457,8 @@ bool AWarehouseLayoutEditor::DeleteSelection()
 bool AWarehouseLayoutEditor::PlacementClear()
 {
  FComponentQueryParams Params(SCENE_QUERY_STAT(LayoutPlacement));
- for (auto& A:Moving) if (A.Actor.IsValid()) Params.AddIgnoredActor(A.Actor.Get());
+ TArray<AActor*> Ignored;
+ for (auto& A:Moving) if (A.Actor.IsValid()) { Params.AddIgnoredActor(A.Actor.Get());Ignored.Add(A.Actor.Get()); }
  for (auto& A:Moving) if (A.Actor.IsValid()) A.Actor->SetActorEnableCollision(A.Collision);
  for (const auto& M:Moving) if (auto* Bay=Cast<AWarehouseWaitingBay>(M.Actor.Get()))
  {
@@ -482,7 +483,13 @@ bool AWarehouseLayoutEditor::PlacementClear()
    if (Depth.X<=.05 || Depth.Y<=.05 || Depth.Z<=.05) continue;
    // Contact with the supporting floor is valid; penetration into its side or
    // into an upper deck is not. Other geometry uses native component shapes.
-   if (Own.Min.Z>=Other.Max.Z-2.f && O.GetComponent()->GetUpVector().Z>.95f) continue;
+   // A spun tyre's render bounds extend below its actual round tread. Reuse
+   // the native tyre/surface test; never exempt a wheel just by its bounds.
+   if (auto* Vehicle=Cast<AWarehouseForklift>(A.Actor.Get());Vehicle && Vehicle->Wheels.Contains(Cast<UStaticMeshComponent>(C)))
+   {
+    if (Vehicle->WheelBearingOnFloor(Cast<UStaticMeshComponent>(C),O.GetComponent(),C->GetComponentTransform(),Ignored)) continue;
+   }
+   else if (Own.Min.Z>=Other.Max.Z-2.f && O.GetComponent()->GetUpVector().Z>.95f) continue;
    Status=FString::Printf(TEXT("다른 물체와 겹침: %s / %s → %s. 원래 위치로 되돌렸습니다."),*A.Actor->GetActorNameOrLabel(),*C->GetName(),*O.GetActor()->GetActorNameOrLabel());return false;
   }
  }
@@ -667,7 +674,7 @@ void AWarehouseLayoutEditor::PointerDown(APlayerController* PC,FVector2D Viewpor
  FHitResult Hit;FCollisionQueryParams Params(SCENE_QUERY_STAT(LayoutPick),true);
  for (AActor* Hidden:PC->HiddenActors) if (Hidden) Params.AddIgnoredActor(Hidden);
  Params.AddIgnoredActor(PC->GetPawn());
- GetWorld()->LineTraceSingleByChannel(Hit,Origin,Origin+Direction*30000,ECC_Visibility,Params);
+ GetWorld()->LineTraceSingleByChannel(Hit,Origin,Origin+Direction*30000,WarehousePhysics::LayoutPickChannel,Params);
  if (Action==EWarehouseLayoutAction::Add)
  { if (BeginAdd(Point)) UpdateSurfaceDrag(Point,Hit.GetActor(),Hit.ImpactPoint);return; }
  AActor* Candidate=SelectionActor(Hit.GetActor());

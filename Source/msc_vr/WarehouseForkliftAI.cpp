@@ -158,7 +158,7 @@ FBox AWarehouseForklift::NavigationEnvelope() const
   for (AActor* Load : Loads) if (IsValid(Load))
   {
    TArray<UStaticMeshComponent*> Parts;Load->GetComponents(Parts);
-   for (auto* Part : Parts) if (Part->IsCollisionEnabled() && Part->GetStaticMesh())
+   for (auto* Part : Parts) if (WarehousePhysics::IsPhysicalContact(Part) && Part->GetStaticMesh())
    {
     // Transform mesh-local bounds directly into the vehicle frame. Inverting
     // a world AABB inflated a 110cm square to ~220cm during a 45-degree turn.
@@ -175,7 +175,6 @@ FWarehouseNavigationQuery AWarehouseForklift::BuildNavigationQuery() const
  Query.bInsertionRetryEscape=bPlanningRoute && bRetryInsertion && ForkInsertionRetries>0 && AIState==EWarehouseAIState::AlignVehicle && !bSupportingPallet;
  auto& Params=Query.Params;
  Query.bGeometryFirst=bPlanningRoute && CVarWarehouseGeometryPruning.GetValueOnGameThread()!=0;
- AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
  if (bSupportingPallet && IsValid(TargetPallet)) Params.AddIgnoredActor(TargetPallet);
  for (AActor* Load : CarriedCargo) if (IsValid(Load)) Params.AddIgnoredActor(Load);
  // The central passage lease, rather than a frozen planning snapshot, schedules
@@ -663,7 +662,6 @@ bool AWarehouseForklift::SeePallet(FTransform& Pose) const
  const FVector Delta=TargetPallet->GetActorLocation()-GetActorLocation();
  if (Delta.Size()>PalletDetectionRangeCm || FVector::DotProduct(Delta.GetSafeNormal2D(),GetActorForwardVector())<.5f) return false;
  FCollisionQueryParams Params(SCENE_QUERY_STAT(PalletCamera),true,this);
- AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
  const FVector Origin=GetActorLocation()+GetActorForwardVector()*10+FVector(0,0,90);
  bool Seen=false;
  for (float Y : {-40.f,0.f,40.f})
@@ -733,10 +731,8 @@ bool AWarehouseForklift::IsFloorPlacementValid(AWarehousePallet* Pallet,const FT
  if (!Bounds.IsValid || FMath::Abs(Bounds.Min.Z-Destination.GetLocation().Z)>.5f ||
      FMath::Abs(Pallet->GetActorRotation().Pitch)>2.f || FMath::Abs(Pallet->GetActorRotation().Roll)>2.f) return false;
  FCollisionQueryParams FloorParams(SCENE_QUERY_STAT(FloorHandoffSupport),false);
- AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),FloorParams);
  FloorParams.AddIgnoredActors(Loads);FloorParams.AddIgnoredActor(this);
  FComponentQueryParams ContactParams(SCENE_QUERY_STAT(FloorHandoffContact));
- AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),ContactParams);
  ContactParams.AddIgnoredActors(Loads);
  if (bForksStillInserted) ContactParams.AddIgnoredActor(this);
  for (float X : {-40.f,40.f}) for (float Y : {-40.f,40.f})
@@ -777,7 +773,6 @@ bool AWarehouseForklift::DestinationClear(const TArray<AActor*>* Traffic) const
  const FTransform& Pose=ActiveJob.Destination;
  const bool Floor=FMath::Abs(Pose.GetLocation().Z-FloorBase(Pose.GetLocation().Z))<=5.f;
  FCollisionQueryParams Params(SCENE_QUERY_STAT(DropReservation),false,this);
- AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
  if (Traffic) Params.AddIgnoredActors(*Traffic);
  if (IsValid(TargetPallet)) Params.AddIgnoredActor(TargetPallet);
  for (AActor* Cargo : CarriedCargo) if (IsValid(Cargo)) Params.AddIgnoredActor(Cargo);
@@ -1009,7 +1004,6 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    const FBox Bounds=AWarehouseDamageSystem::GetPhysicalBounds(TargetPallet);
    SourceGroundContact=Bounds.IsValid && FMath::Abs(Bounds.Min.Z-SourceFloor)<=.5f;
    FCollisionQueryParams Params(SCENE_QUERY_STAT(PalletSourceFloorContact),false,this);
-   AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
    Params.AddIgnoredActor(TargetPallet);
    for (float X : {-40.f,40.f}) for (float Y : {-40.f,40.f}) if (SourceGroundContact)
    {
@@ -1252,7 +1246,6 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    {
     FHitResult Shelf;
     FCollisionQueryParams Params(SCENE_QUERY_STAT(RackLoadHandoff),false,this);
-    AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
     Params.AddIgnoredActor(TargetPallet);
     for (const auto& Cargo : CarriedCargo) if (IsValid(Cargo)) Params.AddIgnoredActor(Cargo.Get());
     const FVector Probe=ActiveJob.Destination.TransformPosition(FVector(40,40,0));
@@ -1309,7 +1302,6 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    bPlaced &= RackLoadAligned();
    FHitResult Shelf;
    FCollisionQueryParams Params(SCENE_QUERY_STAT(UnloadedRackSupport),false,this);
-   AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
    Params.AddIgnoredActor(TargetPallet);
    for (const auto& Cargo : CarriedCargo) if (IsValid(Cargo)) Params.AddIgnoredActor(Cargo.Get());
    const FVector Probe=ActiveJob.Destination.TransformPosition(FVector(40,40,0));

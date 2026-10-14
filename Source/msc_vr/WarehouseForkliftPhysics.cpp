@@ -54,7 +54,7 @@ void AWarehouseForklift::InitializePhysicalRig()
 
  for (auto* Part : Parts)
  {
-  if (!Part->IsCollisionEnabled()) continue;
+  if (!WarehousePhysics::IsPhysicalContact(Part)) continue;
   WarehousePhysics::ConfigureContact(Part,Part->GetName().Contains(TEXT("Wheel")) ? EWarehouseSurface::Rubber : EWarehouseSurface::Steel);
   float Mass=0;
   const FString Name=Part->GetName();
@@ -76,7 +76,7 @@ void AWarehouseForklift::InitializePhysicalRig()
  // Fixed equipment is welded, while lift and axle joints remain separate bodies.
  for (auto* Part : Parts)
  {
-  if (Part==ChassisBody || Part==SteeringBody || Part==CarriageBody || Part==LiftStage || Wheels.Contains(Part) || !Part->IsCollisionEnabled()) continue;
+  if (Part==ChassisBody || Part==SteeringBody || Part==CarriageBody || Part==LiftStage || Wheels.Contains(Part) || !WarehousePhysics::IsPhysicalContact(Part)) continue;
   UStaticMeshComponent* Parent=ChassisBody;
   if (Part->GetName().StartsWith(TEXT("Fork"))) Parent=CarriageBody;
   else if (Part->GetName()==TEXT("LiftRam") || Part->GetName()==TEXT("LiftPulley")) Parent=LiftStage;

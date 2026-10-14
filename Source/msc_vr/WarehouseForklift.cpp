@@ -1,4 +1,5 @@
 #include "WarehouseForklift.h"
+#include "WarehousePhysics.h"
 #include "WarehousePerformance.h"
 #include "WarehouseFleetCoordinator.h"
 #include "WarehousePallet.h"
@@ -297,7 +298,7 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
  if (!bUseAgvSafety) GetWorld()->SweepMultiByObjectType(PeopleHits,SafetyCenter,SafetyEnd,GetActorQuat(),People,FCollisionShape::MakeBox(FVector(110,75,110)),SafetyParams);
  // With the AGV module's safety fields (agv.safety) the LiDAR fields detect people; this engine query knows a Pawn is a
  // person, which a real scanner cannot. The contact sweeps below stay (bumper / fork-tip contact).
- if (!bUseAgvSafety && PeopleHits.ContainsByPredicate([](const FHitResult& Hit) { return Hit.GetActor() && (Hit.GetActor()->ActorHasTag(TEXT("WarehousePhysicalHuman")) || Hit.GetComponent()->GetCollisionObjectType()==ECC_Pawn); }))
+ if (!bUseAgvSafety && PeopleHits.ContainsByPredicate([](const FHitResult& Hit) { return WarehousePhysics::IsPhysicalContact(Hit.GetComponent()) && Hit.GetActor() && (Hit.GetActor()->ActorHasTag(TEXT("WarehousePhysicalHuman")) || Hit.GetComponent()->GetCollisionObjectType()==ECC_Pawn); }))
  {
   return Blocked(TEXT("PERSON IN SAFETY ZONE"));
  }
@@ -316,12 +317,11 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
   TArray<UStaticMeshComponent*> LoadParts; Load->GetComponents(LoadParts); Parts.Append(LoadParts);
  }
  FComponentQueryParams Params(SCENE_QUERY_STAT(ForkliftSweep),this);
- AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
  for (AActor* Load : CarriedCargo) if (bSupportingPallet && IsValid(Load)) Params.AddIgnoredActor(Load);
  if (bSupportingPallet) Params.AddIgnoredActor(TargetPallet);
  for (auto* Part : Parts)
  {
-  if (Part->GetCollisionEnabled()==ECollisionEnabled::NoCollision) continue;
+  if (!WarehousePhysics::IsPhysicalContact(Part)) continue;
   // A welded member shares its parent's complete Chaos shape set. Sweeping
   // that set again from the child's origin invents an offset obstacle.
   if (Part->BodyInstance.WeldParent) continue;
@@ -353,7 +353,6 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
        Hit.PenetrationDepth<.5f && PartDelta.Z>=-.001f)
    {
     FCollisionQueryParams Bearing(SCENE_QUERY_STAT(RollingTyreSupport),false,this);
-    AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Bearing);
     Bearing.AddIgnoredActors(GetPhysicalLoads());
     FHitResult Ground;
     const float Radius=Part->GetStaticMesh()->GetBoundingBox().GetExtent().Z*Part->GetComponentScale().GetAbs().Z;

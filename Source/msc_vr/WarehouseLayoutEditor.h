@@ -57,9 +57,10 @@ public:
  UFUNCTION(BlueprintCallable,Category="Layout") bool BeginDrag(AActor* HitActor,FVector FloorPoint);
  UFUNCTION(BlueprintCallable,Category="Layout") void UpdateDrag(FVector FloorPoint);
  UFUNCTION(BlueprintCallable,Category="Layout") bool EndDrag(bool Commit=true);
- void PointerDown(class APlayerController* PC,FVector2D ViewportPixels,bool Additive);
- void PointerMove(class APlayerController* PC,FVector2D ViewportPixels);
- void PointerUp(bool Commit=true);
+ // Same viewport input path for Slate and Blueprint/Python validation tools.
+ UFUNCTION(BlueprintCallable,Category="Layout") void PointerDown(class APlayerController* PC,FVector2D ViewportPixels,bool Additive);
+ UFUNCTION(BlueprintCallable,Category="Layout") void PointerMove(class APlayerController* PC,FVector2D ViewportPixels);
+ UFUNCTION(BlueprintCallable,Category="Layout") void PointerUp(bool Commit=true);
  void MouseTick(class APlayerController* PC);
  virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 private:

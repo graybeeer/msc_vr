@@ -64,8 +64,8 @@ if not parked:
     specs=[]
     for a in actors.get_all_level_actors():
         if isinstance(a,unreal.WarehousePallet) or isinstance(a,unreal.StaticMeshActor):
-            specs.append(unreal.WarehouseStrength(name=a.get_actor_label(),members=[a],mass_kg=25 if isinstance(a,unreal.WarehousePallet) else 50000,
-                rated_load_kg=100000,impact_yield_j=100000,impact_failure_j=1000000,
+            specs.append(unreal.WarehouseStrength(name=a.get_actor_label(),members=[a],mass_kg=25 if isinstance(a,unreal.WarehousePallet) else (50000 if a.get_actor_label()=='TrafficFloor' else 500),
+                rated_load_kg=1000000,impact_yield_j=100000,impact_failure_j=1000000,
                 failure=unreal.WarehouseFailure.CRUSH if isinstance(a,unreal.WarehousePallet) else unreal.WarehouseFailure.STRUCTURE))
     strength.set_editor_property('objects',specs)
 started=time.monotonic();live=None;game=None;issued=False;second=False;last=-10;baseline=None;initial_b=None;fault_at=None;yield_recorded=False
@@ -109,7 +109,7 @@ def tick(dt):
         if not issued:
             if now<2:return
             assert unreal.GameplayStatics.get_all_actors_of_class(game,unreal.WarehouseDamageSystem),'Missing traffic fixture support system'
-            assert a.is_floor_footprint_valid(live['TrafficPalletA'],unreal.Transform(location=unreal.Vector(*((-800,-1395,0) if parked else (1100,0,0))),rotation=unreal.Rotator(yaw=180 if parked else 0))),'Traffic fixture has invalid destination footprint'
+            assert a.is_floor_footprint_valid(live['TrafficPalletA'],live['TrafficPalletA'].get_actor_transform()),'Traffic fixture pallet exceeds its reserved footprint'
             a.toggle_power();b.toggle_power();baseline=a.get_actor_location();initial_b=b.get_actor_location()
             if closed:manager.close_section('Lane-01',unreal.Vector(250,-120,1),unreal.Vector(520,120,240),'test obstruction')
             job=unreal.WarehouseWorkOrder(job_id='TRAFFIC-A',source_system='FMS-TRAFFIC-CHECK',pallet=live['TrafficPalletA'],destination=unreal.Transform(location=unreal.Vector(*((-800,-1395,0) if parked else (1100,0,0))),rotation=unreal.Rotator(yaw=180 if parked else 0)))

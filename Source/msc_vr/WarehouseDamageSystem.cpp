@@ -109,13 +109,15 @@ FBox AWarehouseDamageSystem::GetPhysicalBounds(AActor* Actor)
  TArray<UPrimitiveComponent*> Parts; Actor->GetComponents(Parts);
  for (auto* Part : Parts)
  {
-  if (!Part->IsCollisionEnabled() || Part->GetCollisionProfileName()==TEXT("Trigger")) continue;
+  if (!WarehousePhysics::IsPhysicalContact(Part)) continue;
   if (auto* Mesh=Cast<USkeletalMeshComponent>(Part))
    for (auto* Body : Mesh->Bodies) AddBody(Body);
   else AddBody(Part->GetBodyInstance(NAME_None,true));
  }
  return Bounds;
 }
+bool AWarehouseDamageSystem::IsPhysicalContact(UPrimitiveComponent* Component)
+{ return WarehousePhysics::IsPhysicalContact(Component); }
 float AWarehouseDamageSystem::GetSupportedMass(AActor* Object) const
 {
  const int32 Index = IndexOf(Object);
