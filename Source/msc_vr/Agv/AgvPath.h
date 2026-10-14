@@ -84,6 +84,8 @@ struct FAgvLeg
 	double Length = 0.0;
 	/** The vehicle's local -X leads along the leg. */
 	bool bReverse = false;
+	/** Way to turn on the spot onto this leg: +1 left, -1 right, 0 the shortest way. */
+	int8 PivotSign = 0;
 
 	void Add(const FAgvSegment& Segment);
 	FAgvPathSample Sample(double S) const;
@@ -98,6 +100,8 @@ struct FAgvPath
 	bool bHasFinalYaw = false;
 	/** Vehicle yaw (not motion heading) to hold after the last leg. */
 	double FinalYaw = 0.0;
+	/** Way to turn to FinalYaw, as FAgvLeg::PivotSign. */
+	int8 FinalPivotSign = 0;
 
 	/**
 	 * Joins Points with lines and fillet arcs. CornerRadius[i] applies to interior vertex i;

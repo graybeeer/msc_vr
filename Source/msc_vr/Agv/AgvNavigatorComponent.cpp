@@ -85,7 +85,7 @@ bool UAgvNavigatorComponent::GoToNode(FName NodeId)
 	}
 	FAgvRoute Route;
 	FString Error;
-	if (!AgvRouteGraph::FindRoute(GetWorld(), Position, NodeId, NetworkSnapCm, Route, Error))
+	if (!AgvRouteGraph::FindRoute(GetWorld(), Position, NodeId, NetworkSnapCm, Route, Error, AtNodeToleranceCm))
 	{
 		// A rejected order leaves the current state alone apart from the message.
 		StatusText = Error;
@@ -131,9 +131,11 @@ bool UAgvNavigatorComponent::StartPath()
 {
 	FVector2D Position;
 	double Yaw;
-	if (bChooseLegDirection && Localizer && Localizer->GetPose(Position, Yaw))
+	Path.FinalPivotSign = 0;
+	if (bChooseLegDirection && Localizer && Localizer->GetPose(Position, Yaw) && !ChooseLegDirections(Position, Yaw))
 	{
-		ChooseLegDirections(Position, Yaw);
+		Finish(EAgvNavState::Fault, TEXT("NO ROOM TO TURN"));
+		return false;
 	}
 	LegIndex = 0;
 	MaxTrueCrossTrackErrorCm = TrueCrossTrackErrorCm = CrossTrackErrorCm = 0.f;
@@ -147,35 +149,60 @@ double UAgvNavigatorComponent::TravelMaxSpeed() const
 	return Drive && Drive->GetPayloadKg() > LoadedThresholdKg ? FMath::Min(MaxSpeedCm, LoadedMaxSpeedCm) : (double)MaxSpeedCm;
 }
 
-void UAgvNavigatorComponent::ChooseLegDirections(FVector2D Position, double Yaw)
+bool UAgvNavigatorComponent::ChooseLegDirections(FVector2D Position, double Yaw)
 {
 	// Shortest time over both directions of every leg (dynamic programming over the leg sequence): Best[d] is the time
 	// to finish the legs so far with the last one driven in direction d (1 = local -X leads). A turn on the spot that
-	// has no room is not allowed; if nothing is allowed, the room check is dropped (the safety fields still guard).
+	// has no room is not allowed; if nothing is allowed the order is refused (NO ROOM TO TURN). Dropping the room check
+	// instead sent the vehicle turning into the obstacle until its safety field stopped it, for good.
 	const int32 Count = Path.Legs.Num();
 	if (Count == 0)
 	{
-		return;
+		return true;
 	}
 	const double Rate = FMath::DegreesToRadians(FMath::Max(1.0, (double)MaxYawRateDeg));
 	const double CheckMin = FMath::DegreesToRadians((double)PivotCheckMinDeg);
 	const double Accel = FMath::Max(1.0, (double)AccelCm);
 	const double Infinity = TNumericLimits<double>::Max();
-	auto TurnCost = [&](const FVector2D& At, double From, double To, bool bCheckRoom)
+	// A turn's time and the way it goes (+1 left, -1 right). The planned way is kept and StepPivot turns that way: a half
+	// turn is equally short both ways, and the yaw jitter of a real body picked the side the room check had not cleared
+	// (2026-10-12, Chaos drive: the forks swung into a pallet beside node E and the vehicle waited in a safety stop).
+	// When the short way has no room, a turn over 120 deg may go the long way round.
+	struct FTurn
 	{
-		const double Angle = FMath::Abs(AgvMath::Wrap(To - From));
+		double Cost;
+		int8 Sign;
+	};
+	auto TurnCost = [&](const FVector2D& At, double From, double To, bool bCheckRoom) -> FTurn
+	{
+		const double Short = AgvMath::Wrap(To - From);
+		const double Angle = FMath::Abs(Short);
+		const int8 Sign = Short >= 0.0 ? 1 : -1;
 		if (Angle <= CheckMin)
 		{
-			return Angle / Rate;
+			return { Angle / Rate, 0 };
 		}
-		return bCheckRoom && !CanPivot(At, From, To) ? Infinity : Angle / Rate + PivotOverheadSeconds;
+		if (!bCheckRoom || CanPivot(At, From, Short))
+		{
+			return { Angle / Rate + PivotOverheadSeconds, Sign };
+		}
+		const double Long = 2.0 * UE_DOUBLE_PI - Angle;
+		if (Angle > FMath::DegreesToRadians(120.0) && CanPivot(At, From, -Sign * Long))
+		{
+			return { Long / Rate + PivotOverheadSeconds, (int8)-Sign };
+		}
+		return { Infinity, 0 };
 	};
-	auto Solve = [&](bool bCheckRoom, TArray<uint8>& OutChoice)
+	auto Solve = [&](bool bCheckRoom, TArray<uint8>& OutChoice, TArray<int8>& OutSigns, int8& OutFinalSign)
 	{
 		TArray<TStaticArray<double, 2>> Best;
 		TArray<TStaticArray<uint8, 2>> From;
+		TArray<TStaticArray<int8, 2>> SignInto;
+		TStaticArray<int8, 2> FinalSign;
+		FinalSign[0] = FinalSign[1] = 0;
 		Best.SetNum(Count);
 		From.SetNum(Count);
+		SignInto.SetNum(Count);
 		for (int32 Index = 0; Index < Count; ++Index)
 		{
 			const FAgvLeg& Leg = Path.Legs[Index];
@@ -189,11 +216,13 @@ void UAgvNavigatorComponent::ChooseLegDirections(FVector2D Position, double Yaw)
 				if (Index == Count - 1 && Path.bHasFinalYaw)
 				{
 					const FVector2D EndPoint = Leg.Sample(Leg.Length).Position;
-					const double Final = TurnCost(EndPoint, End + (Dir ? UE_DOUBLE_PI : 0.0), Path.FinalYaw, bCheckRoom);
-					Travel = Final == Infinity ? Infinity : Travel + Final;
+					const FTurn Final = TurnCost(EndPoint, End + (Dir ? UE_DOUBLE_PI : 0.0), Path.FinalYaw, bCheckRoom);
+					Travel = Final.Cost == Infinity ? Infinity : Travel + Final.Cost;
+					FinalSign[Dir] = Final.Sign;
 				}
 				Best[Index][Dir] = Infinity;
 				From[Index][Dir] = 0;
+				SignInto[Index][Dir] = 0;
 				for (int32 Prev = 0; Prev < (Index == 0 ? 1 : 2); ++Prev)
 				{
 					const double PrevYaw = Index == 0 ? Yaw : Path.Legs[Index - 1].Sample(Path.Legs[Index - 1].Length).Heading + (Prev ? UE_DOUBLE_PI : 0.0);
@@ -202,13 +231,14 @@ void UAgvNavigatorComponent::ChooseLegDirections(FVector2D Position, double Yaw)
 					{
 						continue;
 					}
-					const double Turn = TurnCost(Leg.Segments[0].Start, PrevYaw, LegYaw, bCheckRoom);
+					const FTurn Turn = TurnCost(Leg.Segments[0].Start, PrevYaw, LegYaw, bCheckRoom);
 					// Ties keep bDriveReversed.
-					const double Total = Turn == Infinity ? Infinity : Before + Turn + Travel - (Dir == (bDriveReversed ? 1 : 0) ? 1e-3 : 0.0);
+					const double Total = Turn.Cost == Infinity ? Infinity : Before + Turn.Cost + Travel - (Dir == (bDriveReversed ? 1 : 0) ? 1e-3 : 0.0);
 					if (Total < Best[Index][Dir])
 					{
 						Best[Index][Dir] = Total;
 						From[Index][Dir] = (uint8)Prev;
+						SignInto[Index][Dir] = Turn.Sign;
 					}
 				}
 			}
@@ -218,36 +248,51 @@ void UAgvNavigatorComponent::ChooseLegDirections(FVector2D Position, double Yaw)
 		{
 			return false;
 		}
+		OutFinalSign = FinalSign[Dir];
 		OutChoice.SetNum(Count);
+		OutSigns.SetNum(Count);
 		for (int32 Index = Count - 1; Index >= 0; --Index)
 		{
 			OutChoice[Index] = Dir;
+			OutSigns[Index] = SignInto[Index][Dir];
 			Dir = From[Index][Dir];
 		}
 		return true;
 	};
 	TArray<uint8> Choice;
-	if (!Solve(PivotFootprint.Num() > 0, Choice) && !Solve(false, Choice))
+	TArray<int8> Signs;
+	int8 FinalSign = 0;
+	if (!Solve(PivotFootprint.Num() > 0, Choice, Signs, FinalSign))
 	{
-		return;
+		UE_LOG(LogAgvNav, Warning, TEXT("AGV_NAV %s: no plan has room for its turns on the spot"), *GetOwner()->GetName());
+		return false;
 	}
 	for (int32 Index = 0; Index < Count; ++Index)
 	{
 		Path.Legs[Index].bReverse = Choice[Index] != 0;
+		Path.Legs[Index].PivotSign = Signs[Index];
 	}
+	Path.FinalPivotSign = FinalSign;
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		UE_LOG(LogAgvNav, Verbose, TEXT("AGV_NAV_PLAN leg %d: %s, length %.0f cm, turn onto it %+d"), Index,
+			Path.Legs[Index].bReverse ? TEXT("body first") : TEXT("forks first"), Path.Legs[Index].Length, Path.Legs[Index].PivotSign);
+	}
+	UE_LOG(LogAgvNav, Verbose, TEXT("AGV_NAV_PLAN final turn %+d"), Path.FinalPivotSign);
+	return true;
 }
 
-bool UAgvNavigatorComponent::CanPivot(const FVector2D& Position, double FromYaw, double ToYaw) const
+bool UAgvNavigatorComponent::CanPivot(const FVector2D& Position, double FromYaw, double SweepRad) const
 {
 	const UWorld* World = GetWorld();
 	if (!World || PivotFootprint.IsEmpty() || !Drive)
 	{
 		return true;
 	}
-	// The footprint turns about the reference point; check it every few degrees along the turn (the shortest way, as
-	// StepPivot turns). Only solid things count (as for the LiDAR: overlap-only triggers are not obstacles); people are
+	// The footprint turns about the reference point; check it every few degrees along the turn (the way StepPivot
+	// turns: the planned sign). Only solid things count (as for the LiDAR: overlap-only triggers are not obstacles); people are
 	// not in the query (they move; the rotation field guards them).
-	const double Sweep = AgvMath::Wrap(ToYaw - FromYaw);
+	const double Sweep = SweepRad;
 	const int32 Steps = FMath::Max(1, FMath::CeilToInt32(FMath::Abs(Sweep) / FMath::DegreesToRadians(5.0)));
 	const double Z = GetOwner()->GetActorLocation().Z + 0.5 * (PivotCheckHeightCm.X + PivotCheckHeightCm.Y);
 	const double HalfHeight = 0.5 * (PivotCheckHeightCm.Y - PivotCheckHeightCm.X);
@@ -276,12 +321,16 @@ bool UAgvNavigatorComponent::CanPivot(const FVector2D& Position, double FromYaw,
 				{
 					if (Component && Component->GetCollisionResponseToChannel(Channel) == ECR_Block)
 					{
+						UE_LOG(LogAgvNav, Verbose, TEXT("AGV_NAV_ROOM blocked at (%.0f, %.0f) from %.1f deg through %.1f deg by %s"), Position.X,
+							Position.Y, FMath::RadiansToDegrees(FromYaw), FMath::RadiansToDegrees(SweepRad), *GetNameSafe(Component->GetOwner()));
 						return false;
 					}
 				}
 			}
 		}
 	}
+	UE_LOG(LogAgvNav, Verbose, TEXT("AGV_NAV_ROOM clear at (%.0f, %.0f) from %.1f deg through %.1f deg"), Position.X, Position.Y,
+		FMath::RadiansToDegrees(FromYaw), FMath::RadiansToDegrees(SweepRad));
 	return true;
 }
 
@@ -292,6 +341,7 @@ void UAgvNavigatorComponent::BeginLeg()
 	{
 		const FAgvLeg& Leg = Path.Legs[LegIndex];
 		PivotTargetYaw = Leg.Segments[0].StartHeading + (Leg.bReverse ? UE_DOUBLE_PI : 0.0);
+		PivotSign = Leg.PivotSign;
 		bFinalPivot = false;
 		State = EAgvNavState::Pivot;
 		StatusText = TEXT("ALIGN TO PATH");
@@ -299,6 +349,7 @@ void UAgvNavigatorComponent::BeginLeg()
 	else if (Path.bHasFinalYaw)
 	{
 		PivotTargetYaw = Path.FinalYaw;
+		PivotSign = Path.FinalPivotSign;
 		bFinalPivot = true;
 		State = EAgvNavState::Pivot;
 		StatusText = TEXT("ALIGN AT DESTINATION");
@@ -389,7 +440,12 @@ void UAgvNavigatorComponent::Step(float Dt)
 
 void UAgvNavigatorComponent::StepPivot(double Yaw)
 {
-	const double ErrorDeg = FMath::RadiansToDegrees(AgvMath::Wrap(PivotTargetYaw - Yaw));
+	double ErrorDeg = FMath::RadiansToDegrees(AgvMath::Wrap(PivotTargetYaw - Yaw));
+	// Keep the planned way round: far from the target, an error pointing the other way is the same turn the long way.
+	if (PivotSign != 0 && ErrorDeg * PivotSign < 0.0 && FMath::Abs(ErrorDeg) > 30.0)
+	{
+		ErrorDeg += 360.0 * PivotSign;
+	}
 	HeadingErrorDeg = (float)ErrorDeg;
 	if (FMath::Abs(ErrorDeg) <= HeadingToleranceDeg && FMath::Abs(Drive->YawRateDegS) < 1.f)
 	{

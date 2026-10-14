@@ -162,14 +162,22 @@ void UAgvLidarLocalizerComponent::Step(float Dt)
 		bNoiseSeeded = true;
 	}
 
-	// Tricycle odometry from the drive wheel encoder (counts the rim, so wheel spin is counted as travel) and the
-	// steering encoder, with the controller's nominal geometry.
+	// Odometry: travel from the drive wheel encoder (counts the rim, so wheel spin is counted as travel) with the steering
+	// encoder for its direction, heading from the gyro (or, without one, the steering geometry). The steering geometry
+	// assumes the wheels roll without side slip; on the Chaos body a curve at speed turned the vehicle 2.9 deg off that
+	// within 0.4 s and the next scan match locked onto the wrong wall (2026-10-12).
 	const double Travel = Drive->DriveWheelTravelCm - LastWheelTravelCm;
 	LastWheelTravelCm = Drive->DriveWheelTravelCm;
 	const double Gauss = FMath::Sqrt(-2.0 * FMath::Loge(FMath::Max(Noise.FRand(), 1e-12f))) * FMath::Cos(2.0 * UE_DOUBLE_PI * Noise.FRand());
 	const double Measured = Travel * (1.0 + WheelRadiusErrorPercent / 100.0) * (1.0 + Gauss * EncoderNoisePercent / 100.0);
 	const double Steer = FMath::DegreesToRadians((double)Drive->SteerAngleDeg + SteerOffsetDeg);
-	const double TurnRad = -Measured * FMath::Sin(Steer) / Drive->WheelbaseCm();
+	double TurnRad = -Measured * FMath::Sin(Steer) / Drive->WheelbaseCm();
+	if (bUseGyro)
+	{
+		const double Rate = FMath::DegreesToRadians((double)Drive->YawRateDegS + GyroBiasDegS);
+		const double GyroGauss = FMath::Sqrt(-2.0 * FMath::Loge(FMath::Max(Noise.FRand(), 1e-12f))) * FMath::Cos(2.0 * UE_DOUBLE_PI * Noise.FRand());
+		TurnRad = Rate * Dt + FMath::DegreesToRadians((double)GyroNoiseDegSqrtS) * FMath::Sqrt((double)Dt) * GyroGauss;
+	}
 	OdomPosition += AgvMath::Dir(OdomYaw + TurnRad * 0.5) * (Measured * FMath::Cos(Steer));
 	OdomYaw += TurnRad;
 	TravelSinceMatchCm += (float)FMath::Abs(Measured);

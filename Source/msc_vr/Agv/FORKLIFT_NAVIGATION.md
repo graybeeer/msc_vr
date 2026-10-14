@@ -47,7 +47,10 @@
 - 시간 = 구간 길이 / 속도 + 가감속 + 제자리 회전 시간. 속도는 본체가 앞이면 `MaxSpeedCm`, 포크가 앞이면 `ForksFirstSpeedCm`을 쓴다.
 - 회전 시간 = 각도 / `MaxYawRateDeg` + `PivotOverheadSeconds`(2 s). 마지막 구간은 도착 방향 정렬도 포함한다.
 - `PivotCheckMinDeg`(10°)보다 큰 회전은 공간을 검사한다. `PivotFootprint`(본체 + 포크 2개)에 `PivotClearanceCm`(10 cm)을 더해 바닥 위 10~220 cm 영역을 5°씩 돌리며 정적·동적·물리 물체와의 겹침을 확인한다. 사람은 이 계획 검사에서 제외하며 안전 필드가 별도로 감지한다.
-- 돌 공간이 없으면 포크가 앞서는 방향을 선택한다. 모든 선택이 막히면 공간 검사 없이 방향을 고르지만 운행 중 회전 안전 필드는 유지한다.
+- 돌 공간이 없으면 포크가 앞서는 방향을 선택한다. 120°보다 큰 회전은 짧은 쪽이 막히면 반대쪽(긴 쪽)도 검사한다.
+- **회전 방향을 계획에 저장**한다(`FAgvLeg::PivotSign`, `FAgvPath::FinalPivotSign`, +1 왼쪽·−1 오른쪽). 실행 중 회전은 그 방향으로만 돈다. 180° 회전은 양쪽 각도가 같아 실제 차체의 방향 흔들림으로 검사하지 않은 쪽으로 돌 수 있었다.
+- 모든 선택이 막히면 주문을 거부한다(`NO ROOM TO TURN`). 이전에는 공간 검사를 빼고 골라, Chaos 차량이 노드 E 옆 팔레트 쪽으로 돌다 안전 정지에 계속 머물렀다(2026-10-12).
+- **노드 출발**: 노드에서 `AtNodeToleranceCm`(15 cm, 정지 정확도) 안에 서 있으면 그 노드에서 출발한다. 차로에 수 cm 합류 구간을 만들면 정지 오차 방향의 짧은 첫 구간 때문에 큰 제자리 회전이 생겼다.
 
 회전은 원래 구간 이음점에서만 계획한다. 직선 중간의 넓은 노드에서 방향을 바꾸는 계획은 없어 B → PL5A 34 m 구간은 여전히 포크 방향이다. 좁은 B 노드(랙과 기둥 사이 약 2.2 m)의 회전 정체와 긴 저속 주행을 줄이기 위한 규칙이다. 회전 각도만 최소화했던 비교 시험에서는 포크 방향 주행이 투어 시간의 59 %를 차지했다.
 
@@ -112,7 +115,7 @@
 실제 AGV처럼 차량은 정답 위치를 모른다. 위치 = 바퀴 오도메트리 × 지도 보정이다.
 
 - **LiDAR**(`AgvLidarComponent`): 헤드가 매 스텝 회전한 열만 광선으로 쏴 주행 중 스캔 왜곡을 만든다. 광선은 단단한 충돌 물체의 **물체 종류**를 사용해 `Visibility`를 무시하는 `Pawn` 캡슐도 감지하며, 겹침 전용 트리거는 통과한다. 기본은 16채널·수직 ±15°·수평 0.4°·10 Hz·0.5~30 m·거리 잡음 2 cm·누락 2 %다. 테스트 차량은 수평 0.8°·5 Hz이며 출력 점은 센서 좌표다.
-- **오도메트리**: 실제 접지점 상대 속도로 누적한 구동륜 굴림 거리와 조향값으로 삼륜 적분한다. 반지름 +0.5%, 조향 영점 +0.2°, 스텝별 잡음1%를 주입한다. 현재 용접 타이어 모델에는 독립 회전자 엔코더나 자유 헛돎이 없으며 `DriveWheelSlipCmS`는 목표 속도와 접지점 속도의 오차다.
+- **오도메트리**: 이동 거리는 실제 접지점 상대 속도로 누적한 구동륜 굴림 거리(반지름 +0.5%, 스텝별 잡음 1%)와 조향값(영점 +0.2°)으로, **방향 변화는 자이로(IMU)로** 적분한다(`bUseGyro`, 바이어스 `GyroBiasDegS` 0.01°/s, 각 랜덤 워크 `GyroNoiseDegSqrtS` 0.02°/√s, 저가 MEMS 수준 가정). 실제 AGV처럼 타이어 옆미끄럼·헛돎·제자리 회전에 속지 않는다. 조향 기하만 쓰면 Chaos 차량이 커브에서 0.4초에 2.9° 어긋났고 다음 스캔이 엉뚱한 벽에 맞아 `PATH DEVIATION`으로 멈췄다(2026-10-12). `bUseGyro`를 끄면 이전 삼륜 기하 방식이다. 현재 용접 타이어 모델에는 독립 회전자 엔코더나 자유 헛돎이 없으며 `DriveWheelSlipCmS`는 목표 속도와 접지점 속도의 오차다.
 - **지도**: 첫 매칭에서 정적(Static) 충돌 지오메트리의 바닥 위 30~300 cm 띠를 5 cm 격자로 만들고 정확한 유클리드 거리장(50 cm에서 자름)을 계산한다. 기준은 랙·기둥·벽이며 동적 상자·팔레트·사람·차량은 제외한다.
 - **보정**(`AgvLidarLocalizerComponent`): 한 회전의 점(기본 10 Hz에서 0.1 s)을 각 시점의 오도메트리 위치로 옮겨 스캔 왜곡을 제거한다. 높이 띠 밖과 차량·화물 영역을 버리고 10 cm 복셀로 줄여 거리장에 가우스-뉴턴 매칭한다. Tukey 가중치는 최종 `RobustScaleCm`(8 cm) 밖의 점 영향을 0으로 하며, 탐색 폭은 50 cm에서 시작해 반복마다 절반으로 줄인다(최대 20회). 점의 50 % 이상이 지도 표면 10 cm 안에 있으면 채택하고 보정을 절반씩 반영한다.
 - **복구 탐색**: 매칭 실패 시에만 현재 위치에서 방향 ±2·4·7·10·15°를 탐색해 가장 좋은 결과를 쓴다(`RecoveredMatches`). 미끄러운 바닥에서 회전 후 오도메트리 방향이 틀어지는 상황을 다룬다.
@@ -248,9 +251,34 @@
 & 'C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe' "$PWD\msc_vr.uproject" "-ExecutePythonScript=$PWD\Scripts\verify_agv_navigation.py" -unattended -nop4 -nosplash -nullrhi
 ```
 
-`verify_agv_navigation.py`, `verify_agv_dynamics.py`, `verify_agv_localization.py`, `verify_agv_safety.py`, `verify_agv_hazards.py`는 이전 동기 구동 검사의 진입점이다. 새 Chaos 차량을 검사하려면 실제 PIE 월드 틱을 기다리는 방식으로 시나리오를 옮겨야 하며 동기 제어 호출만으로 통과를 주장할 수 없다. 현재 접촉 검사의 진입점과 상태는 [PHYSICS.md](../../../PHYSICS.md)에 둔다.
+**Chaos 차량 검사(현재 기준)**는 실제 PIE 시간으로 진행하는 두 스크립트다. 에디터를 닫고 프로젝트 루트에서 하나씩 실행한다.
+
+```powershell
+& 'C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe' "$PWD\msc_vr.uproject" -ExecCmds="py $PWD\Scripts\verify_agv_warehouse_pie.py" -nullrhi -unattended -nosplash -nop4
+& 'C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe' "$PWD\msc_vr.uproject" -ExecCmds="py $PWD\Scripts\verify_agv_safety_pie.py" -nullrhi -unattended -nosplash -nop4
+```
+
+성공 문구 `AGV_WAREHOUSE_PIE_PASSED`, `AGV_SAFETY_PIE_PASSED`. 둘 다 팀원 지게차를 세워 두고(에디터 월드에서만, 저장 안 함) 60 Hz로 진행한다. 결과는 아래 "Chaos 차량 검증 (2026-10-12)".
+
+`verify_agv_navigation.py`, `verify_agv_dynamics.py`, `verify_agv_localization.py`, `verify_agv_safety.py`, `verify_agv_hazards.py`, `verify_agv_warehouse.py`는 이전 동기 구동 검사의 진입점이다. 새 Chaos 차량을 검사하려면 실제 PIE 월드 틱을 기다리는 방식으로 시나리오를 옮겨야 하며 동기 제어 호출만으로 통과를 주장할 수 없다. 현재 접촉 검사의 진입점과 상태는 [PHYSICS.md](../../../PHYSICS.md)에 둔다.
 
 성공 문구는 로그의 `AGV_MOTION_TEST_LEVEL_READY`, `AGV_NAV_VERIFIED`, `AGV_DYN_VERIFIED`, `AGV_LOC_VERIFIED`, `AGV_SAFETY_VERIFIED`다. 검증은 아무것도 저장하지 않는다.
+
+## Chaos 차량 검증 (2026-10-12)
+
+조건: main `c815511`(팀원 Chaos 강체 구동) + 이 문서의 2026-10-12 변경(노드 출발, 회전 방향 저장, 공간 없음 거부, 자이로). Development Editor 빌드, `UnrealEditor.exe -nullrhi` PIE, `t.OverrideFPS 60`, `Lvl_FirstPerson` 저장 상태(상자·작업자 그대로, 팀원 지게차 2대는 정지). 헤드리스 PIE 결과이며 사용자 화면 Play 확인과 구분한다.
+
+| 검사 | 결과 |
+| --- | --- |
+| 창고 투어 13구간(`verify_agv_warehouse_pie.py`, B 출발, 왕복·후진·팔레트 대기 노드 포함) | 13/13 도착, 404 s, 정지 오차 최대 5.2 cm, 실제 경로 이탈 최대 9.4 cm, 위치 추정 오차 최대 6.8 cm, 안전 정지 0, 차체 기울기 최대 0.02°, 전복 없음 |
+| 같은 투어, 자이로 없이(조향 기하) | K → I 커브에서 위치 추정 23.6 cm → `PATH DEVIATION` |
+| 차로 위 작업자(80 kg `WarehouseWorker`), C → A 본체가 앞 | 최고 184 cm/s → 경고 감속 → 103 cm 앞 정지, 있는 동안 유지, 비키면 재출발해 도착 |
+| 최고 속도(175 cm/s) 중 사람 크기 모형이 차 앞 300 cm에 나타남 | 0.90 s·57 cm 만에 정지, 남은 간격 243 cm |
+| 최고 속도(176 cm/s) 중 차 앞 300 cm·높이 250 cm에서 상자(40 cm, 15 kg)가 떨어짐 | 장애물 높이 띠(220 cm 이하)에 들어온 뒤 감지, 1.55 s·177 cm 만에 정지, 남은 간격 123 cm |
+
+2026-10-13 main `f93383f2`(팀원 중앙 교통 관제·배치 편집·공유 충전) 병합 후 같은 조건으로 다시 실행: 창고 투어 13/13 도착(411 s, 정지 오차 최대 5.4 cm, 위치 추정 최대 9.5 cm), 안전 3/3(작업자 104 cm 앞 정지, 끼어드는 사람 61 cm 만에 정지·간격 239 cm, 낙하 상자 간격 118 cm). 경로 노드 78개와 차량 위치는 병합 전과 같다(오차 0 cm). **알려진 문제**: 팀원 입고 구역의 빈 팔레트(`WH_InboundPallet_Empty`, 높이 15 cm)가 차로 H–K 위에 있어 K·I 구간에서 안전 정지가 1회씩 나고 재출발했다. 팔레트 접촉 여부는 재지 않았다. 차로 또는 입고 구역 배치 조정이 필요하다(팀원과 협의).
+
+이전 헤드리스 결과보다 정지 오차(0.5 → 2~5 cm)와 실제 경로 이탈(2~4 → 최대 9.4 cm)이 크다. 실제 타이어 접촉의 응답 차이이며 추종 이득은 아직 Chaos 차량에 맞춰 조정하지 않았다. 이전 동기 구동의 동역학(적재 가속·제동 거리·전복 한계)과 빙판·변경 창고 위치 추정은 Chaos 차량에서 다시 확인하지 않았다.
 
 ## 검증 결과 (2026-10-06)
 

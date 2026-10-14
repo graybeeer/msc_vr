@@ -157,7 +157,9 @@ msc_vr/
     verify_agv_localization.py
     verify_agv_navigation.py
     verify_agv_safety.py
+    verify_agv_safety_pie.py
     verify_agv_warehouse.py
+    verify_agv_warehouse_pie.py
     verify_area_labels_pie.py
     verify_cargo_pallet_physics_pie.py
     verify_cargo_rules.py

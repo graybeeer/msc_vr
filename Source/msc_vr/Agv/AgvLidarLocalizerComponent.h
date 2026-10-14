@@ -65,6 +65,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Odometry")
 	int32 NoiseSeed = 11;
 
+	/**
+	 * Heading change from a yaw-rate gyro (IMU) instead of the steering geometry, as real AGVs do: tyre side slip,
+	 * a slipping drive wheel or a turn on the spot do not fool it. Off = tricycle steering kinematics.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Odometry")
+	bool bUseGyro = true;
+
+	/** Constant rate error of the gyro (deg/s); an uncalibrated MEMS part drifts about this much. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Odometry")
+	float GyroBiasDegS = 0.01f;
+
+	/** Angle random walk (deg per square-root second): white rate noise integrated into heading. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Odometry", meta=(ClampMin="0"))
+	float GyroNoiseDegSqrtS = 0.02f;
+
 	// Map: static geometry between these heights above the floor.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Map", meta=(ClampMin="1"))
 	float MapCellCm = 5.f;
