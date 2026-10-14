@@ -374,8 +374,10 @@ void UAgvShadowSensorsComponent::TickComponent(float DeltaTime, ELevelTick TickT
 		const TArray<FWarehouseRoutePoint>& Route = Forklift->PlannedRoute;
 		using EState = EWarehouseAIState;
 		const EState State = Forklift->AIState;
+		// Also while stopped by the safety field mid-route: the field must keep watching the way it will resume.
 		const bool bRouting = State == EState::NavigatePickup || State == EState::NavigateDelivery || State == EState::NavigateCharge
-			|| State == EState::NavigateParking || State == EState::ElevatorApproach;
+			|| State == EState::NavigateParking || State == EState::ElevatorApproach
+			|| (State == EState::WaitingObstacle && Forklift->Status.Contains(TEXT("AGV SAFETY FIELD")));
 		if (bRouting && Route.Num() > 1)
 		{
 			const double Offset = Drive->ReferenceOffsetCm;

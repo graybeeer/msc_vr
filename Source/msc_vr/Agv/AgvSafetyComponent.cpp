@@ -171,6 +171,14 @@ void UAgvSafetyComponent::BuildSweep()
 			FieldSet = TEXT("STANDSTILL");
 		}
 	}
+	else if (bFieldsFollowPath && !Navigator && ExternalPathAhead.Num() > 1 && FMath::Abs(Speed) <= 2.0 && FMath::Abs(Command) <= 0.5
+		&& FMath::Abs(Turn) <= 0.5)
+	{
+		// Stopped on another controller's route (a safety stop, about to start): the route's direction picks the set, so
+		// whatever stopped the vehicle keeps it stopped until it has gone.
+		const FVector2D Step = FVector2D(ExternalPathAhead.Last()) - FVector2D(ExternalPathAhead[0]);
+		FieldSet = FVector2D::DotProduct(Step, AgvMath::Dir(ExternalPathAhead[0].Z)) >= 0.0 ? TEXT("FORKS FIRST") : TEXT("BODY FIRST");
+	}
 	else if (FMath::Abs(Speed) > 2.0 || FMath::Abs(Command) > 0.5)
 	{
 		FieldSet = (FMath::Abs(Speed) > 2.0 ? Speed : Command) > 0.0 ? TEXT("FORKS FIRST") : TEXT("BODY FIRST");

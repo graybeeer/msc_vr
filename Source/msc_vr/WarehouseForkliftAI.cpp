@@ -1473,7 +1473,15 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   if (WaitSeconds>=30.f) { ResumeAI=WaitResumeAI; FaultAI(TEXT("OBSTACLE TIMEOUT - CLEAR ROUTE")); ResumeAI=WaitResumeAI; }
   else if (AIElapsed>=1.f)
   {
-   if (WaitObstacleReason.Contains(TEXT("PERSON")) || bFloorTransfer)
+   // An AGV safety-field stop (agv.safety): a scanner cannot tell a person from an object, so wait in place and carry
+   // on along the same route once the field is clear (no replanning around whatever stood there, no recovery).
+   if (WaitObstacleReason.Contains(TEXT("AGV SAFETY FIELD")))
+   {
+    FString AgvReason;
+    if (AgvTravelSpeedLimit(AgvReason)>0.f)
+    { const bool HadRoute=!PlannedRoute.IsEmpty(); TransitionAI(WaitResumeAI,TEXT("SAFETY FIELD CLEAR - RESUME ROUTE")); bRouteStarted=HadRoute; }
+   }
+   else if (WaitObstacleReason.Contains(TEXT("PERSON")) || bFloorTransfer)
     Next(WaitResumeAI,TEXT("RECHECK PATH / SAFETY ZONE"));
    else BeginRecovery(WaitResumeAI,WaitObstacleReason);
   }
