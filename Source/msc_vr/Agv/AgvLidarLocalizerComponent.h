@@ -35,6 +35,9 @@ class MSC_VR_API UAgvLidarLocalizerComponent : public UAgvLocalizerComponent
 
 public:
 	virtual bool GetPose(FVector2D& OutPosition, double& OutYaw) const override;
+
+	/** The dead-reckoned pose (encoder + gyro, odometry frame, no scan corrections): its change is the measured motion. */
+	void GetOdometryPose(FVector2D& OutPosition, double& OutYaw) const { OutPosition = OdomPosition; OutYaw = OdomYaw; }
 	virtual void Step(float Dt) override;
 	virtual void InitializePose() override;
 	virtual bool IsMappedStructure(const FVector2D& WorldPointCm, double ToleranceCm) const override;

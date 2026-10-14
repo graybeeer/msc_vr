@@ -316,7 +316,7 @@ void UAgvSafetyComponent::Evaluate()
 	FBox2D Protective = Grow(bApproach ? ApproachMarginCm : SideMarginCm);
 	if (bApproach)
 	{
-		Protective.Max.X = Outline.Max.X;
+		Protective.Max.X = FMath::Min(Outline.Max.X, (double)ApproachMutedFromXCm);
 	}
 	const FBox2D Warning = bApproach ? FBox2D(ForceInit) : Grow(SideMarginCm + WarningExtraWidthCm);
 	const double ProtectiveReach = bRotating ? ProtectiveRotationDeg : bApproach ? 0.0 : ProtectiveLengthCm;
@@ -329,12 +329,20 @@ void UAgvSafetyComponent::Evaluate()
 	const FVector2D Origin = bMapFilter ? Reference - AgvMath::Dir(Yaw) * ReferenceX : FVector2D::ZeroVector;
 	MappedPointsIgnored = 0;
 	NearestObjectCm = -1.f;
+	// Beside the forks of the empty vehicle (outside the fork width grown by Margin): not part of the outline.
+	const bool bForkNotch = !LoadBox.bIsValid && ForkRootXCm < Outline.Max.X;
+	auto BesideForks = [&](const FVector2D& P, double Margin)
+	{
+		return bForkNotch && P.X > ForkRootXCm && FMath::Abs(P.Y) > ForkHalfWidthCm + Margin;
+	};
+	const double ProtectiveMargin = bApproach ? ApproachMarginCm : SideMarginCm;
+	const double WarningMargin = SideMarginCm + WarningExtraWidthCm;
 	for (const TArray<FVector>& Points : LatestPoints)
 	{
 		for (const FVector& Point : Points)
 		{
 			const FVector2D Vehicle(Point);
-			if (Outline.IsInside(Vehicle) || (ApproachTargetBox.bIsValid && ApproachTargetBox.IsInside(Vehicle)))
+			if (Outline.IsInside(Vehicle) && !BesideForks(Vehicle, 0.0) || (ApproachTargetBox.bIsValid && ApproachTargetBox.IsInside(Vehicle)))
 			{
 				continue; // the vehicle itself, its load, or the pallet / slot / charger it is working on
 			}
@@ -345,12 +353,12 @@ void UAgvSafetyComponent::Evaluate()
 			for (const FSweepPose& Pose : Sweep)
 			{
 				const FVector2D InPose = AgvMath::Rotate(-Pose.Yaw, FromReference - Pose.Position) + FVector2D(ReferenceX, 0.0);
-				if (!bInWarning && Warning.IsInside(InPose))
+				if (!bInWarning && Warning.IsInside(InPose) && !BesideForks(InPose, WarningMargin))
 				{
 					bInWarning = true;
 					NearestObjectCm = NearestObjectCm < 0.f ? (float)Pose.Along : FMath::Min(NearestObjectCm, (float)Pose.Along);
 				}
-				bInProtective = Pose.Along <= ProtectiveReach && Protective.IsInside(InPose);
+				bInProtective = Pose.Along <= ProtectiveReach && Protective.IsInside(InPose) && !BesideForks(InPose, ProtectiveMargin);
 				if (bInProtective || Pose.Along > ProtectiveReach && bInWarning)
 				{
 					break;

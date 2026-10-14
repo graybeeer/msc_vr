@@ -223,6 +223,8 @@ void UAgvShadowSensorsComponent::Build()
 		Safety->Scanners.Add(Scanner);
 	}
 	Safety->Footprint = FBox2D(FVector2D(-97.4, -49.7), FVector2D(115.0, 49.7));
+	Safety->ForkRootXCm = 0.f;     // 115 cm forks (VNSL14) end at the footprint's +115
+	Safety->ForkHalfWidthCm = 34.f; // 68 cm over the forks
 	Safety->ForksFirstMaxSpeedCm = 60.f;
 	Safety->WarningFieldLengthCm = 480.f;
 	// Speed-dependent fields down to creep speed, as safety scanners switch field sets by speed: at 20 cm/s the stop
@@ -234,6 +236,7 @@ void UAgvShadowSensorsComponent::Build()
 	// the protective field (people, vehicles and cargo still stop it).
 	Safety->bPlannedPathIgnoresMappedStructure = true;
 	Safety->bApproachIgnoresMappedStructure = true;
+	Safety->ApproachMutedFromXCm = 0.f; // fork root: 115 cm forks end at the footprint's +115
 	Safety->RegisterComponent();
 	bBuilt = true;
 	UE_LOG(LogAgvShadow, Log, TEXT("AGV_SHADOW %s: sensors, localizer and safety attached (measure only)"), *Owner->GetName());
@@ -278,12 +281,15 @@ void UAgvShadowSensorsComponent::TickComponent(float DeltaTime, ELevelTick TickT
 
 	// What the forklift is doing sets the field set: the carried pallet is part of the outline, and docking / fork
 	// work / unloading / tight elevator moves use the approach bumper (the vehicle's own task tells it, as on a real AGV).
+	// So do the steps between, where it stands at the rack, dock or charger and only settles or plans (lowering the load
+	// to travel height right after withdrawing, planning the next route): it is still at the object it worked on.
 	if (const AWarehouseForklift* Forklift = Cast<AWarehouseForklift>(GetOwner()))
 	{
 		using EState = EWarehouseAIState;
 		static const EState Approach[] = { EState::SlowApproach, EState::DetectPallet, EState::EstimatePose, EState::AlignVehicle,
 			EState::CorrectFork, EState::InsertFork, EState::VerifyInsertion, EState::LiftLoad, EState::VerifyLoad, EState::DepartPickup,
-			EState::AlignUnload, EState::LowerLoad, EState::WithdrawFork, EState::VerifyUnload, EState::DockCharge, EState::Charging,
+			EState::TravelHeight, EState::PlanDelivery, EState::ReportComplete, EState::PlanCharge, EState::PlanParking,
+			EState::RecoverReplan, EState::PlanPickup, EState::ValidateJob, EState::AlignUnload, EState::LowerLoad, EState::WithdrawFork, EState::VerifyUnload, EState::DockCharge, EState::Charging,
 			EState::LeaveCharger, EState::RecoverLower, EState::RecoverWithdraw, EState::AlignParking, EState::ElevatorBoard,
 			EState::ElevatorRide, EState::ElevatorExit };
 		Safety->bApproachMode = false;
@@ -423,7 +429,20 @@ void UAgvShadowSensorsComponent::TickComponent(float DeltaTime, ELevelTick TickT
 	}
 	Safety->Step(DeltaTime);
 	Localizer->Step(DeltaTime);
+	UpdateNavigationPose(DeltaTime);
 	const double Ms = (FPlatformTime::Seconds() - Start) * 1000.0;
+
+	// Hunting on the spot: a turn in place that reverses direction (ignoring creeping yaw below 0.5 deg/s).
+	if (FMath::Abs(Drive->SpeedCmS) < 2.f && FMath::Abs(Drive->YawRateDegS) > 0.5f)
+	{
+		const int32 Sign = Drive->YawRateDegS > 0.f ? 1 : -1;
+		TurnReversals += LastTurnSign != 0 && Sign != LastTurnSign;
+		LastTurnSign = Sign;
+	}
+	else if (FMath::Abs(Drive->SpeedCmS) >= 2.f)
+	{
+		LastTurnSign = 0;
+	}
 
 	// Score the estimate against the actual pose (evaluation only; nothing here feeds back).
 	FVector2D Estimate, Truth;
@@ -437,6 +456,11 @@ void UAgvShadowSensorsComponent::TickComponent(float DeltaTime, ELevelTick TickT
 		ErrorSum += Error;
 		++ErrorSamples;
 		MeanErrorCm = (float)(ErrorSum / ErrorSamples);
+		if (bNavValid)
+		{
+			MaxNavErrorCm = FMath::Max(MaxNavErrorCm, (float)FVector2D::Distance(NavPosition, Truth));
+			MaxNavHeadingErrorDeg = FMath::Max(MaxNavHeadingErrorDeg, (float)FMath::Abs(FMath::RadiansToDegrees(AgvMath::Wrap(NavYaw - TruthYaw))));
+		}
 	}
 	if (bMoving)
 	{
@@ -484,14 +508,56 @@ float UAgvShadowSensorsComponent::GetSafetySpeedLimitCm() const
 	return bBuilt && Drive ? Drive->SafetySpeedLimitCmS : TNumericLimits<float>::Max();
 }
 
+void UAgvShadowSensorsComponent::UpdateNavigationPose(float Dt)
+{
+	FVector2D Estimate, Odometry;
+	double EstimateYaw, OdometryYaw;
+	if (!Localizer->GetPose(Estimate, EstimateYaw))
+	{
+		bNavValid = false;
+		return;
+	}
+	Localizer->GetOdometryPose(Odometry, OdometryYaw);
+	if (bNavValid)
+	{
+		// The measured motion since the last frame (vehicle frame), applied at the driving pose.
+		const FVector2D Moved = AgvMath::Rotate(-LastOdomYaw, Odometry - LastOdomPosition);
+		const double Turned = AgvMath::Wrap(OdometryYaw - LastOdomYaw);
+		NavPosition += AgvMath::Rotate(NavYaw, Moved);
+		NavYaw = AgvMath::Wrap(NavYaw + Turned);
+		const FVector2D Offset = Estimate - NavPosition;
+		const double YawOffset = AgvMath::Wrap(EstimateYaw - NavYaw);
+		if (Offset.Size() > NavSnapCm || FMath::Abs(YawOffset) > FMath::DegreesToRadians((double)NavSnapDeg))
+		{
+			bNavValid = false;
+		}
+		else
+		{
+			const bool bTurningOnTheSpot = Moved.Size() < 2.0 * Dt && FMath::Abs(Turned) > FMath::DegreesToRadians(0.5) * Dt;
+			const double YawStep = FMath::DegreesToRadians((double)(bTurningOnTheSpot ? NavTurningCorrectionDegPerS : NavCorrectionDegPerS)) * Dt;
+			NavYaw = AgvMath::Wrap(NavYaw + FMath::Clamp(YawOffset, -YawStep, YawStep));
+			const double Step = NavCorrectionCmPerS * Dt;
+			NavPosition += Offset.Size() > Step ? Offset.GetSafeNormal() * Step : Offset;
+		}
+	}
+	if (!bNavValid)
+	{
+		NavPosition = Estimate;
+		NavYaw = EstimateYaw;
+		bNavValid = true;
+	}
+	LastOdomPosition = Odometry;
+	LastOdomYaw = OdometryYaw;
+}
+
 bool UAgvShadowSensorsComponent::GetEstimatedActorTransform(FTransform& Out) const
 {
-	FVector2D Reference;
-	double Yaw;
-	if (!bBuilt || !Localizer || !Drive || !Localizer->GetPose(Reference, Yaw))
+	if (!bBuilt || !Localizer || !Drive || !bNavValid || LocalizerStatus == TEXT("LOST"))
 	{
 		return false;
 	}
+	const FVector2D Reference = NavPosition;
+	const double Yaw = NavYaw;
 	const FTransform Actual = GetOwner()->GetActorTransform();
 	FRotator Rotation = Actual.Rotator();
 	Rotation.Yaw = FMath::RadiansToDegrees(Yaw);
@@ -503,9 +569,10 @@ bool UAgvShadowSensorsComponent::GetEstimatedActorTransform(FTransform& Out) con
 FString UAgvShadowSensorsComponent::Summary() const
 {
 	return FString::Printf(TEXT("AGV_SHADOW %s: moving %.0f s, localization error max %.1f cm / mean %.1f cm, heading max %.2f deg, "
+		"driving pose max %.1f cm / %.2f deg, turn reversals on the spot %d, "
 		"would warn %.1f s and stop %.1f s (%d stops) while moving, sensors %.2f ms/frame moving, localizer %s"),
-		*GetOwner()->GetName(), MovingSeconds, MaxErrorCm, MeanErrorCm, MaxHeadingErrorDeg, WarningSeconds, StopSeconds, StopEvents,
-		MeanSensorMsMoving, *LocalizerStatus);
+		*GetOwner()->GetName(), MovingSeconds, MaxErrorCm, MeanErrorCm, MaxHeadingErrorDeg, MaxNavErrorCm, MaxNavHeadingErrorDeg,
+		TurnReversals, WarningSeconds, StopSeconds, StopEvents, MeanSensorMsMoving, *LocalizerStatus);
 }
 
 // --- Manager ------------------------------------------------------------------------------------------------------

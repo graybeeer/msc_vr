@@ -65,6 +65,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
 	FBox2D Footprint = FBox2D(FVector2D(-94.0, -61.0), FVector2D(182.0, 61.0));
 
+	/**
+	 * Forks narrower than the chassis: beyond ForkRootXCm (actor frame) the empty vehicle is only +-ForkHalfWidthCm wide,
+	 * not the Footprint's full width (a rack deck or pallet beside the forks is not in the way). Ignored while carrying a
+	 * load (LoadBox covers the load's width). Unset (large) keeps the plain box.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
+	float ForkRootXCm = 1.0e6f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
+	float ForkHalfWidthCm = 34.f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
 	float SideMarginCm = 10.f;
 
@@ -169,6 +180,15 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
 	bool bApproachIgnoresMappedStructure = false;
+
+	/**
+	 * In the approach field set, the bumper ends at this vehicle-frame X (cm) on the fork side: the sides of the forks and
+	 * the load are muted too, as a forklift AGV mutes its load-handling area in a rack (the neighbouring pallets stand a
+	 * few centimetres beside the load). Only the chassis sides and the body end are watched. Unset (large) keeps the
+	 * whole outline.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
+	float ApproachMutedFromXCm = 1.0e6f;
 
 	/** The object being worked on (pallet to pick up, slot to unload into, charger), vehicle frame; its points are not
 	 * obstacles. Set by the vehicle's task while the job has a target, not only in approach. */

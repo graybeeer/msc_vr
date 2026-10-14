@@ -81,6 +81,17 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Shadow")
 	float MeanSensorMsMoving = 0.f;
 
+	/** Error of the pose the forklift drives by (GetEstimatedActorTransform) against the actual pose. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Shadow")
+	float MaxNavErrorCm = 0.f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Shadow")
+	float MaxNavHeadingErrorDeg = 0.f;
+
+	/** Turning on the spot, how often the turn changed direction (left <-> right): a vehicle hunting for a heading. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Shadow")
+	int32 TurnReversals = 0;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Shadow")
 	FString LocalizerStatus;
 
@@ -94,6 +105,27 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Shadow")
 	float OdometryOnlySpeedCm = 50.f;
 
+	/**
+	 * The pose the forklift drives by follows the measured motion (encoder, gyro) every frame and takes each scan's
+	 * correction in gradually, at most these rates: a scan match moves the estimate by a few millimetres or a few tenths
+	 * of a degree at 5 Hz, and a controller aligning to 1 deg chased those steps left and right on the spot. Turning on
+	 * the spot the heading is the gyro's with only a slow trim. Beyond the snap limits (a relocalization) it jumps.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Shadow")
+	float NavCorrectionCmPerS = 10.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Shadow")
+	float NavCorrectionDegPerS = 1.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Shadow")
+	float NavTurningCorrectionDegPerS = 0.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Shadow")
+	float NavSnapCm = 30.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Shadow")
+	float NavSnapDeg = 5.f;
+
 	/** The safety system's current speed cap (cm/s; 0 = protective stop). */
 	float GetSafetySpeedLimitCm() const;
 
@@ -102,6 +134,7 @@ public:
 
 private:
 	void Build();
+	void UpdateNavigationPose(float Dt);
 
 	UPROPERTY(Transient) TObjectPtr<UAgvExternalDriveComponent> Drive;
 	UPROPERTY(Transient) TArray<TObjectPtr<UAgvLidarComponent>> Lidars;
@@ -116,6 +149,12 @@ private:
 	double SensorMsMovingSum = 0.0;
 	int64 MovingFrames = 0;
 	bool bWasStopped = false;
+	bool bNavValid = false;
+	FVector2D NavPosition = FVector2D::ZeroVector;
+	double NavYaw = 0.0;
+	FVector2D LastOdomPosition = FVector2D::ZeroVector;
+	double LastOdomYaw = 0.0;
+	int32 LastTurnSign = 0;
 };
 
 /** Puts shadow sensors on every main warehouse forklift when play starts (spawned by agv.shadow or a test). */
