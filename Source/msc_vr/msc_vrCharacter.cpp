@@ -359,11 +359,14 @@ void Amsc_vrCharacter::UpdatePhysicalMovement(float DeltaSeconds)
 	Movement->UpdateProxyAcceleration();
 	Movement->MovementMode=bPhysicalGround ? MOVE_Walking : MOVE_Falling;
 	Movement->MaxWalkSpeed=Speed;
+	const float CurrentHalf=GetCapsuleComponent()->GetUnscaledCapsuleHalfHeight();
 	float ClearHalf=DesiredHalf;
-	if (DesiredHalf>GetCapsuleComponent()->GetUnscaledCapsuleHalfHeight() && GroundDistance>=0.f)
-		ClearHalf=FMath::Min(DesiredHalf,FMath::Max(GetCapsuleComponent()->GetUnscaledCapsuleRadius(),GroundDistance-1.f));
-	const float Half=FMath::FInterpConstantTo(GetCapsuleComponent()->GetUnscaledCapsuleHalfHeight(),ClearHalf,DeltaSeconds,150.f);
-	GetCapsuleComponent()->SetCapsuleHalfHeight(Half,true);
+	if (DesiredHalf>CurrentHalf && GroundDistance>=0.f)
+		// Landing compression may delay standing growth, but must never shrink it.
+		ClearHalf=FMath::Min(DesiredHalf,FMath::Max(CurrentHalf,GroundDistance-1.f));
+	const float Half=FMath::FInterpConstantTo(CurrentHalf,ClearHalf,DeltaSeconds,150.f);
+	// Resizing rewrites Chaos geometry and contacts. Preserve them when unchanged.
+	if (Half!=CurrentHalf) GetCapsuleComponent()->SetCapsuleHalfHeight(Half,true);
 	SetIsCrouched(bPhysicalCrouchRequested || Half<95.f);
 	if (GetCapsuleComponent()->GetUpVector().Z<.5f || GetVelocity().Size()>650.f)
 	{

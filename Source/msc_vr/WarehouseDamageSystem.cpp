@@ -17,6 +17,10 @@ CSV_DEFINE_CATEGORY(Warehouse,true);
 #include "CollisionQueryParams.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "PhysicsEngine/BodyInstance.h"
+#include "HAL/IConsoleManager.h"
+
+static TAutoConsoleVariable<int32> CVarWarehouseSupportSharing(TEXT("Warehouse.SupportSnapshotSharing"),1,
+ TEXT("Share the current 10Hz support snapshot between periodic readers; 0 reproduces legacy refreshes."));
 
 namespace
 {
@@ -54,7 +58,10 @@ namespace
   for (auto* Part : Parts) TotalVolume+=CollisionVolume(Part);
   if (TotalVolume<=0) return;
   for (auto* Part : Parts)
-   Part->SetMassOverrideInKg(NAME_None,float(TotalKg*CollisionVolume(Part)/TotalVolume));
+   // Fixed architecture retains its engineering mass in the strength profile.
+   // Only movable bodies need a runtime Chaos mass override.
+   if (Part->Mobility==EComponentMobility::Movable)
+    Part->SetMassOverrideInKg(NAME_None,float(TotalKg*CollisionVolume(Part)/TotalVolume));
  }
 }
 
@@ -202,7 +209,6 @@ void AWarehouseDamageSystem::InitializeStrength()
    if (auto* Pallet=Cast<AWarehousePallet>(Actor)) Spec.MassKg=Pallet->PalletMassKg;
    if (auto* Cargo=Cast<AWarehouseCargo>(Actor)) Spec.MassKg=Cargo->GrossMassKg;
   }
-  DistributeMass(AllParts,PhysicalMass(I));
   for (int32 M=0;M<Spec.Members.Num();++M)
   {
    AActor* Actor=Spec.Members[M];
@@ -226,6 +232,8 @@ void AWarehouseDamageSystem::InitializeStrength()
     Part->SetSimulatePhysics(true);
    }
   }
+  // Portable members have acquired Movable mobility before mass is assigned.
+  DistributeMass(AllParts,PhysicalMass(I));
  }
  // Register contact on real primitives, including an owner's capsule/box physics root.
  // Render-only meshes, widgets, triggers and intentional NoCollision decorations stay untouched.
@@ -330,6 +338,15 @@ void AWarehouseDamageSystem::UpdateLoads()
  for (int32 Child=0;Child<Supports.Num();++Child)
   for (int32 Parent:Supports[Child]) SupportedChildren[Parent].Add(Child);
  CSV_CUSTOM_STAT(Warehouse,SupportTraceCount,TraceCount,ECsvCustomStatOp::Accumulate);
+ LastSupportScanSeconds=GetWorld()->GetTimeSeconds();LastSupportScanFrame=GFrameCounter;
+ ++SupportSnapshotVersion;
+}
+void AWarehouseDamageSystem::EnsureSupportSnapshot()
+{
+ if (!bInitialized) { InitializeStrength();return; }
+ if (!CVarWarehouseSupportSharing.GetValueOnGameThread() || LastSupportScanSeconds<0 ||
+     GetWorld()->GetTimeSeconds()-LastSupportScanSeconds>.1+KINDA_SMALL_NUMBER) UpdateLoads();
+ else CSV_CUSTOM_STAT(Warehouse,SupportSnapshotReuses,1,ECsvCustomStatOp::Accumulate);
 }
 void AWarehouseDamageSystem::AdvanceStrength(float Seconds)
 {
@@ -337,7 +354,12 @@ void AWarehouseDamageSystem::AdvanceStrength(float Seconds)
  if (!bInitialized) InitializeStrength();
  const float Dt=FMath::Min(Seconds,.1f);
  SinceScan+=Dt;
- if (SinceScan>=.099f) { UpdateLoads(); SinceScan=0; }
+ if (SinceScan>=.099f)
+ {
+  // A periodic reader may already have refreshed this exact pre-physics frame.
+  if (!CVarWarehouseSupportSharing.GetValueOnGameThread() || LastSupportScanFrame!=GFrameCounter) UpdateLoads();
+  SinceScan=0;
+ }
  for (int32 I=0; I<Objects.Num(); ++I)
  {
   auto& Spec=Objects[I];

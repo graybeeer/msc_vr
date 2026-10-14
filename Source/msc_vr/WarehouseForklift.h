@@ -188,6 +188,7 @@ private:
  void ReportJob(const FString& Result,const FString& Detail);
  bool RackLoadAligned() const;
  FWarehouseNavigationQuery BuildNavigationQuery() const;
+ bool bUseCurrentRackWaypoints=false;
  bool NavigationClear(const FTransform& Pose,const FWarehouseNavigationQuery* Query=nullptr) const;
  bool ConnectPoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost,const FWarehouseNavigationQuery* Query=nullptr) const;
  bool ConnectLanePoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost,const FWarehouseNavigationQuery* Query=nullptr) const;

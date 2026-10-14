@@ -152,7 +152,7 @@ void Amsc_vrPlayerController::BeginPlay()
 				.Visibility_Lambda([this]() { return EmergencyAlertText.IsEmpty() && ResourceAlertText.IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible; })
 					[SNew(SVerticalBox)
 						+SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::TitleSize,true))
-						.ColorAndOpacity(WarehouseUIStyle::Warning).Text_Lambda([this]() { return FText::FromString(EmergencyAlertText.IsEmpty() ? TEXT("운영 · 필요한 설비 확인") : TEXT("비상 · 지게차 끼임 / 이동 불가")); })]
+						.ColorAndOpacity(WarehouseUIStyle::Warning).Text_Lambda([this]() { return FText::FromString(EmergencyAlertText.IsEmpty() ? TEXT("운영 · 필요한 설비 확인") : TEXT("비상 · 지게차 작업 중단")); })]
 						+SVerticalBox::Slot().AutoHeight().Padding(0,8)[SNew(STextBlock).Font(WarehouseUIStyle::Font())
 						.ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(780).Text_Lambda([this]() { return FText::FromString(EmergencyAlertText.IsEmpty() ? ResourceAlertText : EmergencyAlertText+TEXT("\n")+ResourceAlertText); })]
 						+SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font())

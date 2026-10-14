@@ -7,6 +7,12 @@
 #include "Materials/MaterialInterface.h"
 #include "Components/WidgetComponent.h"
 #include "WarehouseWorker.h"
+#include "CollisionQueryParams.h"
+
+void AWarehouseWaitingBay::IgnoreNavigationMarkers(UWorld* World, FCollisionQueryParams& Params)
+{
+ for (TActorIterator<AWarehouseWaitingBay> It(World); It; ++It) Params.AddIgnoredActor(*It);
+}
 
 AWarehouseWaitingBay::AWarehouseWaitingBay()
 {

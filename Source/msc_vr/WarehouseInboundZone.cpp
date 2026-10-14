@@ -102,8 +102,9 @@ void AWarehouseInboundZone::ScanInbound()
   if (FMath::Abs(Local.X)>HalfSizeCm.X-55 || FMath::Abs(Local.Y)>HalfSizeCm.Y-55 ||
       FMath::Abs(Local.Z)>5 || Strength->HasFailed(Pallet)) continue;
   Present.Add(Pallet);
-  // No physics step occurs inside this scan; all pallets share one fresh snapshot.
-  const TArray<AActor*> Loads=Strength->GetSupportedActors(Pallet,RefreshLoads);
+  // Periodic scans reuse the shared 10Hz graph; physical acceptance is checked live below.
+  if (RefreshLoads) Strength->EnsureSupportSnapshot();
+  const TArray<AActor*> Loads=Strength->GetSupportedActors(Pallet,false);
   RefreshLoads=false;
   bool bCargo=false,bHeld=false,bStable=Pallet->GetPalletBody()->GetPhysicsLinearVelocity().Size()<10 &&
    Pallet->GetPalletBody()->GetPhysicsAngularVelocityInDegrees().Size()<5 &&

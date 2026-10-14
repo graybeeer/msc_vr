@@ -1,6 +1,7 @@
 #include "WarehousePhysics.h"
 #include "WarehouseCargo.h"
 #include "WarehousePallet.h"
+#include "WarehouseWaitingBay.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
@@ -11,6 +12,7 @@
 bool WarehousePhysics::IsPhysicalContact(const UPrimitiveComponent* Component)
 {
  return Component && Component->GetCollisionEnabled()!=ECollisionEnabled::NoCollision &&
+  !Cast<AWarehouseWaitingBay>(Component->GetOwner()) &&
   Component->GetCollisionProfileName()!=TEXT("Trigger") &&
   !Component->IsA<UWidgetComponent>() && !Component->IsA<UTextRenderComponent>() &&
   Component->GetPhysicsBodySetup()!=nullptr;

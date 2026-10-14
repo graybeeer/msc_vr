@@ -143,6 +143,14 @@ def tick(dt):
             assert (parts[name].get_actor_location() - point).length() < .001, ('Fixture move failed', name)
 
         expected_floor = ['Right', 'Left', 'Middle', 'TopB', 'TopA']
+        # Two periodic consumers must share a current graph, while the explicit
+        # same-frame geometry changes below still require unconditional refresh.
+        system.ensure_support_snapshot()
+        version=system.get_editor_property('support_snapshot_version')
+        system.ensure_support_snapshot()
+        system.ensure_support_snapshot()
+        assert system.get_editor_property('support_snapshot_version')==version,'Periodic readers rebuilt the same graph'
+        print('SUPPORT_PERIODIC_SNAPSHOT_REUSE_PASSED',version)
         assert descendants('Floor') == expected_floor, 'Breadth-first profile order changed or shared child duplicated'
         assert descendants('Left', False) == ['Middle', 'TopB', 'TopA']
         assert descendants('Right', False) == ['Middle', 'TopB', 'TopA']
