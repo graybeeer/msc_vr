@@ -294,8 +294,10 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
  const float LookAhead=FMath::Max(100.f,CurrentSpeedCm*CurrentSpeedCm/100.f+FMath::Abs(CurrentSpeedCm)*.2f+20.f);
  const FVector SafetyEnd=SafetyCenter+(LiftOnly ? FVector::ZeroVector : Delta+Delta.GetSafeNormal()*LookAhead);
  TArray<FHitResult> PeopleHits;
- GetWorld()->SweepMultiByObjectType(PeopleHits,SafetyCenter,SafetyEnd,GetActorQuat(),People,FCollisionShape::MakeBox(FVector(110,75,110)),SafetyParams);
- if (PeopleHits.ContainsByPredicate([](const FHitResult& Hit) { return Hit.GetActor() && (Hit.GetActor()->ActorHasTag(TEXT("WarehousePhysicalHuman")) || Hit.GetComponent()->GetCollisionObjectType()==ECC_Pawn); }))
+ if (!bUseAgvSafety) GetWorld()->SweepMultiByObjectType(PeopleHits,SafetyCenter,SafetyEnd,GetActorQuat(),People,FCollisionShape::MakeBox(FVector(110,75,110)),SafetyParams);
+ // With the AGV module's safety fields (agv.safety) the LiDAR fields detect people; this engine query knows a Pawn is a
+ // person, which a real scanner cannot. The contact sweeps below stay (bumper / fork-tip contact).
+ if (!bUseAgvSafety && PeopleHits.ContainsByPredicate([](const FHitResult& Hit) { return Hit.GetActor() && (Hit.GetActor()->ActorHasTag(TEXT("WarehousePhysicalHuman")) || Hit.GetComponent()->GetCollisionObjectType()==ECC_Pawn); }))
  {
   return Blocked(TEXT("PERSON IN SAFETY ZONE"));
  }
