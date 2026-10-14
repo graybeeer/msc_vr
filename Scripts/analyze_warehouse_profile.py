@@ -19,7 +19,7 @@ SCOPES = {
 }
 COUNTERS = {
     "LoadGraphBuilds", "SupportTraceCount", "SupportedActorQueries",
-    "NavigationQueries", "RoutePlans",
+    "NavigationQueries", "RoutePlans", "GeometryRejectedCandidates", "SupportSnapshotReuses",
 }
 NATIVE_TIMINGS = {
     "gamethread", "renderthread", "rhithread", "physics", "physicsthread", "physicstime",

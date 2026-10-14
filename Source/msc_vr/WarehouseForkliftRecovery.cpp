@@ -1,4 +1,5 @@
 #include "WarehouseForklift.h"
+#include "WarehouseWaitingBay.h"
 #include "WarehousePallet.h"
 #include "WarehouseChargingStation.h"
 #include "WarehouseFleetCoordinator.h"
@@ -106,6 +107,18 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
    UE_LOG(LogTemp,Log,TEXT("AGV_CHARGER_DEPARTURE_RECOVERY %s from=%s to=%s"),*VehicleName,*GetActorLocation().ToString(),*Forward.GetLocation().ToString());
   }
  }
+ // A clear vehicle with an unreachable destination is not physically jammed.
+ // Blindly reversing cannot fix a blocked rack face or a disconnected aisle.
+ if ((FailedPickupRoute || FailedDeliveryRoute) && !ChargerForwardRecovery && NavigationClear(GetActorTransform()))
+ {
+  TGuardValue<bool> Planning(bPlanningRoute,true);
+  const FTransform Goal=PalletApproach(FailedPickupRoute ? TargetPallet->GetActorTransform() : ActiveJob.Destination,220);
+  const bool GoalClear=NavigationClear(Goal);
+  RecoveryFault(GoalClear ? TEXT("NO CONNECTED ROUTE AFTER LAYOUT CHANGE") : TEXT("PALLET APPROACH SPACE BLOCKED"),
+   GoalClear ? TEXT("현재 배치에서 연결 가능한 경로를 찾지 못했습니다. 통로 폭과 랙 배치를 확인한 뒤 E로 재시도하세요.") :
+    TEXT("팔레트 접근 공간이 막혀 있습니다. 랙 앞 작업 공간과 팔레트 방향을 확인한 뒤 E로 재시도하세요."));
+  return false;
+ }
  ++RecoveryCount; ++RecoveryAttempts;
  StalledSeconds=0;
  RecoveryStart=GetActorLocation();
@@ -136,6 +149,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
 
 bool AWarehouseForklift::PlanRecoveryDetour(const FTransform& Goal)
 {
+ TGuardValue<bool> CurrentRackWaypoints(bUseCurrentRackWaypoints,true);
  // Reuse the swept pose graph; temporary side lanes do not change saved anchors.
  const TArray<FTransform> SavedAnchors=NavigationAnchors;
  const FTransform From=GetActorTransform();
@@ -202,6 +216,7 @@ void AWarehouseForklift::AdvanceRecovery(float Dt)
    FHitResult Ground;
    const FVector Preview=GetActorLocation()+Forward*RecoveryDirection*35.f*Dt;
    FCollisionQueryParams Params(SCENE_QUERY_STAT(RecoveryFloor),false,this);
+   AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
    if (!GetWorld()->LineTraceSingleByChannel(Ground,Preview+FVector(0,0,3),Preview-FVector(0,0,5),ECC_Visibility,Params) || Ground.ImpactNormal.Z<.98f)
    { RecoveryFault(TEXT("RECOVERY FLOOR UNSUPPORTED"),TEXT("탈출 방향에 안전한 바닥이 없습니다.")); return; }
    if (CommandDrive(RecoveryDirection*FMath::Min(35.f,Remaining*2.f),0,Dt) && Status.StartsWith(TEXT("RECOVERY BLOCKED:")))

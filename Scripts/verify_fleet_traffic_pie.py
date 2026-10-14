@@ -11,7 +11,9 @@ parked='-fleetparkedwarehouse' in command
 blocked_start='-fleetblockedescapestart' in command
 assert level.load_level('/Game/FirstPerson/Lvl_FirstPerson')
 source=next(a for a in actors.get_all_level_actors() if a.get_actor_label()=='WH_AutonomousForklift')
-rig={c.get_name():(c.get_relative_transform(),c.static_mesh,list(c.get_editor_property('override_materials'))) for c in source.get_components_by_class(unreal.StaticMeshComponent)}
+rig={c.get_name():(c.static_mesh,list(c.get_editor_property('override_materials'))) for c in source.get_components_by_class(unreal.StaticMeshComponent)}
+poses={c.get_name():unreal.MathLibrary.make_relative_transform(c.get_world_transform(),source.get_actor_transform()) for c in source.get_components_by_class(unreal.SceneComponent) if c!=source.root_component}
+pallet_mesh=next(a for a in actors.get_all_level_actors() if a.get_actor_label()=='WH_TrainingPallet').get_component_by_class(unreal.StaticMeshComponent).static_mesh
 if not parked:
     assert level.load_level('/Engine/Maps/Entry')
     for original in list(actors.get_all_level_actors()):
@@ -25,6 +27,10 @@ def spawn(cls,label,point,yaw=0):
 def cube(label,point,size):
     a=spawn(unreal.StaticMeshActor,label,point);a.static_mesh_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Cube'))
     a.static_mesh_component.set_collision_profile_name('BlockAll');a.set_actor_scale3d(unreal.Vector(*size)/100.);return a
+def depth(component):
+    result=0
+    while component.get_attach_parent():result+=1;component=component.get_attach_parent()
+    return result
 
 if parked:
     named={a.get_actor_label():a for a in actors.get_all_level_actors()}
@@ -40,14 +46,28 @@ else:
     spawn(unreal.PlayerStart,'TrafficPlayer',(0,1000,100))
 for label,point,yaw in ([] if parked else [('TrafficA',(-500 if blocked else -120,0,0),0),('TrafficB',(500 if blocked else 400,0,0),180)]):
     v=spawn(unreal.WarehouseForklift,label,point,yaw);v.set_editor_property('vehicle_name',label);v.set_editor_property('auto_start',False)
+    v.set_editor_property('idle_parking_enabled',False)
     for c in v.get_components_by_class(unreal.StaticMeshComponent):
-        t,m,materials=rig[c.get_name()];c.set_relative_transform(t,False,True);c.set_static_mesh(m);c.set_editor_property('override_materials',materials)
+        m,materials=rig[c.get_name()];c.set_static_mesh(m);c.set_editor_property('override_materials',materials)
+    for c in sorted(v.get_components_by_class(unreal.SceneComponent),key=depth):
+        if c!=v.root_component:c.set_world_transform(unreal.MathLibrary.compose_transforms(poses[c.get_name()],v.get_actor_transform()),False,True)
     v.set_editor_property('navigation_anchors',[unreal.Transform(location=unreal.Vector(x,y,0),rotation=unreal.Rotator(yaw=h)) for x,y,h in [(-200,-400,0),(650,-400,0),(1000,-400,0),(-200,400,0),(650,400,0),(1000,400,0),(-200,0,0),(650,0,0)]])
 if not parked:
-    spawn(unreal.WarehousePallet,'TrafficPalletA',(700 if blocked else 150,0,.1))
-    spawn(unreal.WarehousePallet,'TrafficPalletB',(-1400,0,.1),180)
+    for label,point,yaw in [('TrafficPalletA',(700 if blocked else 150,0,.1),0),('TrafficPalletB',(-1400,0,.1),180)]:
+        spawn(unreal.WarehousePallet,label,point,yaw).get_component_by_class(unreal.StaticMeshComponent).set_static_mesh(pallet_mesh)
 if blocked:
     cube('TrafficWallN',(0,120,125),(1800,20,250));cube('TrafficWallS',(0,-120,125),(1800,20,250));cube('TrafficWallBack',(800,0,125),(30,260,250))
+if not parked:
+    # Destination/support validation uses the real strength system, including
+    # in empty-pallet traffic fixtures. Without it the job faults before routing.
+    strength=spawn(unreal.WarehouseDamageSystem,'TrafficStrength',(0,1500,0))
+    specs=[]
+    for a in actors.get_all_level_actors():
+        if isinstance(a,unreal.WarehousePallet) or isinstance(a,unreal.StaticMeshActor):
+            specs.append(unreal.WarehouseStrength(name=a.get_actor_label(),members=[a],mass_kg=25 if isinstance(a,unreal.WarehousePallet) else 50000,
+                rated_load_kg=100000,impact_yield_j=100000,impact_failure_j=1000000,
+                failure=unreal.WarehouseFailure.CRUSH if isinstance(a,unreal.WarehousePallet) else unreal.WarehouseFailure.STRUCTURE))
+    strength.set_editor_property('objects',specs)
 started=time.monotonic();live=None;game=None;issued=False;second=False;last=-10;baseline=None;initial_b=None;fault_at=None;yield_recorded=False
 
 def finish(ok,detail):
@@ -66,6 +86,9 @@ def tick(dt):
             pawn=unreal.GameplayStatics.get_player_pawn(game,0)
             print('TRAFFIC_FIXTURE_PLAYER',pawn.get_actor_location())
             if not parked:assert pawn.get_actor_location().y>500,'Player spawned inside the test lane'
+            if not parked:
+                clocks=unreal.GameplayStatics.get_all_actors_of_class(game,unreal.WarehouseSimulationClock)
+                assert clocks and clocks[0].set_speed(4)
         a,b=live['TrafficA'],live['TrafficB']
         if b.get_editor_property('traffic_yielding') and not yield_recorded:
             yield_recorded=True
@@ -85,6 +108,8 @@ def tick(dt):
             assert v.get_component_by_class(unreal.StaticMeshComponent).is_simulating_physics(),'Vehicle physics disabled'
         if not issued:
             if now<2:return
+            assert unreal.GameplayStatics.get_all_actors_of_class(game,unreal.WarehouseDamageSystem),'Missing traffic fixture support system'
+            assert a.is_floor_footprint_valid(live['TrafficPalletA'],unreal.Transform(location=unreal.Vector(*((-800,-1395,0) if parked else (1100,0,0))),rotation=unreal.Rotator(yaw=180 if parked else 0))),'Traffic fixture has invalid destination footprint'
             a.toggle_power();b.toggle_power();baseline=a.get_actor_location();initial_b=b.get_actor_location()
             if closed:manager.close_section('Lane-01',unreal.Vector(250,-120,1),unreal.Vector(520,120,240),'test obstruction')
             job=unreal.WarehouseWorkOrder(job_id='TRAFFIC-A',source_system='FMS-TRAFFIC-CHECK',pallet=live['TrafficPalletA'],destination=unreal.Transform(location=unreal.Vector(*((-800,-1395,0) if parked else (1100,0,0))),rotation=unreal.Rotator(yaw=180 if parked else 0)))

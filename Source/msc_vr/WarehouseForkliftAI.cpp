@@ -22,9 +22,12 @@ static uint32 WarehouseNavigationQueryCount=0;
 #include "CollisionQueryParams.h"
 #include "Engine/OverlapResult.h"
 #include "PhysicsEngine/BodySetup.h"
+#include "HAL/IConsoleManager.h"
 
-// Only the synchronous connection/plan owns this snapshot. Every new plan and
-// live scanner call rebuilds it; collision, floor and passage queries stay live.
+static TAutoConsoleVariable<int32> CVarWarehouseGeometryPruning(TEXT("Warehouse.NavigationGeometryPruning"),1,
+ TEXT("Reject unexecutable curves before native collision queries; 0 preserves the reference query order."));
+
+// Each synchronous plan owns its query setup; every native collision check stays live.
 struct FWarehouseNavigationQuery
 {
  FCollisionQueryParams Params;
@@ -35,6 +38,8 @@ struct FWarehouseNavigationQuery
  bool bDiagnostics=false;
  bool bInsertionRetryEscape=false;
  mutable uint8 GoalBlockReports=0;
+ bool bGeometryFirst=false;
+ mutable uint32 GeometryRejectedCandidates=0;
 };
 
 FString AWarehouseForklift::CheckSystems() const
@@ -169,6 +174,8 @@ FWarehouseNavigationQuery AWarehouseForklift::BuildNavigationQuery() const
  FWarehouseNavigationQuery Query{FCollisionQueryParams(SCENE_QUERY_STAT(AGVNavigation),false,this),NavigationEnvelope(),FVector::ZeroVector,Wheels.Num()>=3};
  Query.bInsertionRetryEscape=bPlanningRoute && bRetryInsertion && ForkInsertionRetries>0 && AIState==EWarehouseAIState::AlignVehicle && !bSupportingPallet;
  auto& Params=Query.Params;
+ Query.bGeometryFirst=bPlanningRoute && CVarWarehouseGeometryPruning.GetValueOnGameThread()!=0;
+ AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
  if (bSupportingPallet && IsValid(TargetPallet)) Params.AddIgnoredActor(TargetPallet);
  for (AActor* Load : CarriedCargo) if (IsValid(Load)) Params.AddIgnoredActor(Load);
  // The central passage lease, rather than a frozen planning snapshot, schedules
@@ -304,7 +311,7 @@ bool AWarehouseForklift::ConnectPoses(const FTransform& From,const FTransform& T
     // cannot execute that sudden 180-degree tangent change.
     const float Turn=FMath::Abs(FMath::FindDeltaAngleDegrees(Previous.Rotator().Yaw,Heading.Yaw))*PI/180.f;
     if (Segment>10 || Turn>Segment/FMath::Max(117.3f,MinimumTurningRadiusCm)+.02f ||
-        !NavigationClear(Step.Pose,Query)) { Valid=false; break; }
+        (!Query->bGeometryFirst && !NavigationClear(Step.Pose,Query))) { Valid=false; break; }
     Length+=Segment;
     Candidate.Add(Step); Previous=Step.Pose;
     // Remaining segments cannot reduce accumulated cost. Keep close floating
@@ -312,6 +319,12 @@ bool AWarehouseForklift::ConnectPoses(const FTransform& From,const FTransform& T
     if (Cost<FLT_MAX && Length*(Direction<0 ? 1.15f : 1.f)>Cost+.01f) { Valid=false;break; }
    }
    const float Weighted=Length*(Direction<0 ? 1.15f : 1.f);
+   if (Query->bGeometryFirst)
+   {
+    if (!Valid || Weighted>=Cost) ++Query->GeometryRejectedCandidates;
+    else for (const auto& Step : Candidate)
+     if (!NavigationClear(Step.Pose,Query)) { Valid=false;break; }
+   }
    if (Valid && Weighted<Cost) { Route=MoveTemp(Candidate); Cost=Weighted; }
   }
  return Cost<FLT_MAX;
@@ -353,6 +366,7 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  if (!FleetCoordinator) FleetCoordinator=AWarehouseFleetCoordinator::Find(this);
  TGuardValue<bool> Planning(bPlanningRoute,true);
  auto Query=BuildNavigationQuery();
+ ON_SCOPE_EXIT { CSV_CUSTOM_STAT(Warehouse,GeometryRejectedCandidates,int32(Query.GeometryRejectedCandidates),ECsvCustomStatOp::Accumulate); };
  // AGV localization: plan from the estimate (an insertion-retry escape keeps the exact pose it measures from).
  const FTransform StartPose=bUseAgvLocalization && !Query.bInsertionRetryEscape ? NavigationTransform() : GetActorTransform();
  const FVector RouteStart=StartPose.GetLocation();
@@ -362,7 +376,7 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  ON_SCOPE_EXIT
  {
   if (Found && Query.bInsertionRetryEscape) RecoveryStart=RouteStart;
-  if (Diagnostics && !Found)
+  if (!Found)
    UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_NO_ROUTE %s from=%s goal=%s candidates=%d start_edges=%d goal_edges=%d start_clear=%d goal_clear=%d"),
     *VehicleName,*GetActorLocation().ToString(),*Goal.GetLocation().ToString(),CandidateCount,StartConnections,GoalConnections,
     NavigationClear(GetActorTransform(),&Query),NavigationClear(Goal,&Query));
@@ -393,6 +407,49 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
    if (NavigationClear(Anchor,&Query)) Nodes.Add(Anchor);
   }
  CandidateCount=Nodes.Num()-2;
+ // Layout recovery must not depend solely on the lanes saved before a rack moved.
+ // Generate a bounded set from CURRENT collision bounds, then apply the same
+ // full vehicle/load sweeps and floor tests used for every other route edge.
+ if (bUseCurrentRackWaypoints)
+ {
+  TArray<FTransform> RackCandidates;
+  if (auto* Strength=AWarehouseDamageSystem::Find(this))
+   for (const auto& Spec : Strength->Objects) if (Spec.Failure==EWarehouseFailure::Rack)
+   {
+    FBox Bounds(ForceInit);
+    for (AActor* Member : Spec.Members) if (IsValid(Member))
+    {
+     const FBox Part=AWarehouseDamageSystem::GetPhysicalBounds(Member);
+     if (Part.IsValid) Bounds+=Part;
+    }
+    if (!Bounds.IsValid || Bounds.Min.Z>RouteStart.Z+Query.Envelope.Max.Z || Bounds.Max.Z<RouteStart.Z+3) continue;
+    const float Clearance=FMath::Max(Query.Envelope.Min.Size2D(),Query.Envelope.Max.Size2D())+10.f;
+    const FBox Around=Bounds.ExpandBy(FVector(Clearance,Clearance,0));
+    const FVector Center=Around.GetCenter();
+    for (float X : {float(Around.Min.X),float(Center.X),float(Around.Max.X)})
+     for (float Y : {float(Around.Min.Y),float(Center.Y),float(Around.Max.Y)})
+     {
+      if (X==Center.X && Y==Center.Y) continue;
+      const FVector Point(X,Y,RouteStart.Z);
+      if (FVector::Dist2D(Point,RouteStart)+FVector::Dist2D(Point,Goal.GetLocation())>
+          FVector::Dist2D(RouteStart,Goal.GetLocation())+2400.f) continue;
+      RackCandidates.Add(FTransform(FRotator(0,Goal.Rotator().Yaw,0),Point));
+     }
+   }
+  RackCandidates.Sort([&](const FTransform& A,const FTransform& B)
+  {
+   auto Score=[&](const FTransform& P) { return FVector::Dist2D(P.GetLocation(),RouteStart)+FVector::Dist2D(P.GetLocation(),Goal.GetLocation()); };
+   return Score(A)<Score(B);
+  });
+  int32 Added=0,Checked=0;
+  for (const FTransform& Candidate : RackCandidates)
+  {
+   if (++Checked>192 || Added>=48) break;
+   if (Nodes.ContainsByPredicate([&](const FTransform& P){return FVector::Dist2D(P.GetLocation(),Candidate.GetLocation())<30.f;})) continue;
+   if (NavigationClear(Candidate,&Query)) { Nodes.Add(Candidate);++Added; }
+  }
+  CandidateCount=Nodes.Num()-2;
+ }
  TArray<float> Costs; Costs.Init(FLT_MAX,Nodes.Num()); Costs[0]=0;
  TArray<bool> Closed; Closed.Init(false,Nodes.Num());
  TArray<TArray<FWarehouseRoutePoint>> Paths; Paths.SetNum(Nodes.Num());
@@ -606,6 +663,7 @@ bool AWarehouseForklift::SeePallet(FTransform& Pose) const
  const FVector Delta=TargetPallet->GetActorLocation()-GetActorLocation();
  if (Delta.Size()>PalletDetectionRangeCm || FVector::DotProduct(Delta.GetSafeNormal2D(),GetActorForwardVector())<.5f) return false;
  FCollisionQueryParams Params(SCENE_QUERY_STAT(PalletCamera),true,this);
+ AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
  const FVector Origin=GetActorLocation()+GetActorForwardVector()*10+FVector(0,0,90);
  bool Seen=false;
  for (float Y : {-40.f,0.f,40.f})
@@ -675,8 +733,10 @@ bool AWarehouseForklift::IsFloorPlacementValid(AWarehousePallet* Pallet,const FT
  if (!Bounds.IsValid || FMath::Abs(Bounds.Min.Z-Destination.GetLocation().Z)>.5f ||
      FMath::Abs(Pallet->GetActorRotation().Pitch)>2.f || FMath::Abs(Pallet->GetActorRotation().Roll)>2.f) return false;
  FCollisionQueryParams FloorParams(SCENE_QUERY_STAT(FloorHandoffSupport),false);
+ AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),FloorParams);
  FloorParams.AddIgnoredActors(Loads);FloorParams.AddIgnoredActor(this);
  FComponentQueryParams ContactParams(SCENE_QUERY_STAT(FloorHandoffContact));
+ AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),ContactParams);
  ContactParams.AddIgnoredActors(Loads);
  if (bForksStillInserted) ContactParams.AddIgnoredActor(this);
  for (float X : {-40.f,40.f}) for (float Y : {-40.f,40.f})
@@ -717,6 +777,7 @@ bool AWarehouseForklift::DestinationClear(const TArray<AActor*>* Traffic) const
  const FTransform& Pose=ActiveJob.Destination;
  const bool Floor=FMath::Abs(Pose.GetLocation().Z-FloorBase(Pose.GetLocation().Z))<=5.f;
  FCollisionQueryParams Params(SCENE_QUERY_STAT(DropReservation),false,this);
+ AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
  if (Traffic) Params.AddIgnoredActors(*Traffic);
  if (IsValid(TargetPallet)) Params.AddIgnoredActor(TargetPallet);
  for (AActor* Cargo : CarriedCargo) if (IsValid(Cargo)) Params.AddIgnoredActor(Cargo);
@@ -948,6 +1009,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    const FBox Bounds=AWarehouseDamageSystem::GetPhysicalBounds(TargetPallet);
    SourceGroundContact=Bounds.IsValid && FMath::Abs(Bounds.Min.Z-SourceFloor)<=.5f;
    FCollisionQueryParams Params(SCENE_QUERY_STAT(PalletSourceFloorContact),false,this);
+   AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
    Params.AddIgnoredActor(TargetPallet);
    for (float X : {-40.f,40.f}) for (float Y : {-40.f,40.f}) if (SourceGroundContact)
    {
@@ -1190,6 +1252,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    {
     FHitResult Shelf;
     FCollisionQueryParams Params(SCENE_QUERY_STAT(RackLoadHandoff),false,this);
+    AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
     Params.AddIgnoredActor(TargetPallet);
     for (const auto& Cargo : CarriedCargo) if (IsValid(Cargo)) Params.AddIgnoredActor(Cargo.Get());
     const FVector Probe=ActiveJob.Destination.TransformPosition(FVector(40,40,0));
@@ -1246,6 +1309,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    bPlaced &= RackLoadAligned();
    FHitResult Shelf;
    FCollisionQueryParams Params(SCENE_QUERY_STAT(UnloadedRackSupport),false,this);
+   AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
    Params.AddIgnoredActor(TargetPallet);
    for (const auto& Cargo : CarriedCargo) if (IsValid(Cargo)) Params.AddIgnoredActor(Cargo.Get());
    const FVector Probe=ActiveJob.Destination.TransformPosition(FVector(40,40,0));

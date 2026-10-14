@@ -59,6 +59,9 @@ public:
  UFUNCTION(BlueprintPure, Category="Physics") static FBox GetPhysicalBounds(AActor* Actor);
  // Bulk inventory reads reuse one support snapshot instead of rescanning the scene for every pallet.
  UFUNCTION(BlueprintCallable, Category="Strength") TArray<AActor*> GetSupportedActors(AActor* Object,bool Refresh=true);
+ // Periodic readers share the 10Hz snapshot. Explicit Refresh=true remains unconditional.
+ UFUNCTION(BlueprintCallable, Category="Strength") void EnsureSupportSnapshot();
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Performance") int32 SupportSnapshotVersion=0;
  static AWarehouseDamageSystem* Find(const AActor* Context);
 private:
  struct FBodyMotion
@@ -78,6 +81,8 @@ private:
  UPROPERTY(Transient) TArray<TObjectPtr<UTextRenderComponent>> Labels;
  bool bInitialized = false;
  float SinceScan = 0;
+ double LastSupportScanSeconds=-1;
+ uint64 LastSupportScanFrame=MAX_uint64;
  int32 IndexOf(const AActor* Actor) const;
  float PhysicalMass(int32 Index) const;
  static FBodyMotion ReadMotion(UPrimitiveComponent* Part);

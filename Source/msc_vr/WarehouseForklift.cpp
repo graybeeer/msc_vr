@@ -314,6 +314,7 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
   TArray<UStaticMeshComponent*> LoadParts; Load->GetComponents(LoadParts); Parts.Append(LoadParts);
  }
  FComponentQueryParams Params(SCENE_QUERY_STAT(ForkliftSweep),this);
+ AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Params);
  for (AActor* Load : CarriedCargo) if (bSupportingPallet && IsValid(Load)) Params.AddIgnoredActor(Load);
  if (bSupportingPallet) Params.AddIgnoredActor(TargetPallet);
  for (auto* Part : Parts)
@@ -350,6 +351,7 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
        Hit.PenetrationDepth<.5f && PartDelta.Z>=-.001f)
    {
     FCollisionQueryParams Bearing(SCENE_QUERY_STAT(RollingTyreSupport),false,this);
+    AWarehouseWaitingBay::IgnoreNavigationMarkers(GetWorld(),Bearing);
     Bearing.AddIgnoredActors(GetPhysicalLoads());
     FHitResult Ground;
     const float Radius=Part->GetStaticMesh()->GetBoundingBox().GetExtent().Z*Part->GetComponentScale().GetAbs().Z;

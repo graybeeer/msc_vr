@@ -162,15 +162,14 @@ void AWarehouseComputer::RefreshState()
  TMap<AWarehouseCargo*,AWarehousePallet*> Owners;TMap<AWarehousePallet*,FString> Racks;
  if (Strength)
  {
-  bool Refresh=true;
+  Strength->EnsureSupportSnapshot();
   for (TActorIterator<AWarehousePallet> It(GetWorld());It;++It)
   {
-   for (auto* Load : Strength->GetSupportedActors(*It,Refresh)) if (auto* Cargo=Cast<AWarehouseCargo>(Load))
+   for (auto* Load : Strength->GetSupportedActors(*It,false)) if (auto* Cargo=Cast<AWarehouseCargo>(Load))
    {
     auto* Previous=Owners.FindRef(Cargo);
     if (!Previous || Previous->GetActorLocation().Z<It->GetActorLocation().Z) Owners.Add(Cargo,*It);
    }
-   Refresh=false;
   }
   for (const auto& Object : Strength->Objects) if (Object.Failure==EWarehouseFailure::Rack && !Object.Members.IsEmpty())
    for (auto* Supported : Strength->GetSupportedActors(Object.Members[0],false)) if (auto* Pallet=Cast<AWarehousePallet>(Supported))
