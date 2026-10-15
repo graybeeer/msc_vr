@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-14",
+  "blender_units": "meters",
+  "unreal_applied": false,
+  "reference": "user supplied rubber corner protector photo",
+  "columns_excluded": true,
+  "modules": [
+    {
+      "name": "SM_WS_RubberCornerGuard_900",
+      "dimensions_cm": [
+        25.65000057220459,
+        25.65000057220459,
+        85.999995470047
+      ],
+      "origin": "floor at inner corner; flat panel at left edge; wrap at column center",
+      "fbx": "FBX/SM_WS_RubberCornerGuard_900.fbx"
+    },
+    {
+      "name": "SM_WS_RubberFlatGuard_900",
+      "dimensions_cm": [
+        25.0,
+        3.2499998807907104,
+        86.00000143051147
+      ],
+      "origin": "floor at inner corner; flat panel at left edge; wrap at column center",
+      "fbx": "FBX/SM_WS_RubberFlatGuard_900.fbx"
+    },
+    {
+      "name": "SM_WS_RubberColumnWrap_450",
+      "dimensions_cm": [
+        52.30000019073486,
+        52.30000019073486,
+        85.999995470047
+      ],
+      "origin": "floor at inner corner; flat panel at left edge; wrap at column center",
+      "fbx": "FBX/SM_WS_RubberColumnWrap_450.fbx"
+    }
+  ],
+  "validation": {
+    "date": "2026-10-14",
+    "fbx_files": 3,
+    "bounds_max_error_m": 0.0,
+    "passed": true,
+    "unreal_tested": false
+  }
+}

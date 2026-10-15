@@ -1,6 +1,6 @@
 # 물류창고 맵과 교육 시뮬레이션
 
-현재 기준: **2026-10-12**, Unreal Engine 5.8, 기본 맵 `/Game/FirstPerson/Lvl_FirstPerson`.
+현재 기준: **2026-10-16**, Unreal Engine 5.8, 기본 맵 `/Game/FirstPerson/Lvl_FirstPerson`.
 
 이 문서는 현재 맵의 공간 구성, 플레이어 조작, 하중·손상 프로필을 설명한다. 실제 강체·접촉·구동의 공통 기준은 [PHYSICS.md](PHYSICS.md), 작업 로직은 [AUTONOMY.md](AUTONOMY.md), 차량 사양은 [VNSL14_SPEC.md](VNSL14_SPEC.md), 최종 모델은 [REFINED_AGV.md](REFINED_AGV.md), 설치는 [TEAM_ASSETS.md](TEAM_ASSETS.md)를 기준으로 한다. 수정할 파일을 찾을 때는 [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)를 먼저 확인한다.
 
@@ -10,6 +10,7 @@
 | --- | --- |
 | 실내 | 48 × 40m 창고. 오른쪽으로 8m 확장, 기존 중앙 랙·작업 구역·출입구와 트럭 도크 유지 |
 | 복층 | 바닥 높이 0 / 4 / 8m, 지붕 높이 12m, 작업 갤러리·계단·난간 |
+| 설비 외형 | 천장/복층 트레이·배관·환기 덕트·LED, 벽면 분전함·전선관, 기둥 보호대. 추가 설비도 실제 메시 형상으로 충돌. 배치·검증 범위는 [설비 모델 안내](WAREHOUSE_SERVICES_MODEL.md)의 현재 Unreal 배치 참조 |
 | 층간 이동 | 북동쪽 AGV 승강기, 차량·팔레트·화물 합계 2,000kg 제한 |
 | 지게차 | 초기 1층 2대, 입고 적재 팔레트를 빈 랙으로 운반, 공유 충전 자리2개·일반 대기 자리2개 |
 | 화물 | 상자 364개(일반360개·중량 시험4개)·팔레트 185개. 개별 품목·크기·질량 유지 |
@@ -20,6 +21,8 @@
 | 관제 | 입구 앞 임시 컴퓨터, 실시간 재고·출고 운반 지시·차량 정지/재개·대기 작업 취소 |
 
 실내 랙과 설비는 Fab 창고 예제 `/Game/Scene_Warehouse/Maps/Industrial_Warehouse`를 참고했다. 트럭·나무·관목은 무료 Realistic Fab 팩의 원본 재질을 사용한다. 맵 조명과 자동 노출을 함께 사용하며, 도로 표시·안전선은 충돌을 끈다.
+
+2026-10-15 오른쪽 확장 구역의 천장 보 네 개가 벽에서22.5cm, 천장에서15cm 떨어져 있던 배치를 보정했다. 보의 아랫면과 기존 설비 장착 높이는 유지하고 실제 벽 안쪽 면과 지붕 하단에 끝·윗면을 맞췄다. `configure_inbound_area.py`도 같은 경계를 읽도록 수정했다. 공식 Unreal MCP로 수정·저장·맵 재로드 후 틈0cm와 해당 보 네 개만의 변환 변경을 확인했다. 결과와 캡처는 `Saved/Testing/ChargerRoofRestore/Report.json`, 같은 폴더의 `RoofAfter.png`다. 구조 강도 해석 결과를 의미하지 않는다. 충전기 외형 복원은 [충전기 모델 안내](CHARGER_MODEL.md)를 따른다.
 
 복층 구조와 승강기 인터록·층별 경로의 상세 기준은 [MEZZANINE.md](MEZZANINE.md)에 있다. 현재 기본 시범은 **두 차량의 1층 운반**이다. 이전 `DEMO-L1-L3` 단일 차량 시범은 현재 기본 작업이 아니며, 층간 작업 기능 자체는 유지한다.
 

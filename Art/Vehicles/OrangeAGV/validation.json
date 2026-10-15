@@ -1,0 +1,12 @@
+{
+  "wheel_count": 7,
+  "mesh_count": 24,
+  "lift_test_m": 0.8,
+  "steer_test_degrees": 35,
+  "roll_test_distance_m": 0.25,
+  "button_test_m": 0.008,
+  "passed": true,
+  "fbx_roundtrip_parts": 24,
+  "fbx_roundtrip_max_bbox_error_m": 5.960464477539063e-08,
+  "unreal_import_tested": false
+}
