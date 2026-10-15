@@ -1,0 +1,716 @@
+{
+  "units": "centimeters",
+  "axes": "X forward, Y right, Z up",
+  "rig": "rigid static-mesh hierarchy; Blender drivers are preview controls, not FBX physics constraints",
+  "parts": [
+    {
+      "name": "SM_AGV_Chassis",
+      "parent": "AGV_ROOT",
+      "relative_location_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "world_pivot_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "joint_type": "fixed",
+      "motion_axis": "none",
+      "triangles": 47635,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_Chassis.fbx"
+    },
+    {
+      "name": "SM_AGV_Fork_L",
+      "parent": "SM_AGV_LiftCarriage",
+      "relative_location_cm": [
+        -7.500005,
+        -31.0,
+        0.0
+      ],
+      "world_pivot_cm": [
+        32.499996,
+        -31.000003,
+        40.000001
+      ],
+      "joint_type": "prismatic_optional",
+      "motion_axis": "Y",
+      "triangles": 1200,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_Fork_L.fbx"
+    },
+    {
+      "name": "SM_AGV_Fork_R",
+      "parent": "SM_AGV_LiftCarriage",
+      "relative_location_cm": [
+        -7.499999,
+        31.0,
+        0.0
+      ],
+      "world_pivot_cm": [
+        32.500002,
+        30.999997,
+        40.000001
+      ],
+      "joint_type": "prismatic_optional",
+      "motion_axis": "Y",
+      "triangles": 1200,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_Fork_R.fbx"
+    },
+    {
+      "name": "SM_AGV_MastInner",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        27.000001,
+        -2e-06,
+        31.999999
+      ],
+      "world_pivot_cm": [
+        27.000001,
+        -2e-06,
+        31.999999
+      ],
+      "joint_type": "prismatic",
+      "motion_axis": "Z",
+      "triangles": 600,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_MastInner.fbx"
+    },
+    {
+      "name": "SM_AGV_LiftRam",
+      "parent": "SM_AGV_MastInner",
+      "relative_location_cm": [
+        -8.000001,
+        1e-06,
+        110.99999
+      ],
+      "world_pivot_cm": [
+        19.0,
+        -1e-06,
+        142.999983
+      ],
+      "joint_type": "fixed",
+      "motion_axis": "none",
+      "triangles": 764,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_LiftRam.fbx"
+    },
+    {
+      "name": "SM_AGV_LiftPulley",
+      "parent": "SM_AGV_MastInner",
+      "relative_location_cm": [
+        -8.000001,
+        1e-06,
+        188.000011
+      ],
+      "world_pivot_cm": [
+        19.0,
+        -1e-06,
+        220.000005
+      ],
+      "joint_type": "revolute",
+      "motion_axis": "Y",
+      "triangles": 764,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_LiftPulley.fbx"
+    },
+    {
+      "name": "SM_AGV_LiftChains",
+      "parent": "SM_AGV_MastInner",
+      "relative_location_cm": [
+        7.999998,
+        -1e-06,
+        8.000001
+      ],
+      "world_pivot_cm": [
+        34.999999,
+        -3e-06,
+        40.000001
+      ],
+      "joint_type": "fixed",
+      "motion_axis": "none",
+      "triangles": 25200,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_LiftChains.fbx"
+    },
+    {
+      "name": "SM_AGV_LiftCarriage",
+      "parent": "SM_AGV_MastInner",
+      "relative_location_cm": [
+        13.0,
+        -1e-06,
+        8.000001
+      ],
+      "world_pivot_cm": [
+        40.000001,
+        -3e-06,
+        40.000001
+      ],
+      "joint_type": "prismatic",
+      "motion_axis": "Z",
+      "triangles": 2100,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_LiftCarriage.fbx"
+    },
+    {
+      "name": "SM_AGV_Button_HMI_1",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        -51.700002,
+        1.500004,
+        158.500004
+      ],
+      "world_pivot_cm": [
+        -51.700002,
+        1.500004,
+        158.500004
+      ],
+      "joint_type": "prismatic",
+      "motion_axis": "X",
+      "triangles": 380,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_Button_HMI_1.fbx"
+    },
+    {
+      "name": "SM_AGV_Button_HMI_2",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        -51.700002,
+        11.000004,
+        158.500004
+      ],
+      "world_pivot_cm": [
+        -51.700002,
+        11.000004,
+        158.500004
+      ],
+      "joint_type": "prismatic",
+      "motion_axis": "X",
+      "triangles": 380,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_Button_HMI_2.fbx"
+    },
+    {
+      "name": "SM_AGV_Button_HMI_3",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        -51.700002,
+        20.500004,
+        158.500004
+      ],
+      "world_pivot_cm": [
+        -51.700002,
+        20.500004,
+        158.500004
+      ],
+      "joint_type": "prismatic",
+      "motion_axis": "X",
+      "triangles": 380,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_Button_HMI_3.fbx"
+    },
+    {
+      "name": "SM_AGV_Button_EStop",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        -37.999997,
+        29.400003,
+        199.000001
+      ],
+      "world_pivot_cm": [
+        -37.999997,
+        29.400003,
+        199.000001
+      ],
+      "joint_type": "prismatic",
+      "motion_axis": "-Y",
+      "triangles": 764,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_Button_EStop.fbx"
+    },
+    {
+      "name": "SM_AGV_DriveSteer",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        -40.000001,
+        3e-06,
+        43.5
+      ],
+      "world_pivot_cm": [
+        -40.000001,
+        3e-06,
+        43.5
+      ],
+      "joint_type": "revolute",
+      "motion_axis": "Z",
+      "triangles": 2668,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_DriveSteer.fbx"
+    },
+    {
+      "name": "SM_AGV_Wheel_Drive",
+      "parent": "SM_AGV_DriveSteer",
+      "relative_location_cm": [
+        0.0,
+        0.0,
+        -23.0
+      ],
+      "world_pivot_cm": [
+        -40.000001,
+        3e-06,
+        20.5
+      ],
+      "joint_type": "revolute",
+      "motion_axis": "Y",
+      "triangles": 12988,
+      "radius_cm": 20.5,
+      "fbx": "UnrealParts/SM_AGV_Wheel_Drive.fbx"
+    },
+    {
+      "name": "SM_AGV_CasterSwivel_L",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        -72.000009,
+        -44.999993,
+        25.5
+      ],
+      "world_pivot_cm": [
+        -72.000009,
+        -44.999993,
+        25.5
+      ],
+      "joint_type": "revolute",
+      "motion_axis": "Z",
+      "triangles": 1140,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_CasterSwivel_L.fbx"
+    },
+    {
+      "name": "SM_AGV_Wheel_Stabilizer_L",
+      "parent": "SM_AGV_CasterSwivel_L",
+      "relative_location_cm": [
+        -2.8,
+        0.0,
+        -15.000001
+      ],
+      "world_pivot_cm": [
+        -74.800009,
+        -44.999993,
+        10.499999
+      ],
+      "joint_type": "revolute",
+      "motion_axis": "Y",
+      "triangles": 12988,
+      "radius_cm": 10.5,
+      "fbx": "UnrealParts/SM_AGV_Wheel_Stabilizer_L.fbx"
+    },
+    {
+      "name": "SM_AGV_CasterSwivel_R",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        -71.999997,
+        45.000005,
+        25.5
+      ],
+      "world_pivot_cm": [
+        -71.999997,
+        45.000005,
+        25.5
+      ],
+      "joint_type": "revolute",
+      "motion_axis": "Z",
+      "triangles": 1140,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_CasterSwivel_R.fbx"
+    },
+    {
+      "name": "SM_AGV_Wheel_Stabilizer_R",
+      "parent": "SM_AGV_CasterSwivel_R",
+      "relative_location_cm": [
+        -2.8,
+        0.0,
+        -15.000001
+      ],
+      "world_pivot_cm": [
+        -74.799997,
+        45.000005,
+        10.499999
+      ],
+      "joint_type": "revolute",
+      "motion_axis": "Y",
+      "triangles": 12988,
+      "radius_cm": 10.5,
+      "fbx": "UnrealParts/SM_AGV_Wheel_Stabilizer_R.fbx"
+    },
+    {
+      "name": "SM_AGV_Bogie_L",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        139.999998,
+        -31.000012,
+        14.0
+      ],
+      "world_pivot_cm": [
+        139.999998,
+        -31.000012,
+        14.0
+      ],
+      "joint_type": "revolute",
+      "motion_axis": "Y",
+      "triangles": 564,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_Bogie_L.fbx"
+    },
+    {
+      "name": "SM_AGV_Wheel_Load_L1",
+      "parent": "SM_AGV_Bogie_L",
+      "relative_location_cm": [
+        14.999998,
+        0.0,
+        -6.3
+      ],
+      "world_pivot_cm": [
+        154.999995,
+        -31.000012,
+        7.7
+      ],
+      "joint_type": "revolute",
+      "motion_axis": "Y",
+      "triangles": 12988,
+      "radius_cm": 7.7,
+      "fbx": "UnrealParts/SM_AGV_Wheel_Load_L1.fbx"
+    },
+    {
+      "name": "SM_AGV_Wheel_Load_L2",
+      "parent": "SM_AGV_Bogie_L",
+      "relative_location_cm": [
+        -13.999999,
+        3e-06,
+        -6.3
+      ],
+      "world_pivot_cm": [
+        125.999999,
+        -31.000009,
+        7.7
+      ],
+      "joint_type": "revolute",
+      "motion_axis": "Y",
+      "triangles": 12988,
+      "radius_cm": 7.7,
+      "fbx": "UnrealParts/SM_AGV_Wheel_Load_L2.fbx"
+    },
+    {
+      "name": "SM_AGV_Bogie_R",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        139.999998,
+        30.999988,
+        14.0
+      ],
+      "world_pivot_cm": [
+        139.999998,
+        30.999988,
+        14.0
+      ],
+      "joint_type": "revolute",
+      "motion_axis": "Y",
+      "triangles": 564,
+      "radius_cm": 0,
+      "fbx": "UnrealParts/SM_AGV_Bogie_R.fbx"
+    },
+    {
+      "name": "SM_AGV_Wheel_Load_R1",
+      "parent": "SM_AGV_Bogie_R",
+      "relative_location_cm": [
+        14.999998,
+        0.0,
+        -6.3
+      ],
+      "world_pivot_cm": [
+        154.999995,
+        30.999988,
+        7.7
+      ],
+      "joint_type": "revolute",
+      "motion_axis": "Y",
+      "triangles": 12988,
+      "radius_cm": 7.7,
+      "fbx": "UnrealParts/SM_AGV_Wheel_Load_R1.fbx"
+    },
+    {
+      "name": "SM_AGV_Wheel_Load_R2",
+      "parent": "SM_AGV_Bogie_R",
+      "relative_location_cm": [
+        -13.999999,
+        3e-06,
+        -6.3
+      ],
+      "world_pivot_cm": [
+        125.999999,
+        30.999991,
+        7.7
+      ],
+      "joint_type": "revolute",
+      "motion_axis": "Y",
+      "triangles": 12988,
+      "radius_cm": 7.7,
+      "fbx": "UnrealParts/SM_AGV_Wheel_Load_R2.fbx"
+    }
+  ],
+  "materials": {
+    "Graphite powder-coated steel": {
+      "base_color": [
+        0.020999999716877937,
+        0.027000000700354576,
+        0.03500000014901161,
+        1.0
+      ],
+      "metallic": 0.25,
+      "roughness": 0.4399999976158142,
+      "emission_color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "emission_strength": 1.0
+    },
+    "Black rubber": {
+      "base_color": [
+        0.008999999612569809,
+        0.012000000104308128,
+        0.01600000075995922,
+        1.0
+      ],
+      "metallic": 0.0,
+      "roughness": 0.6800000071525574,
+      "emission_color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "emission_strength": 1.0
+    },
+    "Machined steel": {
+      "base_color": [
+        0.36000001430511475,
+        0.4099999964237213,
+        0.44999998807907104,
+        1.0
+      ],
+      "metallic": 0.8500000238418579,
+      "roughness": 0.25,
+      "emission_color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "emission_strength": 1.0
+    },
+    "Safety orange - painted body": {
+      "base_color": [
+        0.8700000047683716,
+        0.07500000298023224,
+        0.014000000432133675,
+        1.0
+      ],
+      "metallic": 0.20000000298023224,
+      "roughness": 0.36000001430511475,
+      "emission_color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "emission_strength": 1.0
+    },
+    "Control enclosure - charcoal": {
+      "base_color": [
+        0.03500000014901161,
+        0.04500000178813934,
+        0.057999998331069946,
+        1.0
+      ],
+      "metallic": 0.25,
+      "roughness": 0.4000000059604645,
+      "emission_color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "emission_strength": 1.0
+    },
+    "White print": {
+      "base_color": [
+        0.8999999761581421,
+        0.9300000071525574,
+        0.949999988079071,
+        1.0
+      ],
+      "metallic": 0.0,
+      "roughness": 0.6000000238418579,
+      "emission_color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "emission_strength": 1.0
+    },
+    "Optical lens": {
+      "base_color": [
+        0.014999999664723873,
+        0.10999999940395355,
+        0.15000000596046448,
+        1.0
+      ],
+      "metallic": 0.6499999761581421,
+      "roughness": 0.10000000149011612,
+      "emission_color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "emission_strength": 1.0
+    },
+    "Sensor status green": {
+      "base_color": [
+        0.05000000074505806,
+        1.0,
+        0.30000001192092896,
+        1.0
+      ],
+      "metallic": 0.10000000149011612,
+      "roughness": 0.2199999988079071,
+      "emission_color": [
+        0.05000000074505806,
+        1.0,
+        0.30000001192092896,
+        1.0
+      ],
+      "emission_strength": 3.0
+    },
+    "Screen blue": {
+      "base_color": [
+        0.02500000037252903,
+        0.23999999463558197,
+        0.550000011920929,
+        1.0
+      ],
+      "metallic": 0.10000000149011612,
+      "roughness": 0.25,
+      "emission_color": [
+        0.02500000037252903,
+        0.23999999463558197,
+        0.550000011920929,
+        1.0
+      ],
+      "emission_strength": 0.699999988079071
+    },
+    "Safety warning yellow": {
+      "base_color": [
+        1.0,
+        0.6200000047683716,
+        0.02500000037252903,
+        1.0
+      ],
+      "metallic": 0.05000000074505806,
+      "roughness": 0.4000000059604645,
+      "emission_color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "emission_strength": 1.0
+    },
+    "Hydraulic piston chrome": {
+      "base_color": [
+        0.6499999761581421,
+        0.7099999785423279,
+        0.7599999904632568,
+        1.0
+      ],
+      "metallic": 0.9200000166893005,
+      "roughness": 0.1599999964237213,
+      "emission_color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "emission_strength": 1.0
+    },
+    "Emergency stop red": {
+      "base_color": [
+        0.75,
+        0.014000000432133675,
+        0.017999999225139618,
+        1.0
+      ],
+      "metallic": 0.15000000596046448,
+      "roughness": 0.2800000011920929,
+      "emission_color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "emission_strength": 1.0
+    },
+    "AGV_Wheel_Polyurethane_Amber.002": {
+      "base_color": [
+        0.7200000286102295,
+        0.3499999940395355,
+        0.02500000037252903,
+        1.0
+      ],
+      "metallic": 0.07999999821186066,
+      "roughness": 0.46000000834465027,
+      "emission_color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "emission_strength": 1.0
+    },
+    "AGV_Stabilizer_Polyurethane_Blue.002": {
+      "base_color": [
+        0.02500000037252903,
+        0.2199999988079071,
+        0.5799999833106995,
+        1.0
+      ],
+      "metallic": 0.07999999821186066,
+      "roughness": 0.46000000834465027,
+      "emission_color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "emission_strength": 1.0
+    }
+  },
+  "validation": {
+    "wheel_count": 7,
+    "mesh_count": 24,
+    "lift_test_m": 0.8,
+    "steer_test_degrees": 35,
+    "roll_test_distance_m": 0.25,
+    "button_test_m": 0.008,
+    "passed": true
+  },
+  "rear_print": {
+    "surface_offset_cm": 0.015,
+    "method": "thin geometry projected onto orange shell; joined to chassis"
+  }
+}

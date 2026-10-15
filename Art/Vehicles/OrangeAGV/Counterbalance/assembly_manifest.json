@@ -1,0 +1,303 @@
+{
+  "units": "centimeters",
+  "axes": "X forward, Y right, Z up",
+  "reference": "User supplied counterbalance example; dimensions approximate, not OEM validated",
+  "parts": [
+    {
+      "name": "SM_AGV_Chassis",
+      "parent": "AGV_ROOT",
+      "relative_location_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "world_pivot_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "triangles": 47137,
+      "joint_type": "fixed",
+      "motion_axis": "none",
+      "fbx": "UnrealParts/SM_AGV_Chassis.fbx"
+    },
+    {
+      "name": "SM_AGV_Fork_L",
+      "parent": "SM_AGV_LiftCarriage",
+      "relative_location_cm": [
+        -8.850005269050598,
+        -26.350000500679016,
+        0.0
+      ],
+      "world_pivot_cm": [
+        38.34999203681946,
+        -26.350003480911255,
+        32.40000009536743
+      ],
+      "triangles": 1200,
+      "joint_type": "prismatic_optional",
+      "motion_axis": "Y",
+      "fbx": "UnrealParts/SM_AGV_Fork_L.fbx"
+    },
+    {
+      "name": "SM_AGV_Fork_R",
+      "parent": "SM_AGV_LiftCarriage",
+      "relative_location_cm": [
+        -8.849996328353882,
+        26.350000500679016,
+        0.0
+      ],
+      "world_pivot_cm": [
+        38.350000977516174,
+        26.349997520446777,
+        32.40000009536743
+      ],
+      "triangles": 1200,
+      "joint_type": "prismatic_optional",
+      "motion_axis": "Y",
+      "fbx": "UnrealParts/SM_AGV_Fork_R.fbx"
+    },
+    {
+      "name": "SM_AGV_MastInner",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        31.859999895095825,
+        -1.732676935262134e-06,
+        25.920000672340393
+      ],
+      "world_pivot_cm": [
+        31.859999895095825,
+        -1.732676935262134e-06,
+        25.920000672340393
+      ],
+      "triangles": 600,
+      "joint_type": "prismatic",
+      "motion_axis": "Z",
+      "fbx": "UnrealParts/SM_AGV_MastInner.fbx"
+    },
+    {
+      "name": "SM_AGV_LiftRam",
+      "parent": "SM_AGV_MastInner",
+      "relative_location_cm": [
+        -9.440001845359802,
+        5.133857783334861e-07,
+        89.90999460220337
+      ],
+      "world_pivot_cm": [
+        22.419998049736023,
+        -1.219291156928648e-06,
+        115.82999229431152
+      ],
+      "triangles": 764,
+      "joint_type": "fixed",
+      "motion_axis": "none",
+      "fbx": "UnrealParts/SM_AGV_LiftRam.fbx"
+    },
+    {
+      "name": "SM_AGV_LiftPulley",
+      "parent": "SM_AGV_MastInner",
+      "relative_location_cm": [
+        -9.440001845359802,
+        5.133857783334861e-07,
+        152.2800087928772
+      ],
+      "world_pivot_cm": [
+        22.419998049736023,
+        -1.219291156928648e-06,
+        178.20000648498535
+      ],
+      "triangles": 764,
+      "joint_type": "revolute",
+      "motion_axis": "Y",
+      "fbx": "UnrealParts/SM_AGV_LiftPulley.fbx"
+    },
+    {
+      "name": "SM_AGV_LiftChains",
+      "parent": "SM_AGV_MastInner",
+      "relative_location_cm": [
+        9.439998865127563,
+        -5.133857783334861e-07,
+        6.479999423027039
+      ],
+      "world_pivot_cm": [
+        41.29999876022339,
+        -2.24606271359562e-06,
+        32.40000009536743
+      ],
+      "triangles": 25200,
+      "joint_type": "fixed",
+      "motion_axis": "none",
+      "fbx": "UnrealParts/SM_AGV_LiftChains.fbx"
+    },
+    {
+      "name": "SM_AGV_LiftCarriage",
+      "parent": "SM_AGV_MastInner",
+      "relative_location_cm": [
+        15.339997410774231,
+        -8.342517787696124e-07,
+        6.479999423027039
+      ],
+      "world_pivot_cm": [
+        47.199997305870056,
+        -2.5669287140317465e-06,
+        32.40000009536743
+      ],
+      "triangles": 2100,
+      "joint_type": "prismatic",
+      "motion_axis": "Z",
+      "fbx": "UnrealParts/SM_AGV_LiftCarriage.fbx"
+    },
+    {
+      "name": "SM_AGV_Button_HMI_1",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        -61.00599765777588,
+        1.2750033289194107,
+        128.3850073814392
+      ],
+      "world_pivot_cm": [
+        -61.00599765777588,
+        1.2750033289194107,
+        128.3850073814392
+      ],
+      "triangles": 380,
+      "joint_type": "prismatic",
+      "motion_axis": "X",
+      "fbx": "UnrealParts/SM_AGV_Button_HMI_1.fbx"
+    },
+    {
+      "name": "SM_AGV_Button_HMI_2",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        -61.00599765777588,
+        9.35000330209732,
+        128.3850073814392
+      ],
+      "world_pivot_cm": [
+        -61.00599765777588,
+        9.35000330209732,
+        128.3850073814392
+      ],
+      "triangles": 380,
+      "joint_type": "prismatic",
+      "motion_axis": "X",
+      "fbx": "UnrealParts/SM_AGV_Button_HMI_2.fbx"
+    },
+    {
+      "name": "SM_AGV_Button_HMI_3",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        -61.00599765777588,
+        17.42500364780426,
+        128.3850073814392
+      ],
+      "world_pivot_cm": [
+        -61.00599765777588,
+        17.42500364780426,
+        128.3850073814392
+      ],
+      "triangles": 380,
+      "joint_type": "prismatic",
+      "motion_axis": "X",
+      "fbx": "UnrealParts/SM_AGV_Button_HMI_3.fbx"
+    },
+    {
+      "name": "SM_AGV_Button_EStop",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        -44.83999311923981,
+        24.990002810955048,
+        161.1899971961975
+      ],
+      "world_pivot_cm": [
+        -44.83999311923981,
+        24.990002810955048,
+        161.1899971961975
+      ],
+      "triangles": 764,
+      "joint_type": "prismatic",
+      "motion_axis": "-Y",
+      "fbx": "UnrealParts/SM_AGV_Button_EStop.fbx"
+    },
+    {
+      "name": "SM_AGV_DriveSteer",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        -67.00000166893005,
+        0.0,
+        30.500000715255737
+      ],
+      "world_pivot_cm": [
+        -67.00000166893005,
+        0.0,
+        30.500000715255737
+      ],
+      "triangles": 2668,
+      "joint_type": "revolute",
+      "motion_axis": "Z",
+      "fbx": "UnrealParts/SM_AGV_DriveSteer.fbx"
+    },
+    {
+      "name": "SM_AGV_Wheel_Drive",
+      "parent": "SM_AGV_DriveSteer",
+      "relative_location_cm": [
+        0.0,
+        0.0,
+        -16.15000069141388
+      ],
+      "world_pivot_cm": [
+        -67.00000166893005,
+        0.0,
+        14.350000023841858
+      ],
+      "triangles": 12988,
+      "joint_type": "revolute",
+      "motion_axis": "Y",
+      "fbx": "UnrealParts/SM_AGV_Wheel_Drive.fbx"
+    },
+    {
+      "name": "SM_AGV_Wheel_Support_L",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        36.000001430511475,
+        -45.500001311302185,
+        10.499999672174454
+      ],
+      "world_pivot_cm": [
+        36.000001430511475,
+        -45.500001311302185,
+        10.499999672174454
+      ],
+      "triangles": 12988,
+      "joint_type": "revolute",
+      "motion_axis": "Y",
+      "fbx": "UnrealParts/SM_AGV_Wheel_Support_L.fbx"
+    },
+    {
+      "name": "SM_AGV_Wheel_Support_R",
+      "parent": "SM_AGV_Chassis",
+      "relative_location_cm": [
+        36.000001430511475,
+        45.500001311302185,
+        10.499999672174454
+      ],
+      "world_pivot_cm": [
+        36.000001430511475,
+        45.500001311302185,
+        10.499999672174454
+      ],
+      "triangles": 12988,
+      "joint_type": "revolute",
+      "motion_axis": "Y",
+      "fbx": "UnrealParts/SM_AGV_Wheel_Support_R.fbx"
+    }
+  ],
+  "validation": {
+    "mesh_count": 16,
+    "wheel_count": 3,
+    "lift_test_m": 0.65,
+    "steer_test_deg": 30,
+    "passed": true,
+    "unreal_import_tested": false
+  }
+}

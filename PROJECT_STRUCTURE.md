@@ -14,6 +14,10 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 배치 모드 재배치·추가·삭제·다중 선택·스냅 적재·시설 누락 | `WarehouseLayoutEditor.h/.cpp`, `WarehouseLayoutInventory.h/.cpp`, `WarehouseLayoutSnap.h/.cpp`, `Scripts/verify_layout_inventory_pie.py`, `Scripts/verify_layout_editor_pie.py` | 하단 Slate 도구·렌더링 검사는 `msc_vrPlayerController`, `Scripts/verify_layout_editing_ui_pie.py`, 승강기 개구부는 `WarehouseElevatorLayout`, 슬롯은 `WarehouseInboundZone`, 사용 기준은 `WAREHOUSE.md` |
 | 보류된 물류 FIFO·품목/질량/크기/재질 보존·컴퓨터 데이터 입력/삭제 | `WarehouseLayoutInventory.h/.cpp`, `WarehouseComputer.h/.cpp`, `WarehouseComputerUI.cpp`, `Scripts/verify_layout_inventory_pie.py` | 접촉/손상 참조는 `WarehouseDamageSystem`, 상품 생성 규칙은 `CARGO_RULES.md`, 사용자 조작은 `WAREHOUSE.md` |
 | 공유 충전소·일반 대기 자리·낮은 배터리 우선·기회 충전·작업 선점 | `WarehouseForkliftParking.cpp`, `WarehouseWaitingBay.h/.cpp`, `WarehouseChargingStation.h/.cpp`, `WarehouseFleetCoordinator`, `Scripts/verify_shared_charging_pie.py`, `Scripts/configure_warehouse_waiting_bays.py` | 작업 상태 전환은 `WarehouseForkliftAI`, 운영 정책은 `AUTONOMY.md`, 배터리 수치는 `VNSL14_SPEC.md` |
+| 충전기 상상 이미지 외형·Blender/Unreal 캡처·맵 적용·FBX 전달 | `CHARGER_MODEL.md`, `Art/Equipment/AGVCharger/agv_charger.blend`, 같은 폴더의 `Delivery/AGV_ChargingStation.fbx`, `Content/Warehouse/ChargingStation/` | `Scripts/build_agv_charger.py`, `Scripts/export_agv_charger.py`, `Scripts/apply_agv_charger.py`, 접점 기준은 `WarehouseChargingStation.cpp` |
+| 창고 천장·벽면 설비 조사·모델링 전 구상도 | `Art/Planning/WarehouseServices/CONCEPT.md`, 같은 폴더의 `warehouse_services_concept.png` | 현재 공간은 `WAREHOUSE.md`, 복층은 `MEZZANINE.md` |
+| 창고 설비 모듈·밀도/벽·천장 장착·Blender/Unreal 렌더 | `WAREHOUSE_SERVICES_MODEL.md`, `Art/Environment/WarehouseServices/`, `Content/Warehouse/Services/` | 모델은 `build_warehouse_services.py`·`preview_warehouse_services.py`·`export_warehouse_services.py`, 최신 배치는 `refine_warehouse_services_layout.py`, 검증/캡처는 `capture_dense_warehouse_services.py` |
+| 고무 기둥 코너·평판·전체 보호대 모델·FBX | `WAREHOUSE_SERVICES_MODEL.md`의 추가 기둥 보호대, `Art/Environment/WarehouseServices/ColumnProtection/` | `Scripts/build_column_protectors.py` |
 | 기존 지게차 2대의 초기 위치를 연결 충전기로 통합 | `Scripts/configure_charger_start_positions.py`, `WarehouseChargingStation.h/.cpp` | 에디터에서 기존 차량과 분리된 부품까지 actor 기준 상대 자세·크기를 보존해 시작 위치를 저장. 실행 중 재배치는 `WarehouseLayoutEditor`, 사용·검증 범위는 `WAREHOUSE.md` |
 | 옮긴 충전기로 실제 주행·도킹·배터리 증가·출차 검사 | `Scripts/verify_native_charger_layout_pie.py` | 저장 원본 리그·충전기를 복사한 미저장 Entry PIE. 실제 저장 맵의 선택·그룹/물리 복원은 `verify_layout_editor_pie.py`, 충전 정책은 `VNSL14_SPEC.md` |
 | 1/2/4배 시뮬레이션·같은 물리 간격·실효 배속 | `WarehouseSimulationClock.h/.cpp`, `msc_vrPlayerController`, `Scripts/verify_simulation_speed_pie.py` | 물리/시간 기준은 `PHYSICS.md`, 작업 시간 UI는 `WarehouseComputerUI.cpp` |
@@ -71,6 +75,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | Fab 창고 에셋·팀원 설치 | `TEAM_ASSETS.md` (필수 5개·설치·목록 누락 해결·로컬 재생성), `WAREHOUSE.md`, `Scripts/prepare_warehouse_assets.py`, `.gitignore` | `Content/Scene_Warehouse/` 원본 팩 |
 | Fab 트럭·나무·관목 설치·배치 | `WAREHOUSE.md`의 외부 에셋 절, `Scripts/apply_exterior_fab_assets.py`, `Scripts/prepare_warehouse_assets.py` | `Content/VehicleVarietyPack/`, `Content/EuropeanBeech/`, `Content/MSPresets/`, `Content/GV_FreeShrubsPack/` (Git 제외 원본 팩) |
 | 구조 문서 갱신 | `AGENTS.md`, `Scripts/update_structure_summary.ps1`, 이 문서 | 없음 |
+| Unreal MCP 연결·공식 도구 조회·자동 시작 복구 | `MCP_SETUP.md`, `.codex/config.toml`, `msc_vr.uproject`, `Config/DefaultEditorPerProjectUserSettings.ini` | 연결 검사는 `Scripts/verify_mcp.py`; 에셋 설치는 `TEAM_ASSETS.md` |
 
 `Scripts/build_first_person_warehouse.py`를 다시 실행하면 `WH_` 액터를 재생성하고 기존 템플릿 장애물을 제거하며 `EXT_` 외부 환경은 유지한다. `Scripts/build_warehouse_exterior.py`는 `EXT_` 액터만 재생성한다. 다른 작업자의 레벨 변경이 있으면 실행 전 확인한다. 바이너리 `.umap`/`.uasset`과 World Partition 외부 액터 파일은 텍스트처럼 직접 편집하지 않는다.
 
@@ -84,7 +89,9 @@ msc_vr/
   AGENTS.md
   AUTONOMY.md
   CARGO_RULES.md
+  CHARGER_MODEL.md
   FLEET_ALGORITHM_COMPARISON.md
+  MCP_SETUP.md
   MEZZANINE.md
   msc_vr.uproject
   PHYSICS.md
@@ -95,6 +102,7 @@ msc_vr/
   TRUCK_LOGISTICS_DESIGN.md
   VNSL14_SPEC.md
   WAREHOUSE.md
+  WAREHOUSE_SERVICES_MODEL.md
   Config/
     DefaultEditor.ini
     DefaultEditorPerProjectUserSettings.ini
@@ -103,6 +111,7 @@ msc_vr/
     DefaultInput.ini
   Scripts/
     analyze_warehouse_profile.py
+    apply_agv_charger.py
     apply_exterior_fab_assets.py
     apply_forklift_drive_tuning.py
     apply_intact_cargo_physics.py
@@ -110,9 +119,17 @@ msc_vr/
     apply_real_world_scale.py
     apply_refined_agv.py
     apply_visual_fixes.py
+    apply_warehouse_services.py
+    build_agv_charger.py
     build_agv_motion_test.py
+    build_cat_accessory.py
+    build_column_protectors.py
     build_first_person_warehouse.py
+    build_orange_agv.py
     build_warehouse_exterior.py
+    build_warehouse_services.py
+    capture_dense_warehouse_services.py
+    capture_warehouse_services.py
     configure_area_labels.py
     configure_cargo_variety.py
     configure_carryable_cargo.py
@@ -136,6 +153,12 @@ msc_vr/
     convert_agv_refined_cm.py
     download_cargo_assets.ps1
     expand_large_cargo.py
+    export_agv_charger.py
+    export_agv_counterbalance.py
+    export_agv_refined.py
+    export_local_cargo.py
+    export_orange_agv_unreal.py
+    export_warehouse_services.py
     import_agv_original5.py
     import_agv_refined.py
     import_boxes_pallets_pack.py
@@ -144,13 +167,18 @@ msc_vr/
     prepare_carry_material.py
     prepare_intact_cargo_physics.py
     prepare_orange_agv.py
+    prepare_orange_agv_unreal.py
     prepare_original_body.py
     prepare_refined_agv.py
     prepare_remote_character_fade.py
     prepare_warehouse_assets.py
     prepare_warehouse_dynamics.py
+    preview_warehouse_services.py
     profile_warehouse_pie.py
+    refine_agv_original_proportions.py
+    refine_warehouse_services_layout.py
     restore_front_wheel_mounts.py
+    revise_agv_counterbalance.py
     update_structure_summary.ps1
     verify_agv_dynamics.py
     verify_agv_hazards.py
@@ -185,6 +213,8 @@ msc_vr/
     verify_layout_editing_ui_pie.py
     verify_layout_editor_pie.py
     verify_layout_inventory_pie.py
+    verify_local_cargo.py
+    verify_mcp.py
     verify_mezzanine.py
     verify_mezzanine_pie.py
     verify_multi_truck_docks.py
@@ -194,6 +224,7 @@ msc_vr/
     verify_native_forklift_motion_pie.py
     verify_observer_view_pie.py
     verify_obstacle_interval_pie.py
+    verify_orange_agv_export.py
     verify_real_world_scale.py
     verify_refined_agv.py
     verify_refined_agv_pie.py
@@ -212,6 +243,7 @@ msc_vr/
     verify_warehouse_strength_pie.py
     verify_warehouse_workers.py
     warehouse_staging_layout.py
+    wrap_orange_agv_labels.py
   Source/
     msc_vr.Target.cs
     msc_vrEditor.Target.cs
@@ -338,16 +370,20 @@ msc_vr/
     Warehouse/
       AGV/
       Cargo/
+      ChargingStation/
       Collision/
       Exterior/
       Materials/
       Physics/
+      Services/
     Weapons/
       GrenadeLauncher/
       Pistol/
       Rifle/
-  Build/
+  .codex/
+  Art/
   SourceAssets/
+  Tools/
 ```
 <!-- STRUCTURE:END -->
 

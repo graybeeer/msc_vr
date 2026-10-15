@@ -77,6 +77,13 @@ DerivedDataCache/*
 __pycache__/
 *.py[cod]
 
+# Machine-local MCP dependencies and executable paths.
+/Tools/MCP/
+/.codex/config.toml
+
+# Blender automatic backups; keep the editable .blend sources.
+*.blend[0-9]
+
 # Reproducible Fab Marketplace content (Warehouse)
 /Content/Scene_Warehouse/
 /Content/Warehouse/Collision/
