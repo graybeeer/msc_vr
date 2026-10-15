@@ -26,6 +26,7 @@
 #include "WarehouseLayoutEditor.h"
 #include "WarehouseLayoutInventory.h"
 #include "WarehouseSimulationClock.h"
+#include "WarehouseTransportVisualizer.h"
 #include "Misc/App.h"
 #include "HAL/PlatformTime.h"
 #include "Widgets/SBoxPanel.h"
@@ -121,6 +122,7 @@ Amsc_vrPlayerController::Amsc_vrPlayerController()
 	PlayerCameraManagerClass = Amsc_vrCameraManager::StaticClass();
 	PrimaryActorTick.bTickEvenWhenPaused=true;
 	bShouldPerformFullTickWhenPaused=true;
+	TransportVisualizer=CreateDefaultSubobject<UWarehouseTransportVisualizer>(TEXT("TransportVisualizer"));
 }
 
 void Amsc_vrPlayerController::BeginPlay()
@@ -500,6 +502,11 @@ void Amsc_vrPlayerController::PlayerTick(float Dt)
 	const double ObserverNow=FPlatformTime::Seconds();
 	const float CameraDt=ObserverLastWall>0 ? float(FMath::Clamp(ObserverNow-ObserverLastWall,0.,.05)) : 1.f/60.f;
 	ObserverLastWall=ObserverNow;
+	if (IsLocalPlayerController() && ObserverNow>=NextTransportOutlineUpdate)
+	{
+		NextTransportOutlineUpdate=ObserverNow+.2;
+		TransportVisualizer->Update();
+	}
 	if (ComputerWidget.IsValid() && (!IsValid(ActiveComputer) || !ActiveComputer->CanUse())) CloseWarehouseComputer();
 	UpdateEmergencyAlerts(Dt);
 	if (CargoReadoutBox.IsValid())

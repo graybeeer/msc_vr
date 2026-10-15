@@ -50,6 +50,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 양손 운반 자세·걷기 연결·뒤통수 가림 | `Source/msc_vr/WarehouseCarryAnimInstance.h/.cpp`, `msc_vrCharacter.cpp`의 `InitializeCarryMesh`/`UpdateCarryPose` | `Scripts/verify_view_and_wheel_fixes_pie.py`, `Scripts/verify_character_drive_response_pie.py`, `Scripts/verify_two_hand_carry.py`, `Content/FirstPerson/Anims/` |
 | 지게차 가속·제동·자리 회전·1.8m/s 적용 | `WarehouseForkliftPhysics.cpp`, `WarehouseForkliftRemote.cpp`, `Scripts/apply_forklift_drive_tuning.py`, `Scripts/verify_character_drive_response_pie.py` | `VNSL14_SPEC.md`, `PHYSICS.md`, 자율 경로는 `WarehouseForkliftAI.cpp` |
 | 운반 물체 반투명·시야 확보 | `msc_vrCharacter.cpp`의 `TryPickupCargo`/`DropCargo`, `msc_vrCharacter.h`의 `CarryOpacity` | `Scripts/prepare_carry_material.py`, `Content/Warehouse/Materials/M_CarryTransparent.uasset`, `Scripts/verify_two_hand_carry.py` |
+| 차량별 운반 대상 외곽선·남은 경로 바닥 화살표 | `WarehouseTransportVisualizer.h/.cpp`, `WarehouseForklift::GetDisplayRoute`, `msc_vrPlayerController::PlayerTick` | `Scripts/prepare_transport_outline.py`, `Scripts/verify_transport_visuals_pie.py`, `Content/Warehouse/Materials/M_TransportOutline.uasset`, `M_RouteArrow.uasset`; 표시 규칙은 `WAREHOUSE.md` |
 | 자율 작업·자체 점검·경로·팔레트 인식·작업 큐/보고 | `AUTONOMY.md`, `Source/msc_vr/WarehouseForkliftAI.cpp`, `WarehouseAutonomyTypes.h`, `Scripts/configure_forklift_autonomy.py` | `Scripts/verify_forklift_autonomy.py`, `Scripts/verify_forklift_autonomy_pie.py`, `WarehouseForklift.h/.cpp` |
 | 1초 장애물 확인·결과 유지·다음 검사에서 해제 | `WarehouseForklift.cpp`의 `RefreshObstacleChecks`/`ClearToMove`, `WarehouseForkliftAI.cpp`의 `FollowRoute`, `WarehouseForkliftRemote.cpp`의 `RemotePoseClear` | `AUTONOMY.md`, `Scripts/verify_obstacle_interval_pie.py`; 실제 물리 충돌은 `WarehousePhysics`/`WarehouseForkliftPhysics` |
 | 포크 끼임·후진 재삽입·접촉 탈출·우회 | `WarehouseForkliftRecovery.cpp`, `WarehouseForkliftAI.cpp`, `WarehouseForklift.cpp`의 `StopFor`/`ClearToMove`, `Scripts/verify_forklift_recovery_pie.py` | `AUTONOMY.md`, 구동력은 `WarehouseForkliftPhysics.cpp`와 `PHYSICS.md` |
@@ -149,6 +150,7 @@ msc_vr/
     prepare_original_body.py
     prepare_refined_agv.py
     prepare_remote_character_fade.py
+    prepare_transport_outline.py
     prepare_warehouse_assets.py
     prepare_warehouse_dynamics.py
     profile_warehouse_pie.py
@@ -204,6 +206,7 @@ msc_vr/
     verify_shipping_staging_pie.py
     verify_simulation_speed_pie.py
     verify_support_snapshot_pie.py
+    verify_transport_visuals_pie.py
     verify_truck_interior_pie.py
     verify_two_hand_carry.py
     verify_view_and_wheel_fixes_pie.py
@@ -272,6 +275,8 @@ msc_vr/
       WarehousePhysics.h
       WarehouseSimulationClock.cpp
       WarehouseSimulationClock.h
+      WarehouseTransportVisualizer.cpp
+      WarehouseTransportVisualizer.h
       WarehouseUIStyle.h
       WarehouseWaitingBay.cpp
       WarehouseWaitingBay.h

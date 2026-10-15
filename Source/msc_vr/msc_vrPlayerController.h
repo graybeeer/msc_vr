@@ -16,6 +16,7 @@ class USoundWaveProcedural;
 class AWarehouseComputer;
 class AWarehouseLayoutEditor;
 class AWarehouseSimulationClock;
+class UWarehouseTransportVisualizer;
 
 /**
  *  Simple first person Player Controller
@@ -94,6 +95,8 @@ protected:
 	UPROPERTY(Transient) TObjectPtr<UAudioComponent> EmergencyAudio;
 	void UpdateEmergencyAlerts(float Dt);
 	void PlayEmergencyAlarm();
+	UPROPERTY(VisibleAnywhere, Category="Warehouse|Display") TObjectPtr<UWarehouseTransportVisualizer> TransportVisualizer;
+	double NextTransportOutlineUpdate=0;
 	float EmergencyPollElapsed=0, EmergencyAlarmElapsed=0, EmergencyToneElapsed=0;
 	TSharedPtr<SBox> CargoReadoutBox;
 	void SetObserverRoofVisibility(bool Hide);
