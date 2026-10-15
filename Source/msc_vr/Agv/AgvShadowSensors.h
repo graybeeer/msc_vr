@@ -111,6 +111,10 @@ public:
 	 * of a degree at 5 Hz, and a controller aligning to 1 deg chased those steps left and right on the spot. Turning on
 	 * the spot the heading is the gyro's with only a slow trim. Beyond the snap limits (a relocalization) it jumps.
 	 */
+	/** The vehicle counts as following its planned route while its reference point is this close to it (cm). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Shadow")
+	float OnRouteToleranceCm = 30.f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Shadow")
 	float NavCorrectionCmPerS = 10.f;
 

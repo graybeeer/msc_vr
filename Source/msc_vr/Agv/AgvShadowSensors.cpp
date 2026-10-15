@@ -372,35 +372,34 @@ void UAgvShadowSensorsComponent::TickComponent(float DeltaTime, ELevelTick TickT
 	if (const AWarehouseForklift* Forklift = Cast<AWarehouseForklift>(GetOwner()))
 	{
 		const TArray<FWarehouseRoutePoint>& Route = Forklift->PlannedRoute;
-		using EState = EWarehouseAIState;
-		const EState State = Forklift->AIState;
-		// Also while stopped by the safety field mid-route: the field must keep watching the way it will resume.
-		const bool bRouting = State == EState::NavigatePickup || State == EState::NavigateDelivery || State == EState::NavigateCharge
-			|| State == EState::NavigateParking || State == EState::ElevatorApproach
-			|| (State == EState::WaitingObstacle && Forklift->Status.Contains(TEXT("AGV SAFETY FIELD")));
-		if (bRouting && Route.Num() > 1)
+		// Following a route is read from the route itself, not from a list of the forklift's task states: whenever the
+		// vehicle stands on its planned route (within OnRouteToleranceCm), whatever it is doing (a job leg, idle parking,
+		// a yield ordered by the fleet coordinator, a wait for the safety field to clear), the fields follow that route.
+		const double Offset = Drive->ReferenceOffsetCm;
+		auto Reference = [Offset](const FTransform& Pose)
 		{
-			const double Offset = Drive->ReferenceOffsetCm;
-			auto Reference = [Offset](const FTransform& Pose)
+			const double Yaw = FMath::DegreesToRadians(Pose.Rotator().Yaw);
+			return FVector(FVector2D(Pose.GetLocation()) + AgvMath::Dir(Yaw) * Offset, Yaw);
+		};
+		FVector2D Here;
+		double HereYaw;
+		if (!Localizer->GetPose(Here, HereYaw))
+		{
+			Drive->GetTruePose(Here, HereYaw);
+		}
+		// The route point the vehicle is at (nearest), then forward to the next pivot or direction change.
+		int32 Nearest = 0;
+		for (int32 Index = 1; Index < Route.Num(); ++Index)
+		{
+			if (FVector2D::DistSquared(FVector2D(Reference(Route[Index].Pose)), Here) < FVector2D::DistSquared(FVector2D(Reference(Route[Nearest].Pose)), Here))
 			{
-				const double Yaw = FMath::DegreesToRadians(Pose.Rotator().Yaw);
-				return FVector(FVector2D(Pose.GetLocation()) + AgvMath::Dir(Yaw) * Offset, Yaw);
-			};
-			FVector2D Here;
-			double HereYaw;
-			if (!Localizer->GetPose(Here, HereYaw))
-			{
-				Drive->GetTruePose(Here, HereYaw);
+				Nearest = Index;
 			}
-			// The route point the vehicle is at (nearest), then forward to the next pivot or direction change.
-			int32 Nearest = 0;
-			for (int32 Index = 1; Index < Route.Num(); ++Index)
-			{
-				if (FVector2D::DistSquared(FVector2D(Reference(Route[Index].Pose)), Here) < FVector2D::DistSquared(FVector2D(Reference(Route[Nearest].Pose)), Here))
-				{
-					Nearest = Index;
-				}
-			}
+		}
+		const bool bOnRoute = Route.Num() > 1 && !Safety->bApproachMode
+			&& FVector2D::Distance(FVector2D(Reference(Route[Nearest].Pose)), Here) < OnRouteToleranceCm;
+		if (bOnRoute)
+		{
 			Safety->ExternalPathAhead.Add(FVector(Here, HereYaw));
 			for (int32 Index = Nearest + 1; Index < Route.Num(); ++Index)
 			{
