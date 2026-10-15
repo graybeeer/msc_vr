@@ -75,6 +75,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Odometry")
 	bool bUseGyro = true;
 
+	/**
+	 * Standstill detection (zero-velocity update): while the drive wheel encoder counts no travel and the gyro reads
+	 * less than this (deg/s), the heading is held instead of integrating the gyro. Parked with its LiDARs asleep the
+	 * bias otherwise turned the estimate 0.01 deg every second (16 deg after half an hour). 0 turns it off.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Localization", meta=(ClampMin="0"))
+	float StandstillGyroDegS = 0.3f;
+
 	/** Constant rate error of the gyro (deg/s); an uncalibrated MEMS part drifts about this much. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Odometry")
 	float GyroBiasDegS = 0.01f;

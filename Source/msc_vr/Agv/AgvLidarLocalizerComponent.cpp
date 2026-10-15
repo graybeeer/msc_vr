@@ -177,6 +177,10 @@ void UAgvLidarLocalizerComponent::Step(float Dt)
 		const double Rate = FMath::DegreesToRadians((double)Drive->YawRateDegS + GyroBiasDegS);
 		const double GyroGauss = FMath::Sqrt(-2.0 * FMath::Loge(FMath::Max(Noise.FRand(), 1e-12f))) * FMath::Cos(2.0 * UE_DOUBLE_PI * Noise.FRand());
 		TurnRad = Rate * Dt + FMath::DegreesToRadians((double)GyroNoiseDegSqrtS) * FMath::Sqrt((double)Dt) * GyroGauss;
+		if (FMath::Abs(Travel) < 0.01 && FMath::Abs(TurnRad) < FMath::DegreesToRadians((double)StandstillGyroDegS) * Dt)
+		{
+			TurnRad = 0.0; // standing still: hold the heading (zero-velocity update)
+		}
 	}
 	OdomPosition += AgvMath::Dir(OdomYaw + TurnRad * 0.5) * (Measured * FMath::Cos(Steer));
 	OdomYaw += TurnRad;
