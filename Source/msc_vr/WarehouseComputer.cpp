@@ -192,6 +192,7 @@ void AWarehouseComputer::RefreshState()
   Item.Location=Locate(Item.Pallet ? static_cast<AActor*>(Item.Pallet.Get()) : *It);
   if (Item.Pallet && Racks.Contains(Item.Pallet) && !Item.Location.Contains(TEXT("운반 중"))) Item.Location=Racks[Item.Pallet];
   Item.bReserved=Item.Pallet && Claimed(Item.Pallet);Inventory.Add(Item);
+  Inventory.Last().ReceiptStatus=Item.Pallet ? Item.Pallet->GetReceiptDescription().ToString() : TEXT("개별 상자");
  }
  Inventory.Sort([](const auto& A,const auto& B) { return A.CargoId<B.CargoId; });
  for (AWarehouseForklift* Vehicle : Fleet)

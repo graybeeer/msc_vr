@@ -303,6 +303,11 @@ bool AWarehouseLayoutEditor::BeginDrag(AActor* HitActor,FVector FloorPoint)
    if (Members[I]->IsA<AWarehousePallet>() || Members[I]->IsA<AWarehouseCargo>() || Members[I]->ActorHasTag(TEXT("LayoutType:Rack")))
     for (AActor* A:Strength->GetSupportedActors(Members[I],I==0))
      if (IsValid(A) && (A->IsA<AWarehousePallet>() || A->IsA<AWarehouseCargo>())) Members.AddUnique(A);
+ for (int32 I=0;I<Members.Num();++I)
+ {
+  if (auto* Cargo=Cast<AWarehouseCargo>(Members[I])) if (auto* Pallet=Cargo->GetWrappedPallet()) Members.AddUnique(Pallet);
+  if (auto* Pallet=Cast<AWarehousePallet>(Members[I])) for (auto* Cargo:Pallet->GetWrappedCargo()) Members.AddUnique(Cargo);
+ }
  Moving.Reset();
  for (AActor* A:Members)
  {

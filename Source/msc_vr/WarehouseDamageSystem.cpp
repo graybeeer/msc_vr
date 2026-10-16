@@ -320,6 +320,14 @@ void AWarehouseDamageSystem::UpdateLoads()
   };
   Sample(.13f);
   if (Supports[I].IsEmpty()) Sample(.015f);
+  // Intact film is also a real load path when a carton momentarily loses
+  // deck contact. Prefer actual bearings; never count both paths twice.
+  if (Supports[I].IsEmpty()) for (AActor* Actor:Spec.Members)
+   if (auto* Cargo=Cast<AWarehouseCargo>(Actor)) if (auto* Pallet=Cargo->GetWrappedPallet())
+   {
+    const int32 Parent=IndexOf(Pallet);
+    if (Parent!=INDEX_NONE && Parent!=I) Supports[I].AddUnique(Parent);
+   }
   const float Share=(FMath::Max(.1f,Spec.MassKg)+Spec.SupportedKg)/FMath::Max(1,Supports[I].Num());
   for (int32 Parent : Supports[I])
   {

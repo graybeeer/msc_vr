@@ -142,7 +142,7 @@ public:
           +SHorizontalBox::Slot().FillWidth(.54)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity(WarehouseUIStyle::Text)
            .Text_Lambda([Item]() { return FText::FromString(Item->CargoId+TEXT("\n")+Item->Product); }).AutoWrapText(true)]
           +SHorizontalBox::Slot().FillWidth(.46)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
-           .Text_Lambda([Item]() { return FText::FromString(FString::Printf(TEXT("%s\n%.1f kg · %s"),*Item->Location,Item->MassKg,Item->bReserved ? TEXT("예약 / 작업 중") : (Item->Pallet ? TEXT("팔레트 적재") : TEXT("개별 상자")))); }).AutoWrapText(true)]];
+           .Text_Lambda([Item]() { return FText::FromString(FString::Printf(TEXT("%s\n%.1f kg · %s\n%s"),*Item->Location,Item->MassKg,Item->bReserved ? TEXT("예약 / 작업 중") : (Item->Pallet ? TEXT("팔레트 적재") : TEXT("개별 상자")),*Item->ReceiptStatus)); }).AutoWrapText(true)]];
        })]
       +SVerticalBox::Slot().AutoHeight().Padding(8,12)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize,true)).ColorAndOpacity(WarehouseUIStyle::Accent)
        .Text_Lambda([this]() { return FText::FromString(FString::Printf(TEXT("보류된 물류 %d개 · 맨 위 항목부터 배치"),HeldItems.Num())); })]

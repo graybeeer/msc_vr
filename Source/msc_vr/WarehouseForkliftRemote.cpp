@@ -2,7 +2,6 @@
 #include "WarehousePhysics.h"
 #include "WarehouseFleetCoordinator.h"
 #include "WarehousePallet.h"
-#include "WarehouseDamageSystem.h"
 #include "WarehouseChargingStation.h"
 #include "WarehouseElevator.h"
 #include "Components/StaticMeshComponent.h"
@@ -99,13 +98,14 @@ bool AWarehouseForklift::PalletClaimedByOther(AWarehousePallet* Pallet) const
 
 bool AWarehouseForklift::BeginRemoteControl(AActor* Operator)
 {
- if (!IsValid(Operator)) return false;
+ if (!IsValid(Operator) || Operator==this) return false;
  FVector Center,Extent;GetActorBounds(true,Center,Extent);
  // The character selects the visible vehicle outline, not its origin behind
  // the forks. Use the same physical extent for the remote proximity guard.
  if (FVector::Dist(Operator->GetActorLocation(),FBox(Center-Extent,Center+Extent).GetClosestPointTo(Operator->GetActorLocation()))>350) return false;
  if (IsRemoteControlled()) return RemoteOperator==Operator;
- if (!CheckSystems().IsEmpty()) { SetStatus(TEXT("REMOTE UNAVAILABLE: ")+CheckSystems()); return false; }
+ const FString Fault=CheckSystems(false);
+ if (!Fault.IsEmpty()) { SetStatus(TEXT("REMOTE UNAVAILABLE: ")+Fault); return false; }
  if (bFloorTransfer || (IsValid(Elevator) && Elevator->ReservedVehicle==this))
  { SetStatus(TEXT("FINISH ELEVATOR TRANSFER BEFORE REMOTE")); return false; }
  if (bAutonomousMode)
@@ -115,16 +115,19 @@ bool AWarehouseForklift::BeginRemoteControl(AActor* Operator)
  }
  else ResumeState=State;
  if (IsValid(ChargingStation)) ChargingStation->Release(this);
- RemoteOperator=Operator; bPowered=true; bReplanAfterRemote=true; bRemoteLoadFault=false;
- RemoteForward=RemoteSteering=RemoteLift=0; BrakeDrive(); RemoteCheckSeconds=0;
+ RemoteOperator=Operator; bPowered=true; bReplanAfterRemote=true;
+ // Poll the operator before consuming its heartbeat, including a slow frame.
+ AddTickPrerequisiteActor(Operator);
+ RemoteForward=RemoteSteering=RemoteLift=0; BrakeDrive();
  LastRemoteInputTime=GetWorld()->GetRealTimeSeconds();
- SetStatus(TEXT("REMOTE SELF CHECK / G: DISCONNECT"));
+ SetStatus(TEXT("SMARTPHONE REMOTE READY / G: DISCONNECT"));
  return true;
 }
 
 void AWarehouseForklift::EndRemoteControl(AActor* Operator)
 {
  if (!RemoteOperator || RemoteOperator!=Operator) return;
+ RemoveTickPrerequisiteActor(Operator);
  RemoteForward=RemoteSteering=RemoteLift=0; BrakeDrive(); bPowered=false;
  RemoteOperator=nullptr;
  if (bAutonomousMode) TransitionAI(EWarehouseAIState::Paused,TEXT("REMOTE ENDED / E: SELF CHECK AND REPLAN"));
@@ -162,6 +165,7 @@ bool AWarehouseForklift::UpdateLoadSupport(float Dt)
 
 bool AWarehouseForklift::RemotePoseClear(const FTransform& Pose)
 {
+ if (IsRemoteControlled()) return true;
  if (!RefreshObstacleChecks()) return bTurnObstacleClear;
  bTurnObstacleClear=PhysicalPoseClear(Pose);
  return bTurnObstacleClear;
@@ -210,25 +214,15 @@ bool AWarehouseForklift::PhysicalPoseClear(const FTransform& Pose,bool CheckTran
 void AWarehouseForklift::AdvanceRemote(float Dt)
 {
  if (Dt<=0) return;
- const FString Fault=CheckSystems();
+ const FString Fault=CheckSystems(false);
  if (!Fault.IsEmpty()) { StopFor(Fault); return; }
- if (bRemoteLoadFault) { StopFor(TEXT("LOAD LOST - G: DISCONNECT AND RECHECK")); return; }
  if (GetWorld()->GetRealTimeSeconds()-LastRemoteInputTime>.25)
  { StopFor(TEXT("REMOTE INPUT TIMEOUT")); return; }
- const bool WasChecking=RemoteCheckSeconds<1.f;
- RemoteCheckSeconds+=Dt;
- if (RemoteCheckSeconds<1.f) { BrakeDrive(); return; }
- if (WasChecking) SetStatus(TEXT("SMARTPHONE REMOTE READY / G: DISCONNECT"));
  if (!UpdateLoadSupport(Dt))
  {
-  bSupportingPallet=false; CarriedCargo.Reset(); bRemoteLoadFault=true;
-  StopFor(TEXT("LOAD SLIPPED / SUPPORT LOST")); return;
+  // Lost physical support changes load telemetry, not the operator's command.
+  bSupportingPallet=false; CarriedCargo.Reset();
  }
- if (bSupportingPallet && GetLoadMassKg()>FMath::Min(1400.f,RatedLoadKg))
- { StopFor(TEXT("OVERLOAD - REMOVE LOAD")); return; }
- if (bSupportingPallet)
-  if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->HasFailed(TargetPallet))
-  { StopFor(TEXT("PALLET DAMAGED")); return; }
  ConsumeEnergy(100.f*Dt/3600.f);
  if (BatteryPercent<=0) { StopFor(TEXT("BATTERY EMPTY")); return; }
 
@@ -244,10 +238,8 @@ void AWarehouseForklift::AdvanceRemote(float Dt)
     if (Contact<0) continue;
     const float Gap=Contact-Carriage->GetComponentTransform().InverseTransformPosition(It->GetActorLocation()).Z;
     TargetPallet=*It;
-    if (GetLoadMassKg()>FMath::Min(1400.f,RatedLoadKg)) { StopFor(TEXT("OVERLOAD - REMOVE LOAD")); return; }
-    // Reserve only after both full tines pass the hole/angle checks. This
-    // exempts expected bearing contact from the predictive brake, while the
-    // independent pallet and forks retain all actual Chaos contacts.
+    // Track support only after both full tines pass the hole/angle checks.
+    // The independent pallet and forks retain all actual Chaos contacts.
     PalletContactLiftCm=Gap; TrackCargo(); bSupportingPallet=true; break;
    }
   }
@@ -264,8 +256,6 @@ void AWarehouseForklift::AdvanceRemote(float Dt)
  }
  if (!FMath::IsNearlyZero(RemoteForward) || !FMath::IsNearlyZero(RemoteSteering))
  {
-  // Keep loads low during travel; lifting and driving are separate remote actions.
-  if (LiftOffset>20) { StopFor(TEXT("LOWER FORKS TO TRAVEL HEIGHT")); return; }
   if (FMath::IsNearlyZero(RemoteForward))
   {
    if (!CommandTurn(RemoteSteering*FMath::DegreesToRadians(bSupportingPallet ? 20.f : 30.f),Dt)) return;
@@ -273,11 +263,6 @@ void AWarehouseForklift::AdvanceRemote(float Dt)
   else
   {
    const float Limit=bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(180.f,EmptyTravelSpeedCm);
-   const float Distance=RemoteForward*Limit*Dt;
-   const float Angle=FMath::RadiansToDegrees(Distance*RemoteSteering/FMath::Max(117.3f,MinimumTurningRadiusCm));
-   FRotator Heading=GetActorRotation(); Heading.Yaw+=Angle;
-   if (!RemotePoseClear(FTransform(Heading,GetActorLocation()+GetActorForwardVector()*Distance)))
-   { StopFor(TEXT("OBSTACLE / TURN CLEARANCE")); return; }
    if (!CommandDrive(RemoteForward*Limit,RemoteSteering/FMath::Max(117.3f,MinimumTurningRadiusCm),Dt)) return;
   }
  }

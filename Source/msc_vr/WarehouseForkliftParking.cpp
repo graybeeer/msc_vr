@@ -4,6 +4,7 @@
 #include "WarehouseWaitingBay.h"
 #include "WarehouseElevator.h"
 #include "WarehousePallet.h"
+#include "WarehouseInboundZone.h"
 #include "Components/PrimitiveComponent.h"
 #include "EngineUtils.h"
 
@@ -27,6 +28,10 @@ bool AWarehouseForklift::CanAcceptNewWork() const
 FString AWarehouseForklift::ValidateJobResources(const FWarehouseWorkOrder& Job) const
 {
  if (!IsValid(Job.Pallet) || Job.Pallet->GetWorld()!=GetWorld()) return TEXT("물류를 운반할 수 없다: 팔레트가 없습니다. [NO_PALLET]");
+ if (Job.Pallet->ReceiptState==EWarehouseReceiptState::WrapTorn) return TEXT("운반할 수 없다: 팔레트 랩이 파손되어 재검수가 필요합니다. [WRAP_TORN]");
+ if (Job.Pallet->ReceiptState==EWarehouseReceiptState::Pending)
+  for (TActorIterator<AWarehouseInboundZone> It(GetWorld());It;++It) if (It->ContainsPallet(Job.Pallet))
+   return TEXT("운반할 수 없다: 입고 담당 NPC의 입고 확정을 기다리세요. [INBOUND_PENDING]");
  if (Job.bRequiresDestinationResource && !IsValid(Job.DestinationResource)) return TEXT("운반할 수 없다: 목적지 랙 또는 입출고 구역이 삭제되었습니다. [NO_DESTINATION_RESOURCE]");
  const auto Floor=[](double Z) { return FMath::FloorToInt((FMath::Max(0.,Z)+1.)/400.); };
  if ((Floor(GetActorLocation().Z)!=Floor(Job.Pallet->GetActorLocation().Z) ||

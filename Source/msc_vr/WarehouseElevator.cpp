@@ -9,6 +9,17 @@
 #include "WarehousePhysics.h"
 #include "PhysicsEngine/PhysicsConstraintComponent.h"
 
+namespace
+{
+bool AtWaitingPose(const AWarehouseForklift* Vehicle,const FTransform& Pose)
+{
+ const FVector Offset=Vehicle->GetActorLocation()-Pose.GetLocation();
+ // Match the route follower's 5cm waiting-point tolerance, while keeping
+ // floor level and a stopped vehicle mandatory. Cabin docking stays 1cm.
+ return Offset.SizeSquared2D()<25.f && FMath::Abs(Offset.Z)<1.f && FMath::Abs(Vehicle->CurrentSpeedCm)<1.f;
+}
+}
+
 AWarehouseElevator::AWarehouseElevator()
 {
  PrimaryActorTick.bCanEverTick=true;
@@ -180,7 +191,7 @@ bool AWarehouseElevator::RequestTransfer(AWarehouseForklift* Vehicle,int32 FromF
      Vehicle->GetTransferMassKg()>FMath::Min(2000.f,RatedMassKg) || !CheckInterlocks().IsEmpty()) return false;
  if (ReservedVehicle==Vehicle) return EntryFloor==FromFloor && DestinationFloor==ToFloor;
  if (IsValid(ReservedVehicle) || State!=EWarehouseElevatorState::Idle ||
-     !Vehicle->GetActorLocation().Equals(WaitingPose(FromFloor).GetLocation(),1.f)) return false;
+     !AtWaitingPose(Vehicle,WaitingPose(FromFloor))) return false;
  ReservedVehicle=Vehicle; EntryFloor=FromFloor; DestinationFloor=ToFloor;
  SetState(EWarehouseElevatorState::ClosingForCall,TEXT("FMS CALL ACCEPTED - CLOSE / LOCK"));
  return true;
@@ -206,7 +217,7 @@ bool AWarehouseElevator::ConfirmBoarded(AWarehouseForklift* Vehicle)
 }
 bool AWarehouseElevator::ConfirmExited(AWarehouseForklift* Vehicle)
 {
- if (!CanExit(Vehicle) || !Vehicle->GetActorLocation().Equals(WaitingPose(DestinationFloor).GetLocation(),1.f) || !PortalClear()) return false;
+ if (!CanExit(Vehicle) || !AtWaitingPose(Vehicle,WaitingPose(DestinationFloor)) || !PortalClear()) return false;
  bBoarded=false; ReservedVehicle=nullptr; ++CompletedTransfers;
  SetState(EWarehouseElevatorState::ClosingEmpty,TEXT("EXIT CONFIRMED - RELEASE RESERVATION")); return true;
 }

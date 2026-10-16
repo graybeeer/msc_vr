@@ -42,19 +42,19 @@ struct FWarehouseNavigationQuery
  mutable uint32 GeometryRejectedCandidates=0;
 };
 
-FString AWarehouseForklift::CheckSystems() const
+FString AWarehouseForklift::CheckSystems(bool bIncludeAutonomySensors) const
 {
  if (bMechanicalFailure) return TEXT("MECHANICAL FAILURE");
- if (!bSafetyScannerHealthy) return TEXT("SAFETY SCANNER FAULT");
+ if (bIncludeAutonomySensors && !bSafetyScannerHealthy) return TEXT("SAFETY SCANNER FAULT");
  if (!bEStopReleased) return TEXT("E-STOP ACTIVE");
  if (!bBrakeHealthy) return TEXT("BRAKE FAULT");
  if (!bSteeringHealthy) return TEXT("STEERING FAULT");
- if (!bForkSensorHealthy) return TEXT("FORK / MAST SENSOR FAULT");
- if (!bLocalizationHealthy) return TEXT("LOCALIZATION LOST");
+ if (bIncludeAutonomySensors && !bForkSensorHealthy) return TEXT("FORK / MAST SENSOR FAULT");
+ if (bIncludeAutonomySensors && !bLocalizationHealthy) return TEXT("LOCALIZATION LOST");
  if (!bBatteryHealthy || BatteryVoltage<=0 || BatteryCapacityAh<=0) return TEXT("BATTERY FAULT");
  if (BatteryPercent<=0 && !(IsValid(ChargingStation) && ChargingStation->IsDocked(this))) return TEXT("BATTERY EMPTY - RECOVERY REQUIRED");
- if (!bPalletSensorHealthy) return TEXT("PALLET SENSOR FAULT");
- if (!bLoadSensorHealthy) return TEXT("LOAD SENSOR FAULT");
+ if (bIncludeAutonomySensors && !bPalletSensorHealthy) return TEXT("PALLET SENSOR FAULT");
+ if (bIncludeAutonomySensors && !bLoadSensorHealthy) return TEXT("LOAD SENSOR FAULT");
  return FString();
 }
 void AWarehouseForklift::ReportJob(const FString& Result,const FString& Detail)
@@ -109,7 +109,13 @@ bool AWarehouseForklift::SubmitJob(const FWarehouseWorkOrder& Job)
  if (Job.JobId.IsEmpty() || Job.Destination.ContainsNaN() ||
      !Job.Destination.GetScale3D().Equals(FVector::OneVector,.001f) || PendingJobs.Num()>=32) return false;
  const FString Resources=ValidateJobResources(Job);
- if (!Resources.IsEmpty()) { SetOperationError(Resources.Contains(TEXT("NO_ELEVATOR")) ? FName(TEXT("NO_ELEVATOR")) : Resources.Contains(TEXT("NO_DESTINATION_RESOURCE")) ? FName(TEXT("NO_DESTINATION_RESOURCE")) : FName(TEXT("NO_PALLET")),Resources);return false; }
+ if (!Resources.IsEmpty())
+ {
+  FName Code(TEXT("JOB_RESOURCES"));int32 Start=INDEX_NONE;
+  if (Resources.EndsWith(TEXT("]")) && Resources.FindLastChar('[',Start))
+   Code=FName(*Resources.Mid(Start+1,Resources.Len()-Start-2));
+  SetOperationError(Code,Resources);return false;
+ }
  if (ActiveJob.JobId==Job.JobId || CompletedJobIds.Contains(Job.JobId)) return false;
  for (const auto& Existing : PendingJobs) if (Existing.JobId==Job.JobId || Existing.Pallet==Job.Pallet) return false;
  if (!ActiveJob.JobId.IsEmpty() && ActiveJob.Pallet==Job.Pallet) return false;
@@ -490,7 +496,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
 {
  if (PlannedRoute.IsEmpty()) { BrakeDrive(); return true; }
  const bool ChargingAlignment=AIState==EWarehouseAIState::NavigateCharge || (AIState==EWarehouseAIState::DockCharge && bDockPullout);
- const float HeadingTolerance=FMath::DegreesToRadians(ChargingAlignment && RouteIndex>=PlannedRoute.Num()-1 ? .2f : AIState==EWarehouseAIState::AlignUnload ? .5f : 1.f);
+ const float HeadingTolerance=FMath::DegreesToRadians(ChargingAlignment && RouteIndex>=PlannedRoute.Num()-1 ? .2f : AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::ElevatorApproach ? .5f : 1.f);
  if (FleetCoordinator && !FleetCoordinator->Permit(this)) return false;
  RouteIndex=FMath::Min(RouteIndex,PlannedRoute.Num()-1);
  if (PlannedRoute[RouteIndex].bPivot)
@@ -895,6 +901,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
  if (!ActiveJob.JobId.IsEmpty())
  {
   if (!IsValid(TargetPallet)) { SetOperationError(TEXT("NO_PALLET"),TEXT("운반할 수 없다: 대상 팔레트가 삭제되었습니다."));FaultAI(Status);return; }
+  if (TargetPallet->ReceiptState==EWarehouseReceiptState::WrapTorn) { FaultAI(TEXT("PALLET WRAP TORN - REINSPECTION REQUIRED"));return; }
   if (ActiveJob.bRequiresDestinationResource && !IsValid(ActiveJob.DestinationResource))
   { SetOperationError(TEXT("NO_DESTINATION_RESOURCE"),TEXT("운반할 수 없다: 목적지 랙 또는 입출고 구역이 삭제되었습니다."));FaultAI(Status);return; }
   if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->HasFailed(TargetPallet)) { FaultAI(TEXT("PALLET DAMAGED")); return; }

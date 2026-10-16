@@ -31,8 +31,10 @@ public:
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Inbound") TArray<FWarehouseRackSlot> RackSlots;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Inbound") int32 DispatchedCount=0;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Inbound") int32 CompletedCount=0;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Inbound") int32 ConfirmedCount=0;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Inbound") FString Status;
  UFUNCTION(BlueprintCallable, Category="Inbound") void ScanInbound();
+ UFUNCTION(BlueprintPure, Category="Inbound") bool ContainsPallet(const AWarehousePallet* Pallet) const;
 private:
  struct FReservation
  {
@@ -43,7 +45,12 @@ private:
   FTransform Pose;
  };
  TArray<FReservation> Reservations;
- TMap<TWeakObjectPtr<AWarehousePallet>, double> StableSince;
- TMap<TWeakObjectPtr<AWarehousePallet>, FTransform> StablePose;
+ struct FStableLoad
+ {
+  double Since=0;
+  FTransform Pallet;
+  TMap<TWeakObjectPtr<AActor>,FTransform> Cargo;
+ };
+ TMap<TWeakObjectPtr<AWarehousePallet>, FStableLoad> StableLoads;
  bool SlotClear(int32 Index, AWarehousePallet* Pallet, const TArray<AActor*>& Loads, float Height, float Mass) const;
 };

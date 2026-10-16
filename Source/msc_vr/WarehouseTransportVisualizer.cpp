@@ -1,5 +1,6 @@
 #include "WarehouseTransportVisualizer.h"
 #include "WarehouseForklift.h"
+#include "WarehouseElevator.h"
 #include "WarehousePallet.h"
 #include "WarehouseCargo.h"
 #include "WarehouseDamageSystem.h"
@@ -15,7 +16,27 @@ TArray<FVector> AWarehouseForklift::GetDisplayRoute() const
 {
  TArray<FVector> Result;
  if (!bPowered || !bAutonomousMode || IsRemoteControlled() ||
-     (!bRouteStarted && !bTrafficYielding) || AIState==EWarehouseAIState::Paused || AIState==EWarehouseAIState::Fault) return Result;
+     AIState==EWarehouseAIState::Paused || AIState==EWarehouseAIState::Fault) return Result;
+ // Boarding/exiting use the existing precise actuator, not PlannedRoute.
+ // Display that actuator's actual endpoint only while its door interlock permits travel.
+ if (AIState==EWarehouseAIState::ElevatorBoard || AIState==EWarehouseAIState::ElevatorExit)
+ {
+  if (!IsValid(Elevator)) return Result;
+  const bool Boarding=AIState==EWarehouseAIState::ElevatorBoard;
+  if (Boarding ? !Elevator->CanEnter(const_cast<AWarehouseForklift*>(this)) :
+      !Elevator->CanExit(const_cast<AWarehouseForklift*>(this))) return Result;
+  const int32 Level=Boarding ? TransferFromFloor : TransferToFloor;
+  const FVector Goal=(Boarding ? Elevator->BoardingPose(Level) : Elevator->WaitingPose(Level)).GetLocation();
+  const float Ground=Elevator->FloorHeight(Level)+.8f;
+  if (FVector::DistSquared2D(GetActorLocation(),Goal)>1.f)
+  {
+   Result.Add(FVector(GetActorLocation().X,GetActorLocation().Y,Ground));
+   Result.Add(FVector(Goal.X,Goal.Y,Ground));
+  }
+  return Result;
+ }
+ if (AIState==EWarehouseAIState::ElevatorCall || AIState==EWarehouseAIState::ElevatorWait ||
+     AIState==EWarehouseAIState::ElevatorRide || (!bRouteStarted && !bTrafficYielding)) return Result;
  const float Floor=FloorBase(GetActorLocation().Z);
  Result.Add(FVector(GetActorLocation().X,GetActorLocation().Y,Floor+.8f));
  for (int32 I=RouteIndex;I<PlannedRoute.Num();++I)

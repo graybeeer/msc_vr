@@ -137,13 +137,16 @@ void Amsc_vrPlayerController::BeginPlay()
 			return OperatorCharacter && OperatorCharacter->GetRemoteForklift()!=nullptr;
 		};
 		CargoReadoutWidget=SAssignNew(CargoReadoutBox,SBox).HAlign(HAlign_Center).VAlign(VAlign_Bottom)
-			.Padding_Lambda([RemoteActive]() { return RemoteActive() ? FMargin(24,24,0,0) : FMargin(0,0,0,48); })
+			.Padding_Lambda([RemoteActive]() { return FMargin(0,0,0,RemoteActive() ? 24 : 48); })
 			.Visibility(EVisibility::HitTestInvisible)
-			[SNew(SBorder).Padding(WarehouseUIStyle::PanelPadding).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-				.BorderBackgroundColor(WarehouseUIStyle::Panel)
+			[SNew(SBorder).Padding_Lambda([RemoteActive]() { return RemoteActive() ? FMargin(0) : WarehouseUIStyle::PanelPadding; })
+				.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+				.BorderBackgroundColor_Lambda([RemoteActive]() { return RemoteActive() ? FLinearColor::Transparent : WarehouseUIStyle::Panel; })
 				.Visibility_Lambda([this]() { return GetCargoReadout().IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible; })
-				[SNew(STextBlock).Font_Lambda([RemoteActive]() { return WarehouseUIStyle::Font(RemoteActive() ? WarehouseUIStyle::BodySize : WarehouseUIStyle::ReadoutSize); })
-					.ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(680)
+				[SNew(STextBlock).Font_Lambda([RemoteActive]() { return WarehouseUIStyle::Font(RemoteActive() ? WarehouseUIStyle::CompactSize : WarehouseUIStyle::ReadoutSize); })
+					.ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt_Lambda([RemoteActive]() { return RemoteActive() ? 1000.f : 680.f; })
+					.Justification_Lambda([RemoteActive]() { return RemoteActive() ? ETextJustify::Center : ETextJustify::Left; })
+					.ShadowOffset(FVector2D(1,1)).ShadowColorAndOpacity(FLinearColor::Black)
 					.Text_Lambda([this]() { return GetCargoReadout(); })]];
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(CargoReadoutWidget.ToSharedRef(),5);
 		EmergencyAlertWidget=SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Top).Padding(FMargin(24,24))
@@ -509,13 +512,6 @@ void Amsc_vrPlayerController::PlayerTick(float Dt)
 	}
 	if (ComputerWidget.IsValid() && (!IsValid(ActiveComputer) || !ActiveComputer->CanUse())) CloseWarehouseComputer();
 	UpdateEmergencyAlerts(Dt);
-	if (CargoReadoutBox.IsValid())
-	{
-		const auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn());
-		const bool Remote=OperatorCharacter && OperatorCharacter->GetRemoteForklift()!=nullptr;
-		CargoReadoutBox->SetHAlign(Remote ? HAlign_Left : HAlign_Center);
-		CargoReadoutBox->SetVAlign(Remote ? VAlign_Top : VAlign_Bottom);
-	}
 	MouseSensitivity=FMath::Clamp(MouseSensitivity,.2f,3.f);
 	ViewFOV=FMath::Clamp(ViewFOV,70.f,110.f);
 	if (GetPawn()) if (auto* Camera=GetPawn()->FindComponentByClass<UCameraComponent>()) Camera->SetFieldOfView(ViewFOV);
@@ -553,15 +549,15 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
 {
  if (IsWarehouseMenuOpen() || !PlayerCameraManager || !GetPawn()) return FText::GetEmpty();
  if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn()))
-  if (auto* Vehicle=OperatorCharacter->GetRemoteForklift())
-   return FText::FromString(FString::Printf(TEXT("지게차 후방 시점 · 스마트폰 원격 조작 · %s\nW/S 전후진 · A/D 조향·자리 회전 · 좌클릭 포크 올림 · 우클릭 내림 · Space 제동\n마우스 이동: 주변 보기 · G 종료 / 플레이어 1인칭 복귀\n%s\n속도 %.2f m/s · 배터리 %.0f%% · 적재 %.0f / %.0f kg"),
-    *Vehicle->VehicleName,*Vehicle->Status,FMath::Abs(Vehicle->CurrentSpeedCm)*.01f,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
+  if (OperatorCharacter->GetRemoteForklift())
+   return FText::FromString(TEXT("W/S 전후진 · A/D 조향·제자리 회전 · 좌클릭 포크 올림 · 우클릭 내림\n마우스 둘러보기 · Space 제동 · G 원격 조작 종료"));
  if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn()))
  {
-  if (auto* Cargo=Cast<AWarehouseCargo>(OperatorCharacter->GetHeldCargo())) return Cargo->GetCargoDescription();
+  if (auto* Cargo=Cast<AWarehouseCargo>(OperatorCharacter->GetHeldCargo()))
+   return OperatorCharacter->IsPlacingCargo() ? FText::FromString(Cargo->GetCargoDescription().ToString()+TEXT("\n내려놓는 중 · E : 취소")) : Cargo->GetCargoDescription();
   if (auto* Pallet=Cast<AWarehousePallet>(OperatorCharacter->GetHeldCargo()))
    return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\n%s"),Pallet->PalletMassKg,
-     OperatorCharacter->IsPlacingCargo() ? TEXT("팔레트 위에 내려놓는 중") : TEXT("E : 가까운 팔레트 위에 쌓기 / 안전한 곳에 내려놓기")));
+     OperatorCharacter->IsPlacingCargo() ? TEXT("팔레트 위에 내려놓는 중 · E : 취소") : TEXT("E : 가까운 팔레트 위에 쌓기 / 안전한 곳에 내려놓기")));
   if (!bObserverView)
    if (Cast<AWarehouseComputer>(OperatorCharacter->GetInteractionTarget()))
     return FText::FromString(TEXT("E : 관제 컴퓨터 접속\n실시간 재고 · 운반 작업 · 지게차 관리"));
@@ -580,7 +576,7 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
   if (auto* Cargo=Cast<AWarehouseCargo>(Hit.GetActor())) return Cargo->GetCargoDescription();
   if (!bObserverView && Hit.Distance<=250.f)
    if (auto* Pallet=Cast<AWarehousePallet>(Hit.GetActor()))
-    return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\nE : 빈 팔레트 들기"),Pallet->PalletMassKg));
+    return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\n%s\nE : 빈 팔레트 들기"),Pallet->PalletMassKg,*Pallet->GetReceiptDescription().ToString()));
  }
  return FText::GetEmpty();
 }

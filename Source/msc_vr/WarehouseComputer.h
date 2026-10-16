@@ -18,6 +18,7 @@ struct FWarehouseInventoryItem
  UPROPERTY(BlueprintReadOnly) FString Location;
  UPROPERTY(BlueprintReadOnly) float MassKg=0;
  UPROPERTY(BlueprintReadOnly) bool bReserved=false;
+ UPROPERTY(BlueprintReadOnly) FString ReceiptStatus;
 };
 USTRUCT(BlueprintType)
 struct FWarehouseComputerTask

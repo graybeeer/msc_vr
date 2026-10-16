@@ -78,7 +78,7 @@ public:
  UFUNCTION(BlueprintPure, Category="Autonomy") bool IsFloorPlacementValid(AWarehousePallet* Pallet,const FTransform& Destination,bool bForksStillInserted=false,bool Refresh=true) const;
  UFUNCTION(BlueprintCallable, Category="Autonomy") bool PlanAutonomousRoute(const FTransform& Goal);
  UFUNCTION(BlueprintCallable, Category="Layout") void RefreshAfterLayout();
- UFUNCTION(BlueprintPure, Category="Autonomy") FString CheckSystems() const;
+ UFUNCTION(BlueprintPure, Category="Autonomy") FString CheckSystems(bool bIncludeAutonomySensors=true) const;
 
  UFUNCTION(BlueprintCallable, Category="Strength") void SetMechanicalFailure();
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Strength") bool bMechanicalFailure = false;
@@ -169,9 +169,7 @@ private:
  UPROPERTY(Transient) TObjectPtr<AActor> RemoteOperator;
  float RemoteForward=0,RemoteSteering=0,RemoteLift=0;
  double LastRemoteInputTime=0;
- float RemoteCheckSeconds=0;
  bool bReplanAfterRemote=false;
- bool bRemoteLoadFault=false;
  void AdvanceRemote(float Dt);
  bool RemotePoseClear(const FTransform& Pose);
  bool PhysicalPoseClear(const FTransform& Pose,bool CheckTranslation=false) const;
