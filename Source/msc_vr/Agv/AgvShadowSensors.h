@@ -136,6 +136,8 @@ public:
 	/** The actor transform the LiDAR estimate implies (x, y, yaw estimated; height, pitch and roll as they are). */
 	bool GetEstimatedActorTransform(FTransform& Out) const;
 
+	void SetDrawFields(bool bDraw);
+
 private:
 	void Build();
 	void UpdateNavigationPose(float Dt);
@@ -181,8 +183,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category="AGV|Shadow")
 	FString Report() const;
 
+	/** Draws (or stops drawing) every kit's safety fields. */
+	void SetDrawFields(bool bDraw);
+
 private:
 	UPROPERTY(Transient) TArray<TObjectPtr<UAgvShadowSensorsComponent>> Kits;
+	float SinceAttachCheck = 0.f;
 	bool bAttached = false;
 	float SinceReport = 0.f;
 };

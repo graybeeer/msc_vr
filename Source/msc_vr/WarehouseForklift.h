@@ -77,13 +77,13 @@ public:
  UFUNCTION(BlueprintCallable, Category="Autonomy") bool PlanAutonomousRoute(const FTransform& Goal);
  UFUNCTION(BlueprintCallable, Category="Layout") void RefreshAfterLayout();
  /** AGV module LiDAR localization (Source/msc_vr/Agv, agv.localize): route travel decisions use its estimate instead of
-  * the exact pose. Off by default. The final approach (last 80 cm of a stop, rack/floor alignment, fork insertion,
+  * the exact pose. On by default on the AGV branch (agv.localize 0 turns it off). The final approach (last 80 cm of a stop, rack/floor alignment, fork insertion,
   * charger docking) keeps the exact pose, standing in for sensing the target directly. */
- UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV Localization") bool bUseAgvLocalization = false;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV Localization") bool bUseAgvLocalization = true;
  /** Pose for travel decisions: the AGV module's estimate when bUseAgvLocalization and available, else the actual one. */
  UFUNCTION(BlueprintPure, Category="AGV Localization") FTransform NavigationTransform() const;
- /** AGV module safety fields (agv.safety): a protective-field stop waits like an obstacle, a warning caps the speed. Off by default. */
- UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV Localization") bool bUseAgvSafety = false;
+ /** AGV module safety fields (agv.safety): a protective-field stop waits like an obstacle, a warning caps the speed. On by default on the AGV branch (agv.safety 0). */
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV Localization") bool bUseAgvSafety = true;
  /** Travel speed cap from the AGV module (cm/s; 0 = stop, OutReason says why): safety fields when bUseAgvSafety,
   * localization health when bUseAgvLocalization (lost = fault, odometry only = slow). Very large when neither. */
  float AgvTravelSpeedLimit(FString& OutReason) const;

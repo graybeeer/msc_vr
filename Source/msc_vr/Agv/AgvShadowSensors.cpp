@@ -88,6 +88,13 @@ namespace
 			}
 			for (TActorIterator<AAgvShadowManager> It(World); It; ++It)
 			{
+				// Already attached (at play start by default): "draw" toggles the field drawing, otherwise report.
+				if (Args.Contains(TEXT("draw")))
+				{
+					It->SetDrawFields(!It->bDrawFields);
+					UE_LOG(LogAgvShadow, Log, TEXT("AGV_SHADOW field drawing %s"), It->bDrawFields ? TEXT("ON") : TEXT("OFF"));
+					return;
+				}
 				UE_LOG(LogAgvShadow, Log, TEXT("%s"), *It->Report());
 				return;
 			}
@@ -567,6 +574,15 @@ bool UAgvShadowSensorsComponent::GetEstimatedActorTransform(FTransform& Out) con
 	return true;
 }
 
+void UAgvShadowSensorsComponent::SetDrawFields(bool bDraw)
+{
+	bDrawFields = bDraw;
+	if (Safety)
+	{
+		Safety->bDrawFields = bDraw;
+	}
+}
+
 FString UAgvShadowSensorsComponent::Summary() const
 {
 	return FString::Printf(TEXT("AGV_SHADOW %s: moving %.0f s, localization error max %.1f cm / mean %.1f cm, heading max %.2f deg, "
@@ -586,25 +602,52 @@ AAgvShadowManager::AAgvShadowManager()
 void AAgvShadowManager::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	if (!bAttached)
+	// The forklifts make their chassis the root in BeginPlay; attach from the first tick, after that, and then once a
+	// second to forklifts added later (layout editor).
+	SinceAttachCheck += DeltaSeconds;
+	if (!bAttached || SinceAttachCheck >= 1.f)
 	{
-		// The forklifts make their chassis the root in BeginPlay; attach on the first tick, after that.
+		SinceAttachCheck = 0.f;
+		int32 Added = 0;
 		for (TActorIterator<AWarehouseForklift> It(GetWorld()); It; ++It)
 		{
+			if (It->FindComponentByClass<UAgvShadowSensorsComponent>())
+			{
+				continue;
+			}
 			UAgvShadowSensorsComponent* Kit = NewObject<UAgvShadowSensorsComponent>(*It, TEXT("AgvShadowSensors"));
 			Kit->bDrawFields = bDrawFields;
 			Kit->RegisterComponent();
 			Kits.Add(Kit);
+			++Added;
 		}
-		bAttached = true;
-		UE_LOG(LogAgvShadow, Log, TEXT("AGV_SHADOW attached to %d forklift(s)"), Kits.Num());
-		return;
+		if (Added > 0)
+		{
+			UE_LOG(LogAgvShadow, Log, TEXT("AGV_SHADOW attached to %d forklift(s)"), Added);
+		}
+		if (!bAttached)
+		{
+			bAttached = true;
+			return;
+		}
 	}
 	SinceReport += DeltaSeconds;
 	if (ReportIntervalSeconds > 0.f && SinceReport >= ReportIntervalSeconds)
 	{
 		SinceReport = 0.f;
 		UE_LOG(LogAgvShadow, Log, TEXT("%s"), *Report());
+	}
+}
+
+void AAgvShadowManager::SetDrawFields(bool bDraw)
+{
+	bDrawFields = bDraw;
+	for (UAgvShadowSensorsComponent* Kit : Kits)
+	{
+		if (IsValid(Kit))
+		{
+			Kit->SetDrawFields(bDraw);
+		}
 	}
 }
 
