@@ -28,6 +28,7 @@ bool AWarehouseForklift::CanAcceptNewWork() const
 FString AWarehouseForklift::ValidateJobResources(const FWarehouseWorkOrder& Job) const
 {
  if (!IsValid(Job.Pallet) || Job.Pallet->GetWorld()!=GetWorld()) return TEXT("물류를 운반할 수 없다: 팔레트가 없습니다. [NO_PALLET]");
+ if (Job.Pallet->ActorHasTag(TEXT("LogisticsInTransit"))) return TEXT("트럭 상하차 물류는 인계 후 운반할 수 있습니다. [TRUCK_HANDLING]");
  if (Job.Pallet->ReceiptState==EWarehouseReceiptState::WrapTorn) return TEXT("운반할 수 없다: 팔레트 랩이 파손되어 재검수가 필요합니다. [WRAP_TORN]");
  if (Job.Pallet->ReceiptState==EWarehouseReceiptState::Pending)
   for (TActorIterator<AWarehouseInboundZone> It(GetWorld());It;++It) if (It->ContainsPallet(Job.Pallet))

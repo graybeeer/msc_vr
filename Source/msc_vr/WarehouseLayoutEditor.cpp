@@ -74,6 +74,7 @@ FString AWarehouseLayoutEditor::GetAddChoiceLabel() const
 bool AWarehouseLayoutEditor::Eligible(AActor* Actor) const
 {
  // Older saved metadata may have marked a charging bay as fixed.
+ if (Actor && Actor->ActorHasTag(TEXT("LogisticsInTransit"))) return false;
  if (!Actor || Actor==this || (Actor->ActorHasTag(TEXT("LayoutFixed")) && !Actor->IsA<AWarehouseChargingStation>())) return false;
  if (Actor->IsA<AWarehouseChargingStation>() && Category!=EWarehouseLayoutCategory::Charger) return false;
  const auto* PC=GetWorld()->GetFirstPlayerController();

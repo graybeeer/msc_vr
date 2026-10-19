@@ -556,6 +556,7 @@ bool Amsc_vrCharacter::TryPickupPallet(AWarehousePallet* Pallet)
 bool Amsc_vrCharacter::TryPickupObject(AActor* Cargo)
 {
 	if (bPhysicalRagdoll || IsValid(RemoteForklift)) return false;
+ if (IsValid(Cargo) && Cargo->ActorHasTag(TEXT("LogisticsInTransit"))) return false;
  if (auto* Box=Cast<AWarehouseCargo>(Cargo);Box && Box->GetWrappedPallet())
  {
   if (GEngine) GEngine->AddOnScreenDebugMessage(41,2.f,FColor::Yellow,TEXT("입고 확정된 랩 포장 물류입니다. 팔레트 전체를 지게차로 운반하세요."));

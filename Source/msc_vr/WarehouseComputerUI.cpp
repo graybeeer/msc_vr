@@ -6,6 +6,8 @@
 #include "WarehouseForklift.h"
 #include "WarehouseUIStyle.h"
 #include "WarehouseLayoutInventory.h"
+#include "WarehouseShippingSystem.h"
+#include "WarehouseLogisticsTruck.h"
 #include "Engine/GameViewportClient.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Widgets/SCompoundWidget.h"
@@ -28,6 +30,10 @@ struct FVehicleChoice
  TWeakObjectPtr<AWarehouseForklift> Vehicle;
  FString Title;
 };
+struct FTruckChoice
+{
+ TWeakObjectPtr<AWarehouseLogisticsTruck> Truck;
+};
 class SWarehouseComputerScreen : public SCompoundWidget
 {
 public:
@@ -38,6 +44,7 @@ public:
  void Construct(const FArguments& Args)
  {
   Computer=Args._Computer;Controller=Args._Controller;
+  Shipping=AWarehouseShippingSystem::Find(Computer.Get());
   auto Automatic=MakeShared<FVehicleChoice>();Automatic->Title=TEXT("자동 배정 · 가까운 대기 차량");VehicleChoices.Add(Automatic);SelectedVehicle=Automatic;
   for (AWarehouseForklift* V : Computer->Fleet)
   { auto Choice=MakeShared<FVehicleChoice>();Choice->Vehicle=V;Choice->Title=V->VehicleName;VehicleChoices.Add(Choice); }
@@ -60,6 +67,61 @@ public:
     [SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(Label))]
     .OnClicked_Lambda([Action]() { Action();return FReply::Handled(); })];
   };
+  Text(TEXT("배송편 · 트럭 상하차"),WarehouseUIStyle::TitleSize);
+  Text(TEXT("왼쪽에서 Ctrl / Shift로 여러 상품을 선택하세요. 같은 팔레트는 한 번만 포함합니다."),WarehouseUIStyle::CompactSize);
+  Right->AddSlot().AutoHeight().Padding(0,4)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Accent)
+   .Text_Lambda([this]() { return FText::FromString(FString::Printf(TEXT("배송편 명세: 선택 팔레트 %d개"),SelectedPallets().Num())); }).AutoWrapText(true)];
+  Right->AddSlot().AutoHeight().Padding(0,4)[SAssignNew(ShipmentNameInput,SEditableTextBox).Font(WarehouseUIStyle::Font()).HintText(FText::FromString(TEXT("배송편 이름 (비우면 자동 생성)")))];
+  auto ZoneCombo=[this](bool Inbound)->TSharedRef<SWidget>
+  {
+   auto& Choices=Inbound ? InboundZoneChoices : OutboundZoneChoices;
+   auto& Selected=Inbound ? SelectedInboundZone : SelectedOutboundZone;
+   auto& Combo=Inbound ? InboundZoneCombo : OutboundZoneCombo;
+   return SAssignNew(Combo,SComboBox<TSharedPtr<FString>>).OptionsSource(&Choices).InitiallySelectedItem(Selected)
+    .OnGenerateWidget_Lambda([](TSharedPtr<FString> Choice) { return SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text(FText::FromString(*Choice)); })
+    .OnSelectionChanged_Lambda([this,Inbound](TSharedPtr<FString> Choice,ESelectInfo::Type) { (Inbound ? SelectedInboundZone : SelectedOutboundZone)=Choice; })
+    [SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text_Lambda([this,Inbound]() { const auto& Value=Inbound ? SelectedInboundZone : SelectedOutboundZone;return FText::FromString(Value ? *Value : TEXT("사용 가능한 구역 없음")); })];
+  };
+  auto TruckCombo=[this](bool Inbound)->TSharedRef<SWidget>
+  {
+   auto& Selected=Inbound ? SelectedInboundTruck : SelectedOutboundTruck;
+   auto& Combo=Inbound ? InboundTruckCombo : OutboundTruckCombo;
+   return SAssignNew(Combo,SComboBox<TSharedPtr<FTruckChoice>>).OptionsSource(&TruckChoices).InitiallySelectedItem(Selected)
+    .OnGenerateWidget_Lambda([](TSharedPtr<FTruckChoice> Choice) { return SNew(STextBlock).Font(WarehouseUIStyle::Font()).AutoWrapText(true).ColorAndOpacity(WarehouseUIStyle::Text).Text_Lambda([Choice]() { return FText::FromString(TruckText(Choice)); }); })
+    .OnSelectionChanged_Lambda([this,Inbound](TSharedPtr<FTruckChoice> Choice,ESelectInfo::Type) { (Inbound ? SelectedInboundTruck : SelectedOutboundTruck)=Choice; })
+    [SNew(STextBlock).Font(WarehouseUIStyle::Font()).AutoWrapText(true).ColorAndOpacity(WarehouseUIStyle::Text).Text_Lambda([this,Inbound]() { return FText::FromString(TruckText(Inbound ? SelectedInboundTruck : SelectedOutboundTruck)); })];
+  };
+  Text(TEXT("출고 집결 구역 / 배정 트럭"));
+  Right->AddSlot().AutoHeight().Padding(0,3)[ZoneCombo(false)];
+  Right->AddSlot().AutoHeight().Padding(0,3)[TruckCombo(false)];
+  Button(TEXT("선택 팔레트로 출고 배송편 생성"),[this]()
+  {
+   if (Shipping.IsValid()) Shipping->CreateOutbound(ShipmentNameInput->GetText().ToString().TrimStartAndEnd(),SelectedPallets(),
+    SelectedOutboundZone ? *SelectedOutboundZone : FString(),SelectedOutboundTruck ? SelectedOutboundTruck->Truck.Get() : nullptr);
+   if (Computer.IsValid()) Computer->RefreshState();RefreshShippingChoices();
+  });
+  Text(TEXT("명세 전량을 내려놓고 포크를 뺀 뒤, 배정 트럭이 준비되면 자동 상차합니다."),WarehouseUIStyle::CompactSize);
+  Text(TEXT("입고 인계 구역 / 하역할 트럭"));
+  Right->AddSlot().AutoHeight().Padding(0,3)[ZoneCombo(true)];
+  Right->AddSlot().AutoHeight().Padding(0,3)[TruckCombo(true)];
+  Button(TEXT("트럭 명세로 입고 하역 시작"),[this]()
+  {
+   if (Shipping.IsValid()) Shipping->StartInbound(SelectedInboundTruck ? SelectedInboundTruck->Truck.Get() : nullptr,
+    SelectedInboundZone ? *SelectedInboundZone : FString());
+   if (Computer.IsValid()) Computer->RefreshState();RefreshShippingChoices();
+  });
+  Text(TEXT("상하차는 일정 간격마다 팔레트 묶음을 즉시 옮깁니다. 창고 안 운반은 기존 지게차가 수행합니다."),WarehouseUIStyle::CompactSize);
+  Right->AddSlot().AutoHeight().Padding(0,6)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Warning)
+   .Text_Lambda([this]() { return FText::FromString(Shipping.IsValid() ? Shipping->LastMessage : TEXT("물류 시스템 연결 없음")); }).AutoWrapText(true)];
+  Text(TEXT("배송편 명세 · 준비 상태 · 경과 시간"));
+  Right->AddSlot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
+   .Text_Lambda([this]() { return FText::FromString(ShipmentsText()); }).AutoWrapText(true)];
+  Right->AddSlot().AutoHeight().Padding(0,4)[SAssignNew(ShipmentCombo,SComboBox<TSharedPtr<FString>>).OptionsSource(&ShipmentChoices).InitiallySelectedItem(SelectedShipment)
+   .OnGenerateWidget_Lambda([](TSharedPtr<FString> Choice) { return SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text(FText::FromString(*Choice)); })
+   .OnSelectionChanged_Lambda([this](TSharedPtr<FString> Choice,ESelectInfo::Type) { SelectedShipment=Choice; })
+   [SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text_Lambda([this]() { return FText::FromString(SelectedShipment ? *SelectedShipment : TEXT("취소할 배송편 없음")); })]];
+  Button(TEXT("선택 배송편 취소"),[this]()
+  { if (Shipping.IsValid()) Shipping->CancelShipment(SelectedShipment ? *SelectedShipment : FString());RefreshShippingChoices(); });
   Text(TEXT("운반 작업 지시"),WarehouseUIStyle::TitleSize);
   Right->AddSlot().AutoHeight().Padding(0,8)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Accent)
    .Text_Lambda([this]() { return FText::FromString(SelectionText()); }).AutoWrapText(true)];
@@ -78,7 +140,7 @@ public:
    if (auto* C=Computer.Get()) C->IssueOutbound(SelectedCargo.Get(),SelectedVehicle->Vehicle.Get(),DestChoices.IndexOfByKey(SelectedDest));
    RefreshInventory();
   });
-  Text(TEXT("상품 한 개를 선택해도 같은 팔레트의 짐을 모두 운반합니다."),WarehouseUIStyle::CompactSize);
+  Text(TEXT("단건 지시는 마지막으로 선택한 상품의 팔레트만 운반합니다. 여러 팔레트를 함께 출고하려면 위에서 배송편을 생성하세요."),WarehouseUIStyle::CompactSize);
   Right->AddSlot().AutoHeight().Padding(0,6)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Warning)
    .Text_Lambda([this]() { return FText::FromString(Computer.IsValid() ? Computer->LastMessage : TEXT("연결 종료")); }).AutoWrapText(true)];
   Text(TEXT("지게차 운행 관리"));
@@ -133,8 +195,12 @@ public:
       +SVerticalBox::Slot().AutoHeight().Padding(8,6)[SNew(SHorizontalBox)
        +SHorizontalBox::Slot().FillWidth(.54)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize,true)).ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("화물 번호 / 종류")))]
        +SHorizontalBox::Slot().FillWidth(.46)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize,true)).ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("현재 위치 / 무게")))]]
-      +SVerticalBox::Slot().FillHeight(1)[SAssignNew(List,SListView<TSharedPtr<FWarehouseInventoryItem>>).ListItemsSource(&Items).SelectionMode(ESelectionMode::Single)
-       .OnSelectionChanged_Lambda([this](TSharedPtr<FWarehouseInventoryItem> Item,ESelectInfo::Type) { if (Item) SelectedCargo=Item->Cargo; })
+      +SVerticalBox::Slot().FillHeight(1)[SAssignNew(List,SListView<TSharedPtr<FWarehouseInventoryItem>>).ListItemsSource(&Items).SelectionMode(ESelectionMode::Multi)
+       .OnSelectionChanged_Lambda([this](TSharedPtr<FWarehouseInventoryItem> Item,ESelectInfo::Type)
+       {
+        const auto Selected=List->GetSelectedItems();
+        SelectedCargo=Selected.IsEmpty() ? nullptr : (Item && Selected.Contains(Item) ? Item->Cargo.Get() : Selected.Last()->Cargo.Get());
+       })
        .OnGenerateRow_Lambda([](TSharedPtr<FWarehouseInventoryItem> Item,const TSharedRef<STableViewBase>& Owner)
        {
         return SNew(STableRow<TSharedPtr<FWarehouseInventoryItem>>,Owner).Padding(FMargin(8,8))
@@ -173,6 +239,7 @@ public:
  }
 private:
  TWeakObjectPtr<AWarehouseComputer> Computer;
+ TWeakObjectPtr<AWarehouseShippingSystem> Shipping;
  TWeakObjectPtr<Amsc_vrPlayerController> Controller;
  TWeakObjectPtr<AWarehouseCargo> SelectedCargo;
  TArray<TSharedPtr<FWarehouseInventoryItem>> Items;
@@ -189,6 +256,92 @@ private:
  int32 LastHeldRevision=-1;
  TSharedPtr<SEditableTextBox> NewIdInput,NewProductInput;
  float NewMass=12,NewWidth=40,NewDepth=30,NewHeight=25;
+ TSharedPtr<SEditableTextBox> ShipmentNameInput;
+ TArray<TSharedPtr<FString>> OutboundZoneChoices,InboundZoneChoices,ShipmentChoices;
+ TSharedPtr<FString> SelectedOutboundZone,SelectedInboundZone,SelectedShipment;
+ TSharedPtr<SComboBox<TSharedPtr<FString>>> OutboundZoneCombo,InboundZoneCombo,ShipmentCombo;
+ TArray<TSharedPtr<FTruckChoice>> TruckChoices;
+ TSharedPtr<FTruckChoice> SelectedOutboundTruck,SelectedInboundTruck;
+ TSharedPtr<SComboBox<TSharedPtr<FTruckChoice>>> OutboundTruckCombo,InboundTruckCombo;
+ TArray<AWarehousePallet*> SelectedPallets() const
+ {
+  TArray<AWarehousePallet*> Pallets;
+  if (!Computer.IsValid() || !List.IsValid()) return Pallets;
+  // Resolve against the current inventory so a stale selection cannot ship an old support.
+  for (const auto& Selected:List->GetSelectedItems())
+   if (Selected) if (const auto* Current=Computer->Inventory.FindByPredicate([&](const auto& Row) { return Row.Cargo==Selected->Cargo; });Current && IsValid(Current->Pallet))
+    Pallets.AddUnique(Current->Pallet);
+  return Pallets;
+ }
+ static FString TruckText(const TSharedPtr<FTruckChoice>& Choice)
+ {
+  auto* Truck=Choice ? Choice->Truck.Get() : nullptr;
+  if (!Truck) return TEXT("사용 가능한 트럭 없음");
+  return FString::Printf(TEXT("%s · 도크 %s · 명세 %d개\n%s"),*Truck->TruckId,*Truck->DockId,Truck->ManifestPallets.Num(),*Truck->Status);
+ }
+ void RefreshShippingChoices()
+ {
+  if (!Shipping.IsValid()) return;
+  auto Strings=[](TArray<TSharedPtr<FString>>& Choices,TSharedPtr<FString>& Selected,const TArray<FString>& Values,const TSharedPtr<SComboBox<TSharedPtr<FString>>>& Combo)
+  {
+   bool Changed=Choices.Num()!=Values.Num();
+   for (int32 I=0;!Changed && I<Values.Num();++I) Changed=*Choices[I]!=Values[I];
+   if (!Changed) return;
+   const FString Old=Selected ? *Selected : FString();Choices.Reset();Selected.Reset();
+   for (const FString& Value:Values) { auto Item=MakeShared<FString>(Value);Choices.Add(Item);if (Value==Old) Selected=Item; }
+   if (!Selected && !Choices.IsEmpty()) Selected=Choices[0];
+   if (Combo.IsValid()) { Combo->RefreshOptions();Combo->SetSelectedItem(Selected); }
+  };
+  TArray<FString> Inbound,Outbound,Active;
+  for (const auto& Zone:Shipping->Zones) if (IsValid(Zone.Anchor)) (Zone.bInbound ? Inbound : Outbound).AddUnique(Zone.ZoneId);
+  for (const auto& Shipment:Shipping->Shipments)
+   if (Shipment.State!=EWarehouseShipmentState::Completed && Shipment.State!=EWarehouseShipmentState::Cancelled) Active.Add(Shipment.ShipmentId);
+  Strings(InboundZoneChoices,SelectedInboundZone,Inbound,InboundZoneCombo);
+  Strings(OutboundZoneChoices,SelectedOutboundZone,Outbound,OutboundZoneCombo);
+  Strings(ShipmentChoices,SelectedShipment,Active,ShipmentCombo);
+  TArray<TSharedPtr<FTruckChoice>> Updated;
+  for (AWarehouseLogisticsTruck* Truck:Shipping->Trucks) if (IsValid(Truck))
+  {
+   const auto* Found=TruckChoices.FindByPredicate([Truck](const auto& Choice) { return Choice->Truck==Truck; });
+   auto Choice=Found ? *Found : MakeShared<FTruckChoice>();Choice->Truck=Truck;Updated.Add(Choice);
+  }
+  const bool Changed=Updated!=TruckChoices;TruckChoices=MoveTemp(Updated);
+  auto Retain=[this](TSharedPtr<FTruckChoice>& Selected,bool Inbound)
+  {
+   if (Selected && TruckChoices.Contains(Selected)) return;
+   Selected.Reset();
+   for (const auto& Choice:TruckChoices) if (auto* Truck=Choice->Truck.Get();Truck && (Inbound ? !Truck->ManifestPallets.IsEmpty() : Truck->ManifestPallets.IsEmpty())) { Selected=Choice;break; }
+   if (!Selected && !TruckChoices.IsEmpty()) Selected=TruckChoices[0];
+  };
+  Retain(SelectedOutboundTruck,false);Retain(SelectedInboundTruck,true);
+  if (Changed)
+  {
+   if (OutboundTruckCombo.IsValid()) { OutboundTruckCombo->RefreshOptions();OutboundTruckCombo->SetSelectedItem(SelectedOutboundTruck); }
+   if (InboundTruckCombo.IsValid()) { InboundTruckCombo->RefreshOptions();InboundTruckCombo->SetSelectedItem(SelectedInboundTruck); }
+  }
+ }
+ FString ShipmentsText() const
+ {
+  if (!Shipping.IsValid() || Shipping->Shipments.IsEmpty()) return TEXT("등록된 배송편이 없습니다.");
+  FString Value;
+  for (int32 I=Shipping->Shipments.Num()-1;I>=0;--I)
+  {
+   const auto& Shipment=Shipping->Shipments[I];int32 Arrived=0,Loaded=0;
+   for (const auto& Line:Shipment.Lines) { Arrived+=Line.bArrived ? 1 : 0;Loaded+=Line.bLoaded ? 1 : 0; }
+   const bool Inbound=Shipment.Direction==EWarehouseShipmentDirection::Inbound;
+   const FString TruckName=IsValid(Shipment.Truck) ? Shipment.Truck->TruckId : TEXT("트럭 없음");
+   Value+=FString::Printf(TEXT("%s · %s · %s\n%s → %s · %.1f초\n%s\n%s %d/%d · %s %d/%d · 트럭 %s\n"),
+    *Shipment.ShipmentId,*Shipment.Name,Inbound ? TEXT("입고") : TEXT("출고"),
+    *(Inbound ? TruckName : Shipment.ZoneId),*(Inbound ? Shipment.ZoneId : TruckName),Shipment.ElapsedSeconds,*Shipment.Status,
+    Inbound ? TEXT("인계") : TEXT("집결"),Arrived,Shipment.Lines.Num(),Inbound ? TEXT("트럭 잔량") : TEXT("상차"),Loaded,Shipment.Lines.Num(),
+    Shipment.bTruckReady ? TEXT("준비 완료") : TEXT("대기"));
+   if (!Inbound) Value+=(Shipment.bCargoReady ? TEXT("화물 준비 완료\n") : TEXT("화물 준비 대기\n"));
+   if (!Shipment.WaitReason.IsEmpty()) Value+=TEXT("대기 / 오류: ")+Shipment.WaitReason+TEXT("\n");
+   for (const auto& Line:Shipment.Lines) Value+=FString::Printf(TEXT("  %s · %s\n"),*Line.PalletLabel,*Line.Status);
+   Value+=TEXT("\n");
+  }
+  return Value;
+ }
  void RefreshHeld()
  {
   if (!Computer.IsValid()) return;auto* Store=AWarehouseLayoutInventory::Find(Computer.Get());if (!Store) return;
@@ -207,6 +360,7 @@ private:
   }
   for (auto It=Cache.CreateIterator();It;++It) if (!Present.Contains(It.Key())) It.RemoveCurrent();
   if (List.IsValid()) List->RequestListRefresh();
+  RefreshShippingChoices();
  }
  FString SelectionText() const
  {

@@ -153,6 +153,7 @@ void AWarehousePallet::TearWrap()
 void AWarehousePallet::Tick(float Dt)
 {
  Super::Tick(Dt);
+ if (ActorHasTag(TEXT("LogisticsInTransit"))) return;
  bool Failed=bWrapBreakPending;
  auto* Strength=AWarehouseDamageSystem::Find(this);
  Failed |= Strength && Strength->HasFailed(this);

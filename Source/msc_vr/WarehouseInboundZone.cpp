@@ -23,7 +23,7 @@ void AWarehouseInboundZone::Tick(float Dt)
 }
 bool AWarehouseInboundZone::ContainsPallet(const AWarehousePallet* Pallet) const
 {
- if (!IsValid(Pallet)) return false;
+ if (!IsValid(Pallet) || Pallet->ActorHasTag(TEXT("LogisticsInTransit"))) return false;
  const FVector Local=GetActorTransform().InverseTransformPosition(Pallet->GetActorLocation());
  return FMath::Abs(Local.X)<=HalfSizeCm.X-55 && FMath::Abs(Local.Y)<=HalfSizeCm.Y-55 && FMath::Abs(Local.Z)<=5;
 }
