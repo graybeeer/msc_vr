@@ -22,7 +22,8 @@ def finish(ok,detail):
     print('LAYOUT_INVENTORY_PASSED' if ok else 'LAYOUT_INVENTORY_FAILED',detail)
     unreal.unregister_slate_post_tick_callback(handle)
     if layout and layout.get_editor_property('editing'): layout.set_editing(False,0)
-    level.editor_request_end_play();unreal.SystemLibrary.quit_editor()
+    level.editor_request_end_play()
+    if '-keeptesteditoropen' not in unreal.SystemLibrary.get_command_line().lower():unreal.SystemLibrary.quit_editor()
 
 def allof(cls): return unreal.GameplayStatics.get_all_actors_of_class(game,cls)
 def point(actor):
@@ -217,7 +218,54 @@ def tick(dt):
             restored=allof(unreal.WarehouseElevator)[0]
             assert [round(restored.floor_height(i)) for i in range(3)]==[0,400,800]
             check('deleted_elevator_restored_with_common_floors')
-            finish(True,'FIFO archive/add/cancel; native box stacking incl elevated rack cargo; real rig creation; deleted elevator, charger, outbound zone and all vehicles; no map saved')
+            # A real mixed All deletion must route each selected group through
+            # its own cleanup and archive every actually removed parcel once.
+            layout.set_editing(True,0)
+            layout.set_category(unreal.WarehouseLayoutCategory.ALL)
+            outbound=next(z for z in layout.get_editor_property('zones') if z.name=='Outbound')
+            rack=next(a for a in allof(unreal.Actor) if a.get_actor_label()=='WH_InboundRack_00_A')
+            rack_group=next(str(t) for t in rack.tags if str(t).startswith('LayoutGroup:'))
+            rack_names={a.get_path_name() for a in allof(unreal.Actor) if a.actor_has_tag(rack_group)}
+            original_id=str(placed.get_editor_property('cargo_id'))
+            before_cargo={}
+            for cargo in allof(unreal.WarehouseCargo):
+                body=cargo.get_component_by_class(unreal.StaticMeshComponent)
+                bounds=body.static_mesh.get_bounding_box()
+                extent=bounds.max-bounds.min;scale=body.get_world_transform().scale3d
+                # HeldCargo.SizeCm is the native mesh size times body scale;
+                # its private Packing recipe is not a public archive field.
+                size=unreal.Vector(extent.x*scale.x,extent.y*scale.y,extent.z*scale.z)
+                before_cargo[str(cargo.get_editor_property('cargo_id'))]=(cargo.get_editor_property('gross_mass_kg'),size,str(cargo.get_editor_property('cargo_kind')))
+            held_before=[str(c.cargo_id) for c in store.get_editor_property('held_cargo')]
+            layout.set_selection([placed,rack,outbound.members[0]])
+            assert layout.get_editor_property('selection_count')==3,'All did not retain three different object categories'
+            layout.set_action(unreal.WarehouseLayoutAction.DELETE)
+            assert layout.delete_selection(),layout.get_editor_property('status')
+            assert not rack_names & {a.get_path_name() for a in allof(unreal.Actor)},'Mixed delete left rack group members behind'
+            assert not any(z.name=='Outbound' for z in layout.get_editor_property('zones')),'Mixed delete retained outbound zone metadata'
+            after_ids={str(c.get_editor_property('cargo_id')) for c in allof(unreal.WarehouseCargo)}
+            removed=set(before_cargo)-after_ids
+            held=list(store.get_editor_property('held_cargo'))
+            assert [str(c.cargo_id) for c in held[:len(held_before)]]==held_before,'Mixed delete reordered existing held cargo'
+            added=held[len(held_before):]
+            assert original_id in removed and {str(c.cargo_id) for c in added}==removed and len(added)==len(removed),'Mixed delete lost/duplicated cargo archive entries'
+            for row in added:
+                mass,size,product=before_cargo[str(row.cargo_id)]
+                assert abs(row.mass_kg-mass)<.001 and (row.size_cm-size).length()<.01,'Mixed delete changed archived mass or mesh dimensions'
+                assert str(row.product)==product,'Mixed delete changed archived product'
+            assert not layout.get_selection()
+            computer.refresh_state()
+            assert not computer.get_editor_property('outbound_destinations'),'Mixed zone deletion retained console destinations'
+            check('all_mixed_delete_preserves_fifo_cargo_and_removes_rack_zone_metadata',archived=len(removed))
+            # Add is intentionally unavailable in All even when it is forced
+            # after the UI's Add action normally switches back to Rack.
+            layout.set_action(unreal.WarehouseLayoutAction.ADD)
+            layout.set_category(unreal.WarehouseLayoutCategory.ALL)
+            actor_count=len(allof(unreal.Actor))
+            assert not layout.begin_add(unreal.Vector(2400,-1650,0)),'All created an ambiguous mixed prototype'
+            assert len(allof(unreal.Actor))==actor_count,'Rejected All addition leaked preview actors'
+            check('all_category_cannot_add_a_prototype')
+            finish(True,'FIFO archive/add/cancel; native box stacking incl elevated rack cargo; real rig creation; deleted elevator, charger, outbound zone and all vehicles; All mixed cargo/rack/zone delete with exact FIFO archive and no All addition; no map saved')
     except Exception:
         finish(False,traceback.format_exc())
 

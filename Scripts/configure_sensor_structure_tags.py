@@ -1,8 +1,9 @@
-"""Author the fixed building map. Interior equipment never enters it by mobility.
+"""Author architectural building tags. Fixed racks use their existing LayoutType:Rack role at runtime.
 
 configure() edits only tags in the loaded level; -ApplySensorMapTags permits
 saving the warehouse. -IsolateStandaloneAgvPrototype additionally removes the
 old standalone test vehicle from this operating map, preserving its code/assets.
+Rack contents do not inherit a map role. Static mobility alone never grants one.
 """
 import json
 from pathlib import Path

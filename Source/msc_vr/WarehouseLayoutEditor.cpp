@@ -3,6 +3,7 @@
 #include "WarehouseForklift.h"
 #include "WarehouseChargingStation.h"
 #include "WarehouseElevator.h"
+#include "WarehousePalletLift.h"
 #include "WarehouseElevatorLayout.h"
 #include "WarehouseLayoutSnap.h"
 #include "WarehousePallet.h"
@@ -33,6 +34,20 @@ namespace
  }
  bool InsideXY(const FBox& Box,FVector Point)
  { return Point.X>=Box.Min.X && Point.X<=Box.Max.X && Point.Y>=Box.Min.Y && Point.Y<=Box.Max.Y; }
+ bool IsShaft(const AActor* Actor)
+ { return Actor && (Actor->IsA<AWarehouseElevator>() || Actor->IsA<AWarehousePalletLift>()); }
+ bool ShaftBusy(AActor* Actor)
+ {
+  if (const auto* Lift=Cast<AWarehouseElevator>(Actor)) return Lift->State!=EWarehouseElevatorState::Idle || Lift->ReservedVehicle;
+  if (const auto* Lift=Cast<AWarehousePalletLift>(Actor)) return !Lift->IsIdleForLayout();
+  return false;
+ }
+ bool HandledByPalletLift(AActor* Actor)
+ {
+  if (!IsValid(Actor) || !Actor->GetWorld()) return false;
+  for (TActorIterator<AWarehousePalletLift> It(Actor->GetWorld());It;++It) if (It->IsHandlingCargo(Actor)) return true;
+  return false;
+ }
 }
 AWarehouseLayoutEditor::AWarehouseLayoutEditor()
 {
@@ -63,7 +78,7 @@ void AWarehouseLayoutEditor::SetEditing(bool Enabled,int32 Floor)
 void AWarehouseLayoutEditor::SetCategory(EWarehouseLayoutCategory Value)
 { if (bDragging) EndDrag(false);ClearSelection();Category=Value;AddChoice=0;MouseWasDown=false; }
 void AWarehouseLayoutEditor::SetAction(EWarehouseLayoutAction Value)
-{ if (bDragging) EndDrag(false);if (Value==EWarehouseLayoutAction::Add) ClearSelection();Action=Value;MouseWasDown=false;Status=Value==EWarehouseLayoutAction::Move ? TEXT("재배치 · 선택 후 드래그") : Value==EWarehouseLayoutAction::Delete ? TEXT("삭제 · 클릭 또는 다중 선택 후 선택 삭제 · 상자는 보류 목록으로 이동") : TEXT("추가 · 원본 종류 선택 후 클릭·드래그 · 상자는 보류 목록의 첫 항목만 배치"); }
+{ if (bDragging) EndDrag(false);if (Value==EWarehouseLayoutAction::Add) { ClearSelection();if (Category==EWarehouseLayoutCategory::All) { Category=EWarehouseLayoutCategory::Rack;AddChoice=0; } }Action=Value;MouseWasDown=false;Status=Value==EWarehouseLayoutAction::Move ? TEXT("재배치 · 선택 후 드래그") : Value==EWarehouseLayoutAction::Delete ? TEXT("삭제 · 클릭 또는 다중 선택 후 선택 삭제 · 상자는 보류 목록으로 이동") : TEXT("추가 · 원본 종류 선택 후 클릭·드래그 · 상자는 보류 목록의 첫 항목만 배치"); }
 void AWarehouseLayoutEditor::CycleAddChoice()
 { const auto Names=AWarehouseLayoutInventory::Find(this)->Choices(Category);AddChoice=Names.IsEmpty() ? 0 : (AddChoice+1)%Names.Num(); }
 FString AWarehouseLayoutEditor::GetAddChoiceLabel() const
@@ -76,10 +91,10 @@ bool AWarehouseLayoutEditor::Eligible(AActor* Actor) const
  // Older saved metadata may have marked a charging bay as fixed.
  if (Actor && Actor->ActorHasTag(TEXT("LogisticsInTransit"))) return false;
  if (!Actor || Actor==this || (Actor->ActorHasTag(TEXT("LayoutFixed")) && !Actor->IsA<AWarehouseChargingStation>())) return false;
- if (Actor->IsA<AWarehouseChargingStation>() && Category!=EWarehouseLayoutCategory::Charger) return false;
+ if (Actor->IsA<AWarehouseChargingStation>() && Category!=EWarehouseLayoutCategory::Charger && Category!=EWarehouseLayoutCategory::All) return false;
  const auto* PC=GetWorld()->GetFirstPlayerController();
  if (PC && (Actor==PC->GetPawn() || PC->HiddenActors.Contains(Actor))) return false;
- if (Actor->IsA<AWarehouseElevator>()) return Category==EWarehouseLayoutCategory::Elevator;
+ if (IsShaft(Actor)) return Category==EWarehouseLayoutCategory::Elevator || Category==EWarehouseLayoutCategory::All;
  const FName FloorTag(*FString::Printf(TEXT("WarehouseFloor%d"),FloorIndex));
  const bool TaggedFloor=Actor->ActorHasTag(TEXT("WarehouseFloor0")) || Actor->ActorHasTag(TEXT("WarehouseFloor1")) || Actor->ActorHasTag(TEXT("WarehouseFloor2"));
  const bool Dynamic=Actor->IsA<AWarehouseForklift>() || Actor->IsA<AWarehousePallet>() || Actor->IsA<AWarehouseCargo>() || Actor->IsA<AWarehouseWorker>();
@@ -96,6 +111,9 @@ bool AWarehouseLayoutEditor::Eligible(AActor* Actor) const
  case EWarehouseLayoutCategory::WaitingBay:return Actor->IsA<AWarehouseWaitingBay>();
  case EWarehouseLayoutCategory::Cargo:return Actor->IsA<AWarehouseCargo>();
  case EWarehouseLayoutCategory::Pallet:return Actor->IsA<AWarehousePallet>();
+ case EWarehouseLayoutCategory::All:return ZoneForActor(Actor)!=INDEX_NONE || Actor->ActorHasTag(TEXT("LayoutType:Rack")) || Actor->ActorHasTag(TEXT("LayoutType:Elevator")) ||
+  Actor->ActorHasTag(TEXT("LayoutType:Other")) || Actor->IsA<AWarehouseForklift>() || Actor->IsA<AWarehouseChargingStation>() ||
+  Actor->IsA<AWarehouseWaitingBay>() || Actor->IsA<AWarehouseCargo>() || Actor->IsA<AWarehousePallet>() || Actor->IsA<AWarehouseWorker>();
  default:return Actor->ActorHasTag(TEXT("LayoutType:Other")) || Actor->IsA<AWarehouseCargo>() || Actor->IsA<AWarehousePallet>() || Actor->IsA<AWarehouseWorker>();
  }
 }
@@ -132,14 +150,15 @@ int32 AWarehouseLayoutEditor::ZoneAt(FVector FloorPoint) const
 }
 FBox AWarehouseLayoutEditor::GroupBounds(AActor* Actor) const
 {
- if (Category==EWarehouseLayoutCategory::Zone)
+ if (Category==EWarehouseLayoutCategory::Zone || (Category==EWarehouseLayoutCategory::All && ZoneForActor(Actor)!=INDEX_NONE))
  {
   const int32 I=ZoneForActor(Actor);
   return I==INDEX_NONE ? FBox(ForceInit) : FBox(Zones[I].Centre-Zones[I].HalfSize,Zones[I].Centre+Zones[I].HalfSize);
  }
  FBox Bounds(ForceInit);const FName Tag=GroupOf(Actor);
  if (Tag==NAME_None) { if (Actor) Bounds=Actor->GetComponentsBoundingBox(true); }
- else for (TActorIterator<AActor> It(GetWorld());It;++It) if (It->ActorHasTag(Tag)) Bounds+=It->GetComponentsBoundingBox(true);
+ else for (TActorIterator<AActor> It(GetWorld());It;++It)
+  if (It->ActorHasTag(Tag) && (Category!=EWarehouseLayoutCategory::All || !It->ActorHasTag(TEXT("LayoutFixed")) || It->IsA<AWarehouseChargingStation>())) Bounds+=It->GetComponentsBoundingBox(true);
  if (auto* Station=Cast<AWarehouseChargingStation>(Actor))
   for (auto* Vehicle:Station->GetLinkedVehicles()) if (ParkedAtCharger(Vehicle,Station)) Bounds+=Vehicle->GetComponentsBoundingBox(true);
  if (auto* Bay=Cast<AWarehouseWaitingBay>(Actor);Bay && IsValid(Bay->Occupant) && Bay->Occupant->IsIdleForLayout() && Bay->IsParked(Bay->Occupant))
@@ -148,10 +167,11 @@ FBox AWarehouseLayoutEditor::GroupBounds(AActor* Actor) const
 }
 AActor* AWarehouseLayoutEditor::SelectionActor(AActor* HitActor) const
 {
- if (Category==EWarehouseLayoutCategory::Zone)
+ if (Category==EWarehouseLayoutCategory::Zone || (Category==EWarehouseLayoutCategory::All && Eligible(HitActor) && ZoneForActor(HitActor)!=INDEX_NONE))
  {
   const int32 I=ZoneForActor(HitActor);
-  if (I!=INDEX_NONE) for (AActor* Member:Zones[I].Members) if (IsValid(Member)) return Member;
+  if (I!=INDEX_NONE) for (AActor* Member:Zones[I].Members)
+   if (IsValid(Member) && (Category!=EWarehouseLayoutCategory::All || Eligible(Member))) return Member;
   return nullptr;
  }
  if (!Eligible(HitActor))
@@ -170,7 +190,7 @@ AActor* AWarehouseLayoutEditor::SelectionActor(AActor* HitActor) const
  if (Group!=NAME_None) for (TActorIterator<AActor> It(GetWorld());It;++It)
   if (It->ActorHasTag(Group) && Eligible(*It))
   {
-   if (Category==EWarehouseLayoutCategory::Elevator && It->IsA<AWarehouseElevator>()) return *It;
+   if ((Category==EWarehouseLayoutCategory::Elevator || Category==EWarehouseLayoutCategory::All) && IsShaft(*It)) return *It;
    if (It->GetName()<Representative->GetName()) Representative=*It;
   }
  return Representative;
@@ -178,7 +198,7 @@ AActor* AWarehouseLayoutEditor::SelectionActor(AActor* HitActor) const
 bool AWarehouseLayoutEditor::IsSelected(AActor* Actor) const
 {
  if (!Actor) return false;
- const FName Group=GroupOf(Actor);const int32 Zone=Category==EWarehouseLayoutCategory::Zone ? ZoneForActor(Actor) : INDEX_NONE;
+ const FName Group=GroupOf(Actor);const int32 Zone=(Category==EWarehouseLayoutCategory::Zone || Category==EWarehouseLayoutCategory::All) ? ZoneForActor(Actor) : INDEX_NONE;
  return SelectedActors.ContainsByPredicate([&](AActor* Selected)
  { return IsValid(Selected) && (Selected==Actor || (Zone!=INDEX_NONE && ZoneForActor(Selected)==Zone) || (Group!=NAME_None && GroupOf(Selected)==Group)); });
 }
@@ -233,19 +253,23 @@ bool AWarehouseLayoutEditor::SelectScreenRectangle(FVector2D Start,FVector2D End
 bool AWarehouseLayoutEditor::BeginDrag(AActor* HitActor,FVector FloorPoint)
 {
  if (!bEditing || bDragging || FloorPoint.ContainsNaN()) return false;
- TArray<AActor*> Members;MovingZones.Reset();OriginalAreas.Reset();OriginalBounds=FBox(ForceInit);
+ TArray<AActor*> Members;TArray<FBox> CargoAreas,ZoneAreas;
+ MovingZones.Reset();ReferenceAreas.Reset();ShaftReferenceAreas.Reset();OriginalBounds=FBox(ForceInit);
+ auto AddZone=[&](int32 I)
+ {
+  if (!Zones.IsValidIndex(I) || MovingZones.Contains(I)) return;
+  const auto& Zone=Zones[I];MovingZones.Add(I);
+  for (AActor* A:Zone.Members) if (IsValid(A) && (Category!=EWarehouseLayoutCategory::All || !A->ActorHasTag(TEXT("LayoutFixed")) || A->IsA<AWarehouseChargingStation>())) Members.AddUnique(A);
+  const FBox Box(Zone.Centre-Zone.HalfSize,Zone.Centre+Zone.HalfSize);
+  ReferenceAreas.Add(Box);CargoAreas.Add(Box);ZoneAreas.Add(Box);OriginalBounds+=Box;
+ };
  if (Category==EWarehouseLayoutCategory::Zone)
  {
   const int32 HitZone=ZoneAt(FloorPoint);if (HitZone==INDEX_NONE) return false;
   TArray<int32> Wanted;
   for (AActor* Selected:SelectedActors) { const int32 I=ZoneForActor(Selected);if (I!=INDEX_NONE) Wanted.AddUnique(I); }
   if (!Wanted.Contains(HitZone)) Wanted={HitZone};
-  for (int32 I:Wanted)
-  {
-   const auto& Zone=Zones[I];MovingZones.Add(I);
-   for (AActor* A:Zone.Members) if (IsValid(A)) Members.AddUnique(A);
-   const FBox Box(Zone.Centre-Zone.HalfSize,Zone.Centre+Zone.HalfSize);OriginalAreas.Add(Box);OriginalBounds+=Box;
-  }
+  for (int32 I:Wanted) AddZone(I);
  }
  else
  {
@@ -254,12 +278,21 @@ bool AWarehouseLayoutEditor::BeginDrag(AActor* HitActor,FVector FloorPoint)
   for (AActor* Seed:Seeds)
   {
    if (!Eligible(Seed)) continue;
-   if (auto* Lift=Cast<AWarehouseElevator>(Seed);Lift && (Lift->State!=EWarehouseElevatorState::Idle || Lift->ReservedVehicle))
-   { Status=TEXT("승강기 운행이 끝난 뒤 재배치하세요.");return false; }
+   if (Category==EWarehouseLayoutCategory::All)
+   { const int32 I=ZoneForActor(Seed);if (I!=INDEX_NONE) { AddZone(I);continue; } }
+   if (!(bAdding && AddedActors.Contains(Seed)) && ShaftBusy(Seed))
+   { Status=TEXT("승강기 운행을 끝내고 적재물을 내린 뒤 재배치하세요.");return false; }
    const FName Tag=GroupOf(Seed);
    if (Tag==NAME_None) Members.AddUnique(Seed);
-   else for (TActorIterator<AActor> It(GetWorld());It;++It) if (It->ActorHasTag(Tag)) Members.AddUnique(*It);
-   const FBox Box=GroupBounds(Seed);if (Box.IsValid) { OriginalAreas.Add(Box);OriginalBounds+=Box; }
+   else for (TActorIterator<AActor> It(GetWorld());It;++It)
+    if (It->ActorHasTag(Tag) && (Category!=EWarehouseLayoutCategory::All || !It->ActorHasTag(TEXT("LayoutFixed")) || It->IsA<AWarehouseChargingStation>())) Members.AddUnique(*It);
+   const FBox Box=GroupBounds(Seed);if (Box.IsValid)
+   {
+    OriginalBounds+=Box;
+    if (!Seed->IsA<AWarehouseChargingStation>()) ReferenceAreas.Add(Box);
+    if (Seed->ActorHasTag(TEXT("LayoutType:Rack"))) CargoAreas.Add(Box);
+    if (IsShaft(Seed)) ShaftReferenceAreas.Add(Box);
+   }
   }
  }
  // A charging bay is also the parked vehicle's start/home pose. Use the same
@@ -274,25 +307,27 @@ bool AWarehouseLayoutEditor::BeginDrag(AActor* HitActor,FVector FloorPoint)
  for (AActor* Member:Members)
  {
   if (Member->IsA<AWarehouseCargo>() || Member->IsA<AWarehousePallet>()) continue;
-  const bool Frame=Category==EWarehouseLayoutCategory::Rack ? Member->ActorHasTag(TEXT("LayoutType:Rack")) :
-   Category==EWarehouseLayoutCategory::Elevator && (Member->IsA<AWarehouseElevator>() || Member->ActorHasTag(TEXT("LayoutType:Elevator")));
+  const bool Frame=(Category==EWarehouseLayoutCategory::Rack || Category==EWarehouseLayoutCategory::All) && Member->ActorHasTag(TEXT("LayoutType:Rack")) ||
+   (Category==EWarehouseLayoutCategory::Elevator || Category==EWarehouseLayoutCategory::All) && (IsShaft(Member) || Member->ActorHasTag(TEXT("LayoutType:Elevator")));
   if (!Frame) continue;
   TArray<UPrimitiveComponent*> Parts;Member->GetComponents(Parts);
   for (auto* Part:Parts) if (WarehousePhysics::IsPhysicalContact(Part)) OriginalSnapBounds+=Part->Bounds.GetBox();
  }
- for (AActor* Member:Members) if (auto* Lift=Cast<AWarehouseElevator>(Member);Lift && (Lift->State!=EWarehouseElevatorState::Idle || Lift->ReservedVehicle))
- { Status=TEXT("승강기 운행이 끝난 뒤 재배치하세요.");return false; }
- if (Category==EWarehouseLayoutCategory::Rack || Category==EWarehouseLayoutCategory::Zone)
+ for (AActor* Member:Members) if (!(bAdding && AddedActors.Contains(Member)) && ShaftBusy(Member))
+ { Status=TEXT("승강기 운행을 끝내고 적재물을 내린 뒤 재배치하세요.");return false; }
+ if (!CargoAreas.IsEmpty())
   for (TActorIterator<AActor> It(GetWorld());It;++It)
   {
-   const bool ZoneObject=Category==EWarehouseLayoutCategory::Zone && !It->ActorHasTag(TEXT("LayoutFixed")) &&
+   const bool ZoneObject=!It->ActorHasTag(TEXT("LayoutFixed")) &&
+    ZoneAreas.ContainsByPredicate([&](const FBox& Box) { return InsideXY(Box.ExpandBy(3),It->GetActorLocation()); }) &&
     (It->IsA<AWarehouseForklift>() || It->IsA<AWarehouseWorker>() || It->ActorHasTag(TEXT("LayoutType:Other")) || It->ActorHasTag(TEXT("LayoutType:Rack")));
    if (!It->IsA<AWarehouseCargo>() && !It->IsA<AWarehousePallet>() && !ZoneObject) continue;
    const FVector P=It->GetActorLocation();
-   if (OriginalAreas.ContainsByPredicate([&](const FBox& Box) { return InsideXY(Box.ExpandBy(3),P); }) && P.Z>=FloorIndex*400.-2 && P.Z<(FloorIndex+1)*400.-2)
+   if (CargoAreas.ContainsByPredicate([&](const FBox& Box) { return InsideXY(Box.ExpandBy(3),P); }) && P.Z>=FloorIndex*400.-2 && P.Z<(FloorIndex+1)*400.-2)
    {
     Members.AddUnique(*It);const FName Tag=GroupOf(*It);
-    if (ZoneObject && Tag!=NAME_None) for (TActorIterator<AActor> Part(GetWorld());Part;++Part) if (Part->ActorHasTag(Tag)) Members.AddUnique(*Part);
+    if (ZoneObject && Tag!=NAME_None) for (TActorIterator<AActor> Part(GetWorld());Part;++Part)
+     if (Part->ActorHasTag(Tag) && (Category!=EWarehouseLayoutCategory::All || !Part->ActorHasTag(TEXT("LayoutFixed")) || Part->IsA<AWarehouseChargingStation>())) Members.AddUnique(*Part);
    }
   }
  for (int32 I=0;I<Members.Num();++I) if (auto* Vehicle=Cast<AWarehouseForklift>(Members[I]))
@@ -309,6 +344,20 @@ bool AWarehouseLayoutEditor::BeginDrag(AActor* HitActor,FVector FloorPoint)
   if (auto* Cargo=Cast<AWarehouseCargo>(Members[I])) if (auto* Pallet=Cargo->GetWrappedPallet()) Members.AddUnique(Pallet);
   if (auto* Pallet=Cast<AWarehousePallet>(Members[I])) for (auto* Cargo:Pallet->GetWrappedCargo()) Members.AddUnique(Cargo);
  }
+ // Move, rotation and deletion all enter this transaction. Check the expanded
+ // group before disabling any collision or physics, including rack/zone contents.
+ for (AActor* Member:Members) if (HandledByPalletLift(Member))
+ { Status=TEXT("화물용 엘리베이터가 운반 중인 물류는 하역을 완료한 뒤 편집하세요.");return false; }
+ RotationBounds=FBox(ForceInit);
+ for (const FBox& Box:ZoneAreas) RotationBounds+=Box;
+ for (AActor* Member:Members) if (IsValid(Member))
+ {
+  TArray<UPrimitiveComponent*> Parts;Member->GetComponents(Parts);
+  for (const auto* Part:Parts) if (WarehousePhysics::IsPhysicalContact(Part)) RotationBounds+=Part->Bounds.GetBox();
+  if (auto* Bay=Cast<AWarehouseWaitingBay>(Member))
+   RotationBounds+=FBox(FVector(-Bay->SizeCm.X*.5,-Bay->SizeCm.Y*.5,0),FVector(Bay->SizeCm.X*.5,Bay->SizeCm.Y*.5,0)).TransformBy(Bay->GetActorTransform().ToMatrixWithScale());
+ }
+ if (!RotationBounds.IsValid) for (AActor* Member:Members) if (IsValid(Member)) RotationBounds+=Member->GetActorLocation();
  Moving.Reset();
  for (AActor* A:Members)
  {
@@ -343,7 +392,7 @@ bool AWarehouseLayoutEditor::BeginDrag(AActor* HitActor,FVector FloorPoint)
    if (P.Simulated) if (auto* Primitive=Cast<UPrimitiveComponent>(C)) Primitive->SetSimulatePhysics(false);
   }
  }
- GrabPoint=FloorPoint;Delta=FVector::ZeroVector;bDragging=true;
+ GrabPoint=FloorPoint;Delta=FVector::ZeroVector;Rotation=FQuat::Identity;RotationPivot=FVector::ZeroVector;bDragging=true;
  Status=FString::Printf(TEXT("%d개 요소 이동 중 · 충돌 꺼짐 · 같은 층 · 놓으면 검사"),Moving.Num());
  return true;
 }
@@ -352,16 +401,25 @@ void AWarehouseLayoutEditor::UpdateDrag(FVector FloorPoint)
  if (!bDragging || FloorPoint.ContainsNaN()) return;
  Delta=FloorPoint-GrabPoint;Delta.Z=0;
  Delta.X=FMath::GridSnap(Delta.X,10.);Delta.Y=FMath::GridSnap(Delta.Y,10.);
- if (bEdgeSnapEnabled && (Category==EWarehouseLayoutCategory::Rack || Category==EWarehouseLayoutCategory::Elevator))
+ if (bEdgeSnapEnabled && (Category==EWarehouseLayoutCategory::Rack || Category==EWarehouseLayoutCategory::Elevator ||
+     (Category==EWarehouseLayoutCategory::All && OriginalSnapBounds.IsValid)))
  {
   TArray<AActor*> Ignored;for (const auto& Member:Moving) if (Member.Actor.IsValid()) Ignored.Add(Member.Actor.Get());
   FString Hint;Delta=WarehouseLayoutSnap::Compute(this,OriginalSnapBounds,FloorPoint-GrabPoint,Ignored,FloorIndex,Hint);
   Status=FString::Printf(TEXT("%d개 요소 이동 중 · 충돌 꺼짐 · %s"),Moving.Num(),Hint.IsEmpty() ? TEXT("10cm 격자") : *Hint);
  }
+ ApplyPreview();
+}
+FTransform AWarehouseLayoutEditor::EditedPose(const FTransform& Pose) const
+{
+ return FTransform(Rotation*Pose.GetRotation(),RotationPivot+Rotation.RotateVector(Pose.GetLocation()-RotationPivot)+Delta,Pose.GetScale3D());
+}
+void AWarehouseLayoutEditor::ApplyPreview()
+{
  for (auto& A:Moving)
  {
-  if (auto* Actor=A.Actor.Get()) { FTransform Pose=A.Pose;Pose.AddToTranslation(Delta);Actor->SetActorTransform(Pose,false,nullptr,ETeleportType::TeleportPhysics); }
-  for (auto& P:A.Parts) if (auto* C=P.Component.Get()) { FTransform Pose=P.Pose;Pose.AddToTranslation(Delta);C->SetWorldTransform(Pose,false,nullptr,ETeleportType::TeleportPhysics); }
+  if (auto* Actor=A.Actor.Get()) Actor->SetActorTransform(EditedPose(A.Pose),false,nullptr,ETeleportType::TeleportPhysics);
+  for (auto& P:A.Parts) if (auto* C=P.Component.Get()) C->SetWorldTransform(EditedPose(P.Pose),false,nullptr,ETeleportType::TeleportPhysics);
  }
 }
 void AWarehouseLayoutEditor::UpdateSurfaceDrag(FVector FloorPoint,AActor* Support,FVector SurfacePoint)
@@ -384,15 +442,12 @@ void AWarehouseLayoutEditor::UpdateSurfaceDrag(FVector FloorPoint,AActor* Suppor
  Delta.X=FMath::GridSnap(Target.X-OriginalBounds.GetCenter().X,1.);
  Delta.Y=FMath::GridSnap(Target.Y-OriginalBounds.GetCenter().Y,1.);
  Delta.Z=Top+.1-OriginalBounds.Min.Z;
- for (auto& M:Moving)
- {
-  if (M.Actor.IsValid()) { FTransform Pose=M.Pose;Pose.AddToTranslation(Delta);M.Actor->SetActorTransform(Pose,false,nullptr,ETeleportType::TeleportPhysics); }
-  for (auto& P:M.Parts) if (P.Component.IsValid()) { FTransform Pose=P.Pose;Pose.AddToTranslation(Delta);P.Component->SetWorldTransform(Pose,false,nullptr,ETeleportType::TeleportPhysics); }
- }
+ ApplyPreview();
 }
 bool AWarehouseLayoutEditor::BeginAdd(FVector FloorPoint)
 {
  if (!bEditing || bDragging || !HasAuthority() || FloorPoint.ContainsNaN()) return false;
+ if (Category==EWarehouseLayoutCategory::All) { Status=TEXT("추가할 물체의 개별 종류를 먼저 선택하세요.");return false; }
  auto* Store=AWarehouseLayoutInventory::Find(this);Store->CapturePrototypes(this);
  TArray<AActor*> NewActors;
  if (Category==EWarehouseLayoutCategory::Cargo)
@@ -415,19 +470,41 @@ bool AWarehouseLayoutEditor::BeginAdd(FVector FloorPoint)
  }
  AActor* Seed=NewActors[0];
  if (Category==EWarehouseLayoutCategory::Elevator)
-  for (AActor* A:NewActors) if (A->IsA<AWarehouseElevator>()) { Seed=A;break; }
+  for (AActor* A:NewActors) if (IsShaft(A)) { Seed=A;break; }
+ // BeginPlay may be opening a fresh lift's doors while layout pauses time.
+ // Only these newly spawned preview actors bypass the existing-device guard.
+ bAdding=true;AddedActors.Reset();for (AActor* A:NewActors) AddedActors.Add(A);
  SetSelection({Seed});
  if (!BeginDrag(Seed,FloorPoint))
  {
   Zones.RemoveAll([&](const auto& Z) { return Z.Name==TEXT("Preview") && Z.Members.Contains(NewActors[0]); });
-  for (AActor* A:NewActors) A->Destroy();AddedCargoId=NAME_None;return false;
+  for (AActor* A:NewActors) A->Destroy();bAdding=false;AddedActors.Reset();AddedCargoId=NAME_None;return false;
  }
- bAdding=true;for (AActor* A:NewActors) AddedActors.Add(A);return true;
+ return true;
 }
 void AWarehouseLayoutEditor::RefreshAfterEdit()
 {
  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) It->RefreshAfterLayout();
  for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) It->RefreshState();
+}
+bool AWarehouseLayoutEditor::CanRotateSelection() const
+{
+ return bEditing && HasAuthority() && !bDragging && !bMarqueeSelecting && Action!=EWarehouseLayoutAction::Add &&
+  !SelectedActors.IsEmpty() && SelectedActors.ContainsByPredicate([this](AActor* Actor) { return IsValid(Actor) && SelectionActor(Actor); });
+}
+bool AWarehouseLayoutEditor::RotateSelection(float DeltaYawDegrees)
+{
+ if (!CanRotateSelection() || !FMath::IsFinite(DeltaYawDegrees) || !FMath::IsNearlyEqual(FMath::Abs(DeltaYawDegrees),90.f,.001f)) return false;
+ AActor* Seed=GetSelection()[0];FVector Point=Seed->GetActorLocation();
+ if (Category==EWarehouseLayoutCategory::Zone)
+ { const int32 I=ZoneForActor(Seed);if (I==INDEX_NONE) return false;Point=Zones[I].Centre; }
+ Point.Z=FloorIndex*400.;
+ if (!BeginDrag(Seed,Point)) return false;
+ Rotation=FQuat(FVector::UpVector,FMath::DegreesToRadians(DeltaYawDegrees));RotationPivot=RotationBounds.GetCenter();
+ ApplyPreview();
+ const bool Accepted=EndDrag(true);
+ if (Accepted) Status=FString::Printf(TEXT("선택 %d개 그룹 %s90° 회전 · 충돌·작업 위치 갱신"),SelectionCount,DeltaYawDegrees>0 ? TEXT("+") : TEXT("−"));
+ return Accepted;
 }
 bool AWarehouseLayoutEditor::DeleteSelection()
 {
@@ -440,6 +517,20 @@ bool AWarehouseLayoutEditor::DeleteSelection()
  // or parking marker must leave those independent vehicles in the world.
  if (Category==EWarehouseLayoutCategory::Charger || Category==EWarehouseLayoutCategory::WaitingBay)
   Members.RemoveAll([](AActor* A) { return A->IsA<AWarehouseForklift>(); });
+ else if (Category==EWarehouseLayoutCategory::All)
+ {
+  TSet<AActor*> HomeVehicles;
+  for (AActor* Selected:SelectedActors)
+  {
+   if (auto* Station=Cast<AWarehouseChargingStation>(Selected))
+    for (auto* Vehicle:Station->GetLinkedVehicles()) if (ParkedAtCharger(Vehicle,Station)) HomeVehicles.Add(Vehicle);
+   if (auto* Bay=Cast<AWarehouseWaitingBay>(Selected);Bay && IsValid(Bay->Occupant) && Bay->Occupant->IsIdleForLayout() && Bay->IsParked(Bay->Occupant)) HomeVehicles.Add(Bay->Occupant);
+  }
+  Members.RemoveAll([&](AActor* Actor)
+  {
+   return HomeVehicles.Contains(Actor) && !SelectedActors.Contains(Actor);
+  });
+ }
  auto* Store=AWarehouseLayoutInventory::Find(this);const int32 HeldBefore=Store->HeldCargo.Num();
  bool Allowed=true;
  for (AActor* A:Members)
@@ -455,7 +546,7 @@ bool AWarehouseLayoutEditor::DeleteSelection()
   if (!Store->HoldCargo(Cargo)) { Status=Store->LastMessage;Allowed=false;break; }
  Restore(true);Moving.Reset();bDragging=false;
  if (!Allowed) { Store->HeldCargo.SetNum(HeldBefore);++Store->Revision;return false; }
- if (Members.ContainsByPredicate([](AActor* A) { return A->IsA<AWarehouseElevator>(); }) && !WarehouseElevatorLayout::Rebuild(this,false,Members))
+ if (Members.ContainsByPredicate([](AActor* A) { return IsShaft(A); }) && !WarehouseElevatorLayout::Rebuild(this,false,Members))
  { Store->HeldCargo.SetNum(HeldBefore);++Store->Revision;Status=TEXT("승강기 삭제 후 층별 바닥을 복원할 수 없어 삭제를 취소했습니다.");return false; }
  Store->ForgetActors(Members);for (AActor* A:Members) A->Destroy();
  ClearSelection();RefreshAfterEdit();Status=FString::Printf(TEXT("%d개 요소 삭제 · 상자 %d개를 보류된 물류에 보관"),Members.Num(),Store->HeldCargo.Num()-HeldBefore);return true;
@@ -513,10 +604,13 @@ bool AWarehouseLayoutEditor::PlacementClear()
    }
   if (SupportedPoints<3) { Status=TEXT("상자 아래의 수평 받침이 부족합니다. 바닥·팔레트·상자 위에 스냅해 배치하세요.");return false; }
  }
- const bool ElevatorGroup=Moving.ContainsByPredicate([](const FMember& M) { return M.Actor.IsValid() && M.Actor->IsA<AWarehouseElevator>(); });
+ TSet<FName> ElevatorGroups;
+ for (const auto& M:Moving) if (IsShaft(M.Actor.Get()) && GroupOf(M.Actor.Get())!=NAME_None) ElevatorGroups.Add(GroupOf(M.Actor.Get()));
  for (auto& A:Moving) if (auto* Actor=A.Actor.Get())
  {
-  if (ElevatorGroup) continue; // Full stroke and portal landings are checked with the relocated floor opening.
+  // Only the shaft and its own group use the all-floor opening validation.
+  // A mixed selection's other objects still need their ordinary floor support.
+   if (IsShaft(Actor) || ElevatorGroups.Contains(GroupOf(Actor))) continue;
   // Truck walls, doors and cargo floors are supported by their chassis. Only
   // the chassis touches the yard; tracing beneath every internal panel would
   // reject a valid truck move because its own grouped floor is ignored.
@@ -561,7 +655,7 @@ void AWarehouseLayoutEditor::Restore(bool Rollback)
  {
   if (auto* Primitive=Cast<UPrimitiveComponent>(C))
   {
-   if (P.Simulated) { Primitive->SetSimulatePhysics(true);Primitive->SetPhysicsLinearVelocity(P.Linear);Primitive->SetPhysicsAngularVelocityInRadians(P.Angular); }
+   if (P.Simulated) { Primitive->SetSimulatePhysics(true);Primitive->SetPhysicsLinearVelocity(Rollback ? P.Linear : Rotation.RotateVector(P.Linear));Primitive->SetPhysicsAngularVelocityInRadians(Rollback ? P.Angular : Rotation.RotateVector(P.Angular)); }
   }
   C->SetMobility(P.Mobility);
  }
@@ -585,14 +679,21 @@ void AWarehouseLayoutEditor::UpdateReferences()
  TSet<AActor*> Members;for (const auto& A:Moving) if (A.Actor.IsValid()) Members.Add(A.Actor.Get());
  TSet<FTransform*> MovedDockAnchors;
  TSet<AWarehouseForklift*> RelocatedChargerVehicles;
+ auto MovePoint=[this](FVector Point) { return RotationPivot+Rotation.RotateVector(Point-RotationPivot)+Delta; };
  auto MovePose=[this](FTransform& Pose)
- { if (OriginalAreas.ContainsByPredicate([&](const FBox& Box) { return InsideXY(Box.ExpandBy(4),Pose.GetLocation()); }) && FMath::FloorToInt((FMath::Max(0.,Pose.GetLocation().Z)+1.)/400.)==FloorIndex) Pose.AddToTranslation(Delta); };
+ {
+  const FVector Point=Pose.GetLocation();
+  const bool CurrentFloor=FMath::FloorToInt((FMath::Max(0.,Point.Z)+1.)/400.)==FloorIndex;
+  const bool ShaftFloor=ShaftReferenceAreas.ContainsByPredicate([&](const FBox& Box) { return InsideXY(Box.ExpandBy(4),Point); });
+  if ((CurrentFloor || ShaftFloor) && ReferenceAreas.ContainsByPredicate([&](const FBox& Box) { return InsideXY(Box.ExpandBy(4),Point); })) Pose=EditedPose(Pose);
+ };
  for (TActorIterator<AWarehouseInboundZone> It(GetWorld());It;++It)
-  for (auto& Slot:It->RackSlots) if (Members.Contains(Slot.Rack.Get())) Slot.Pose.AddToTranslation(Delta);
+  for (auto& Slot:It->RackSlots) if (Members.Contains(Slot.Rack.Get())) Slot.Pose=EditedPose(Slot.Pose);
  for (int32 ZoneIndex:MovingZones)
  {
-  Zones[ZoneIndex].Centre+=Delta;
-  for (auto& Pose:Zones[ZoneIndex].Destinations) Pose.AddToTranslation(Delta);
+  Zones[ZoneIndex].Centre=MovePoint(Zones[ZoneIndex].Centre);
+  Zones[ZoneIndex].HalfSize=Rotation.RotateVector(Zones[ZoneIndex].HalfSize).GetAbs();
+  for (auto& Pose:Zones[ZoneIndex].Destinations) Pose=EditedPose(Pose);
  }
  if (!MovingZones.IsEmpty()) for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) It->RefreshLayoutDestinations();
  for (const auto& M:Moving) if (auto* Bay=Cast<AWarehouseWaitingBay>(M.Actor.Get()))
@@ -602,7 +703,7 @@ void AWarehouseLayoutEditor::UpdateReferences()
   {
    RelocatedChargerVehicles.Add(Vehicle);
    const FVector OldDock=Member.Pose.GetLocation();
-   auto MoveDockReference=[&](FVector& Point) { if (FVector::Dist(Point,OldDock)<=5.f) Point+=Delta; };
+   auto MoveDockReference=[&](FVector& Point) { if (FVector::Dist(Point,OldDock)<=5.f) Point=MovePoint(Point); };
    MoveDockReference(Vehicle->StartLocation);MoveDockReference(Vehicle->ReturnLocation);
    if (Members.Contains(Vehicle))
    { Vehicle->StartLocation=Vehicle->GetActorLocation();Vehicle->ReturnLocation=Vehicle->GetActorLocation(); }
@@ -610,17 +711,27 @@ void AWarehouseLayoutEditor::UpdateReferences()
    Vehicle->ChargeExitPose.AddToTranslation(Station->GetActorForwardVector()*120.f);
    const FVector OldExit=OldDock+Member.Pose.GetRotation().GetForwardVector()*120.f;
    for (auto& Pose:Vehicle->NavigationAnchors)
-    if (FVector::Dist(Pose.GetLocation(),OldDock)<=5.f || FVector::Dist(Pose.GetLocation(),OldExit)<=5.f)
-    { Pose.AddToTranslation(Delta);MovedDockAnchors.Add(&Pose); }
+    if (!MovedDockAnchors.Contains(&Pose) && (FVector::Dist(Pose.GetLocation(),OldDock)<=5.f || FVector::Dist(Pose.GetLocation(),OldExit)<=5.f))
+    { Pose=EditedPose(Pose);MovedDockAnchors.Add(&Pose); }
   }
+ // Elevator services are local shaft poses on all three floors; include the
+ // waiting point outside the shaft bounds, and update each shared anchor once.
+ for (const auto& Member:Moving) if (Member.Actor.IsValid() && Member.Actor->IsA<AWarehouseElevator>())
+  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
+   for (auto& Pose:It->NavigationAnchors) if (!MovedDockAnchors.Contains(&Pose))
+    for (int32 Floor=0;Floor<3;++Floor)
+     if (FVector::Dist(Pose.GetLocation(),Member.Pose.TransformPosition(FVector(0,0,Floor*400.)))<=5.f ||
+         FVector::Dist(Pose.GetLocation(),Member.Pose.TransformPosition(FVector(-500,0,Floor*400.)))<=5.f)
+     { Pose=EditedPose(Pose);MovedDockAnchors.Add(&Pose);break; }
+ const bool ChargerOnly=ReferenceAreas.IsEmpty() && Moving.ContainsByPredicate([](const FMember& M) { return M.Actor.IsValid() && M.Actor->IsA<AWarehouseChargingStation>(); });
  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
  {
-  if (Category!=EWarehouseLayoutCategory::Charger)
+  if (!ChargerOnly)
   {
    MovePose(It->ActiveJob.Destination);for (auto& Job:It->PendingJobs) MovePose(Job.Destination);
    for (auto& Pose:It->NavigationAnchors) if (!MovedDockAnchors.Contains(&Pose)) MovePose(Pose);
   }
-  if (Category==EWarehouseLayoutCategory::Charger)
+  if (ChargerOnly)
   {
    // Moving a cabinet must not promote an unfinished lift to delivery. Only a
    // charging trip needs a new route; ongoing work keeps its physical phase.
@@ -636,12 +747,11 @@ void AWarehouseLayoutEditor::UpdateReferences()
 bool AWarehouseLayoutEditor::EndDrag(bool Commit)
 {
  if (!bDragging) return false;
- AWarehouseElevator* Lift=nullptr;
- for (auto& A:Moving) if (auto* Candidate=Cast<AWarehouseElevator>(A.Actor.Get())) { Lift=Candidate;break; }
- const bool OpeningReady=!Lift || !Commit || WarehouseElevatorLayout::Rebuild(this);
+ const bool HasShaft=Moving.ContainsByPredicate([](const FMember& M) { return IsShaft(M.Actor.Get()); });
+ const bool OpeningReady=!HasShaft || !Commit || WarehouseElevatorLayout::Rebuild(this);
  const bool QueueUnchanged=!bAdding || AddedCargoId.IsNone() || (!AWarehouseLayoutInventory::Find(this)->HeldCargo.IsEmpty() && AWarehouseLayoutInventory::Find(this)->HeldCargo[0].CargoId==AddedCargoId);
  const bool Accepted=Commit && QueueUnchanged && OpeningReady && PlacementClear();Restore(!Accepted);
- if (Lift && Commit && !Accepted)
+ if (HasShaft && Commit && !Accepted)
  { TArray<AActor*> Excluded;if (bAdding) for (AActor* A:AddedActors) Excluded.Add(A);WarehouseElevatorLayout::Rebuild(this,false,Excluded); }
  if (!OpeningReady) Status=TEXT("승강기 이동 공간·층별 진입 바닥이 막혔습니다. 원래 위치로 되돌렸습니다.");
  if (Accepted)
@@ -675,7 +785,7 @@ bool AWarehouseLayoutEditor::EndDrag(bool Commit)
   Zones.RemoveAll([&](const auto& Z) { return Z.Name==TEXT("Preview") && !AddedActors.IsEmpty() && Z.Members.Contains(AddedActors[0]); });
   for (AActor* A:AddedActors) if (IsValid(A)) A->Destroy();
  }
- Moving.Reset();bDragging=false;bAdding=false;AddedActors.Reset();AddedCargoId=NAME_None;return Accepted;
+ Moving.Reset();bDragging=false;bAdding=false;AddedActors.Reset();AddedCargoId=NAME_None;Rotation=FQuat::Identity;return Accepted;
 }
 void AWarehouseLayoutEditor::PointerDown(APlayerController* PC,FVector2D ViewportPixels,bool Additive)
 {
@@ -693,10 +803,11 @@ void AWarehouseLayoutEditor::PointerDown(APlayerController* PC,FVector2D Viewpor
  if (Action==EWarehouseLayoutAction::Add)
  { if (BeginAdd(Point)) UpdateSurfaceDrag(Point,Hit.GetActor(),Hit.ImpactPoint);return; }
  AActor* Candidate=SelectionActor(Hit.GetActor());
- if (Category==EWarehouseLayoutCategory::Zone)
+ if (Category==EWarehouseLayoutCategory::Zone || (Category==EWarehouseLayoutCategory::All && !Candidate))
  {
   const int32 I=ZoneAt(Point);Candidate=nullptr;
-  if (I!=INDEX_NONE) for (AActor* Member:Zones[I].Members) if (IsValid(Member)) { Candidate=SelectionActor(Member);break; }
+  if (I!=INDEX_NONE) for (AActor* Member:Zones[I].Members) if (IsValid(Member))
+   { Candidate=SelectionActor(Member);if (Candidate) break; }
  }
  if (Candidate)
  {

@@ -64,6 +64,21 @@ step_fixture.static_mesh_component.set_static_mesh(unreal.load_asset('/Engine/Ba
 step_fixture.static_mesh_component.set_mobility(unreal.ComponentMobility.MOVABLE)
 step_fixture.static_mesh_component.set_collision_profile_name('BlockAll')
 step_fixture.set_actor_scale3d(unreal.Vector(.2, .2, .05))  # A real 20x20x5cm solid step, not a floor-name exception.
+# Unsaved clear test space lets original production assemblies rotate without
+# clearing warehouse objects or bypassing native placement/support checks.
+for floor_index in range(3):
+    pad = actors.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector(8000, 0, floor_index*400-10))
+    pad.set_actor_label('LayoutRotationFloor_L'+str(floor_index))
+    pad.static_mesh_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Cube'))
+    pad.static_mesh_component.set_collision_profile_name('BlockAll')
+    pad.set_actor_scale3d(unreal.Vector(80, 80, .2))
+    pad.tags = ['LayoutFixed', 'WarehouseMapStructure', 'ElevatorLayoutFloor']
+rotation_blocker = actors.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector(-30000, -30000, -2000))
+rotation_blocker.set_actor_label('LayoutRotationSolidBlocker')
+rotation_blocker.static_mesh_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Cube'))
+rotation_blocker.static_mesh_component.set_mobility(unreal.ComponentMobility.MOVABLE)
+rotation_blocker.static_mesh_component.set_collision_profile_name('BlockAll')
+rotation_blocker.set_actor_scale3d(unreal.Vector(3, 3, 4))
 
 started = time.monotonic()
 phase = 0
@@ -195,6 +210,165 @@ def restored(snapshot):
                 if state['mass_override'] is not None:
                     body = part.get_editor_property('body_instance')
                     assert (body.get_editor_property('override_mass'), body.get_editor_property('mass_in_kg_override')) == state['mass_override'], ('Transit saved mass override changed', actor.get_actor_label(), part.get_name())
+
+
+def around(pose, pivot, degrees):
+    local = unreal.MathLibrary.make_relative_transform(pose, unreal.Transform(location=pivot))
+    return unreal.MathLibrary.compose_transforms(local, unreal.Transform(location=pivot, rotation=unreal.Rotator(yaw=degrees)))
+
+
+def rotated(state, pivot, degrees):
+    for actor, saved in state.items():
+        assert unreal.MathLibrary.nearly_equal_transform_transform(actor.get_actor_transform(), around(saved['pose'], pivot, degrees), .15, .05, .001), ('Actor failed rigid rotation', actor.get_actor_label())
+        for part in saved['components'].values():
+            assert unreal.MathLibrary.nearly_equal_transform_transform(part['part'].get_world_transform(), around(part['pose'], pivot, degrees), .15, .05, .001), ('Component failed rigid rotation', actor.get_actor_label(), part['part'].get_name())
+    restored(state)
+
+
+def rotation_references(members, zone_names=()):
+    result = []
+    for actor in live:
+        if isinstance(actor, unreal.WarehouseInboundZone):
+            for index, slot in enumerate(actor.get_editor_property('rack_slots')):
+                if slot.rack in members:
+                    result.append((lambda a=actor, i=index: a.get_editor_property('rack_slots')[i].pose, slot.pose, True))
+        if isinstance(actor, unreal.WarehouseElevator) and actor in members:
+            for floor in range(3):
+                for method in (actor.waiting_pose, actor.boarding_pose):
+                    result.append((lambda m=method, f=floor: m(f), method(floor), True))
+        if isinstance(actor, unreal.WarehouseChargingStation) and actor in members:
+            for vehicle in actor.get_linked_vehicles():
+                if vehicle not in members:
+                    continue
+                anchors = vehicle.get_editor_property('navigation_anchors')
+                for index in range(max(0, len(anchors)-2), len(anchors)):
+                    result.append((lambda v=vehicle, i=index: v.get_editor_property('navigation_anchors')[i], anchors[index], True))
+    for name in zone_names:
+        zone = next(z for z in layout.get_editor_property('zones') if z.name == name)
+        result.append((lambda n=name: unreal.Transform(location=next(z for z in layout.get_editor_property('zones') if z.name == n).centre), unreal.Transform(location=zone.centre), False))
+        for index, pose in enumerate(zone.destinations):
+            result.append((lambda n=name, i=index: next(z for z in layout.get_editor_property('zones') if z.name == n).destinations[i], pose, True))
+    return result
+
+
+def check_rotation_references(refs, pivot, degrees):
+    for current, old, orientation in refs:
+        expected = around(old, pivot, degrees)
+        # A zone's centre has no orientation; all stored poses do.
+        assert (current().translation-expected.translation).length() < .15, 'Rotated layout reference stayed stale'
+        if orientation:
+            assert unreal.MathLibrary.nearly_equal_transform_transform(current(), expected, .15, .05, .001), 'Rotated layout pose orientation stayed stale'
+
+
+def rotation_bounds(members, zone_names=()):
+    boxes = [unreal.SystemLibrary.get_component_bounds(p)[:2] for a in members
+             for p in a.get_components_by_class(unreal.PrimitiveComponent)
+             if unreal.WarehouseDamageSystem.is_physical_contact(p)]
+    boxes += [(z.centre, z.half_size) for z in layout.get_editor_property('zones') if z.name in zone_names]
+    for bay in (a for a in members if isinstance(a, unreal.WarehouseWaitingBay)):
+        half = bay.get_editor_property('size_cm')*.5
+        # Native RotationBounds transforms the flat local SizeCm FBox, so use
+        # its four transformed corners (including actor yaw and scale).
+        corners = [unreal.MathLibrary.transform_location(bay.get_actor_transform(), unreal.Vector(x*half.x, y*half.y, 0))
+                   for x in (-1, 1) for y in (-1, 1)]
+        low = [min(getattr(p, k) for p in corners) for k in 'xyz']
+        high = [max(getattr(p, k) for p in corners) for k in 'xyz']
+        boxes.append((unreal.Vector(*[(a+b)*.5 for a, b in zip(low, high)]),
+                      unreal.Vector(*[(b-a)*.5 for a, b in zip(low, high)])))
+    if not boxes:
+        boxes = [(a.get_actor_location(), unreal.Vector()) for a in members]
+    low = [min(getattr(c, k)-getattr(e, k) for c, e in boxes) for k in 'xyz']
+    high = [max(getattr(c, k)+getattr(e, k) for c, e in boxes) for k in 'xyz']
+    return low, high
+
+
+def rotation_roundtrip(seeds, members, bounds_members=None, zone_names=(), collision_rollback=False):
+    members = list(dict.fromkeys(members))
+    layout.set_action(unreal.WarehouseLayoutAction.MOVE)
+    layout.set_selection(seeds)
+    point = (next(z for z in layout.get_editor_property('zones') if z.name == zone_names[0]).centre
+             if zone_names else seeds[0].get_actor_location())
+    # Discover native group expansion (supported goods, zone furniture, parked
+    # rigs) by a cancelled real transaction rather than duplicating its rules.
+    enabled = [a for a in live if a.get_actor_enable_collision()]
+    assert layout.begin_drag(seeds[0], point), layout.get_editor_property('status')
+    members = list(dict.fromkeys(members+[a for a in enabled if not a.get_actor_enable_collision()]))
+    assert not layout.end_drag(False)
+    original = capture(members)
+    original_refs = rotation_references(members, zone_names)
+    layout.set_action(unreal.WarehouseLayoutAction.MOVE)
+    layout.set_selection(seeds)
+    low, high = rotation_bounds(members, zone_names)
+    centre = unreal.Vector(*[(low[i]+high[i])*.5 for i in range(3)])
+    point = (next(z for z in layout.get_editor_property('zones') if z.name == zone_names[0]).centre
+             if zone_names else seeds[0].get_actor_location())
+    assert drag(seeds[0], point, unreal.Vector(8000-centre.x, -centre.y, 0), True), ('Cannot move real assembly to clear rotation fixture', layout.get_editor_property('status'))
+    delta = seeds[0].get_actor_location()-original[seeds[0]]['pose'].translation
+    translated(original, delta)
+    staged = capture(members)
+    low, high = rotation_bounds(members, zone_names)
+    pivot = unreal.Vector(*[(low[i]+high[i])*.5 for i in range(3)])
+    refs = rotation_references(members, zone_names)
+    zone_sizes = {z.name: z.half_size for z in layout.get_editor_property('zones') if z.name in zone_names}
+    layout.set_selection(seeds)
+    assert layout.rotate_selection(90), ('Clear production assembly could not rotate', layout.get_editor_property('status'))
+    rotated(staged, pivot, 90)
+    for seed in seeds[1:]:
+        assert abs((seed.get_actor_location()-seeds[0].get_actor_location()).length()-(staged[seed]['pose'].translation-staged[seeds[0]]['pose'].translation).length()) < .15, 'Common-centre rotation changed relative group spacing'
+    check_rotation_references(refs, pivot, 90)
+    for zone in layout.get_editor_property('zones'):
+        if zone.name in zone_sizes:
+            old = zone_sizes[zone.name]
+            assert abs(zone.half_size.x-old.y)<.1 and abs(zone.half_size.y-old.x)<.1, 'Rotated zone footprint did not swap width/depth'
+    assert layout.rotate_selection(-90), ('Inverse clear rotation failed', layout.get_editor_property('status'))
+    rotated(staged, pivot, 0)
+    check_rotation_references(refs, pivot, 0)
+    if collision_rollback:
+        blocker = next(a for a in live if a.get_actor_label() == 'LayoutRotationSolidBlocker')
+        blocker_pose = blocker.get_actor_transform()
+        low, high = box_of(members)
+        candidates = []
+        for actor in members:
+            if not isinstance(actor, unreal.WarehouseCargo):
+                continue
+            centre, _ = actor.get_actor_bounds(False)
+            target = around(unreal.Transform(location=centre), pivot, 90).translation
+            outside = max(low[0]-target.x, target.x-high[0], low[1]-target.y, target.y-high[1])
+            candidates.append((outside, target))
+        outside, target = max(candidates, key=lambda item: item[0])
+        assert outside > 15, 'No rotated cargo point clear of the original mixed footprint for a solid rollback fixture'
+        blocker.set_actor_scale3d(unreal.Vector(.2, .2, .2))
+        blocker.set_actor_location(target, False, True)
+        try:
+            layout.set_selection(seeds)
+            assert not layout.rotate_selection(90), 'Rotation intersecting a real solid was accepted'
+            rotated(staged, pivot, 0)
+            check_rotation_references(refs, pivot, 0)
+        finally:
+            blocker.set_actor_transform(blocker_pose, False, True)
+        print('LAYOUT_ROTATION_ATOMIC_COLLISION_ROLLBACK_PASSED')
+    layout.set_selection(seeds)
+    assert drag(seeds[0], point+delta, -delta, True), ('Rotated assembly did not return to its original placement', layout.get_editor_property('status'))
+    rotated(original, unreal.Vector(), 0)
+    check_rotation_references(original_refs, unreal.Vector(), 0)
+    report.setdefault('rotationCases', []).append(dict(category=str(layout.get_editor_property('category')), groups=len(seeds), members=len(members), references=len(refs), degrees=[90,-90], collisionRollback=collision_rollback))
+    print('LAYOUT_RIGID_ROTATION_REFERENCE_PHYSICS_PASSED', str(layout.get_editor_property('category')), len(seeds), len(members), len(refs))
+
+
+def all_category_checks():
+    frame = next(a for a in live if a.get_actor_label() == 'WH_InboundRack_00_A')
+    waiting = next(a for a in live if isinstance(a, unreal.WarehouseWaitingBay))
+    upper = next(a for a in live if 'LayoutType:Rack' in tag_values(a) and 'WarehouseFloor1' in tag_values(a))
+    fixed = next(a for a in live if a.get_actor_label() == 'LayoutRotationFloor_L0')
+    pawn = unreal.GameplayStatics.get_player_pawn(game, 0)
+    transit = next(a for a in live if a.actor_has_tag('LogisticsInTransit'))
+    layout.set_category(unreal.WarehouseLayoutCategory.ALL)
+    layout.set_selection([frame, waiting, upper, fixed, pawn, transit])
+    selection = list(layout.get_selection())
+    assert len(selection) == 2 and {group_key(a) for a in selection} == {group_key(frame), group_key(waiting)}, ('All category failed mixed selection/current-floor/fixed/pawn/transit filtering', selection)
+    members = group_members(frame)+[waiting]
+    rotation_roundtrip([frame, waiting], members)
+    print('LAYOUT_ALL_MIXED_SELECTION_MOVE_ROTATION_FILTERS_PASSED')
 
 
 def truck_cargo_contract(controller, cartons, identity=None):
@@ -389,6 +563,8 @@ def charger_checks():
     translated(state, unreal.Vector())
     restored(state)
     print('LAYOUT_CHARGER_PARKED_RIG_CANCEL_COMMIT_REFERENCES_PASSED', delta)
+    rotation_roundtrip([station], [station, vehicle])
+    assert vehicle.get_editor_property('charging_station') == station and vehicle in station.get_linked_vehicles()
 
     # A real cabinet/wall intersection must be rejected, with both native rigs
     # restored. The fixture does not replace collision geometry or responses.
@@ -764,6 +940,7 @@ def tick(dt):
                 assert (current[i].pose.translation - old - delta).length() < .1, 'Rack slot reference did not move'
             rollback_committed(selected, point, delta)
             translated(snapshot, unreal.Vector())
+            rotation_roundtrip([selected], members, group_members(selected))
             if temporary_slot:
                 inbound.set_editor_property('rack_slots', original_slots)
             print('LAYOUT_RACK_COMMIT_REFERENCES_PASSED', delta)
@@ -811,6 +988,7 @@ def tick(dt):
                 assert all(not unreal.WarehouseDamageSystem.is_physical_contact(p) for p in anchor.get_components_by_class(unreal.PrimitiveComponent))
                 print('LAYOUT_NONPHYSICAL_SHIPPING_ANCHOR_PASSED', zone.name, anchor.get_actor_label())
                 print('LAYOUT_ZONE_CONTENTS_CENTRE_GOALS_PASSED', zone.name, len(members))
+                rotation_roundtrip([zone.members[0]], members, zone_names=[zone.name])
             phase = 2
             return
 
@@ -833,6 +1011,7 @@ def tick(dt):
             rollback_committed(selected, point, delta)
             restored(snapshot)
             print('LAYOUT_AGV_PARTS_JOINT_RESTORE_PASSED', len(selected.get_components_by_class(unreal.PhysicsConstraintComponent)))
+            rotation_roundtrip([selected], [selected])
             phase = 3
             return
 
@@ -870,6 +1049,7 @@ def tick(dt):
             rollback_committed(elevator, point, delta)
             translated(snapshot, unreal.Vector())
             restored(snapshot)
+            rotation_roundtrip([elevator], members)
             phase = 4
             return
 
@@ -931,6 +1111,14 @@ def tick(dt):
             print('LAYOUT_TRUCK_INTERIOR_CARGO_COMMIT_RETURN_PASSED', len(members), 'group members, 48 original cartons; manifested cinematic bodies frozen, nontransit bodies dynamic; mass/identity retained; delta', delta)
             layout.set_category(unreal.WarehouseLayoutCategory.RACK)
             selection_pair = multi_rack_checks()
+            multi_members = []
+            multi_frames = []
+            for seed, frame, bounds in selection_pair:
+                multi_frames += frame
+                multi_members += with_supported(frame+goods_inside(*bounds))
+            rotation_roundtrip([r[0] for r in selection_pair], multi_members, multi_frames, collision_rollback=True)
+            all_category_checks()
+            layout.set_category(unreal.WarehouseLayoutCategory.RACK)
             if not PHYSICAL_ONLY:
                 pc = unreal.GameplayStatics.get_player_controller(game, 0)
                 selection_camera = next(a for a in live if a.get_actor_label() == 'LayoutSelectionTestCamera')
@@ -969,7 +1157,7 @@ def tick(dt):
             print('LAYOUT_UNPAUSE_AGV_RESTART_PASSED')
             scope = ('screen-projected marquee and cursor projection excluded; ' if PHYSICAL_ONLY
                      else 'projected marquee/floor scope, ')
-            finish(True, 'Saved single/multiple racks and contents, ' + scope + 'rack/wall face snap, zones, charger/parked rig references and remote/away exclusion, collision/floor rollback, physical AGV rig, common 3-floor elevator, truck cargo and simulation resume')
+            finish(True, 'Saved single/multiple racks and contents, native rigid 90-degree rotations and inverse/reference/physics/atomic rollback, All mixed selection/move/filter, ' + scope + 'rack/wall face snap, zones, charger/parked rig references and remote/away exclusion, collision/floor rollback, physical AGV rig, common 3-floor elevator, truck cargo and simulation resume')
     except Exception:
         finish(False, traceback.format_exc())
 

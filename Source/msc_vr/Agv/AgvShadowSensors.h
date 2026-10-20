@@ -7,7 +7,7 @@
 class UAgvLidarComponent;
 class UPrimitiveComponent;
 
-/** Building map entries have a server-supplied shape and pose. Other entries contain measured surface points only. */
+/** Fixed building/rack map entries have a published shape and pose. Other entries contain measured surface points only. */
 USTRUCT(BlueprintType)
 struct FAgvObservedObstacle
 {
@@ -39,7 +39,7 @@ public:
 	UFUNCTION(BlueprintPure, Category="Warehouse|Sensors") bool IsKnownComponent(const UPrimitiveComponent* Component) const;
 	UFUNCTION(BlueprintPure, Category="Warehouse|Sensors") bool HasObservedActor(const AActor* Actor) const;
 
-	/** Only an explicitly authored building map role is known, never a rack, vehicle, cargo or movable facility. */
+	/** Explicit building roles and fixed rack parts are known; vehicles, cargo and moving facilities require observations. */
 	static bool IsBuildingMapComponent(const UPrimitiveComponent* Component);
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Warehouse|Sensors") TArray<TObjectPtr<UAgvLidarComponent>> Lidars;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Warehouse|Sensors") int32 SnapshotCount = 0;

@@ -21,6 +21,7 @@
 | 사람·손 운반 | `msc_vrCharacter`, `WarehouseWorker`, `WarehouseCarryAnimInstance` | 유한 질량·보행/균형 힘, 충격에 따른 넘어짐, 양손 물리 조인트 |
 | 화물·팔레트 | `WarehouseCargo`, `WarehousePallet` | 실제 강체 질량, 집기·포크 접촉 중에도 물리 유지 |
 | 승강기 | `WarehouseElevator` | 힘으로 구동하는 플랫폼·문, 층 정렬 잠금, 탑승체는 접촉으로 이동 |
+| 팔레트 전용 승강기 | `WarehousePalletLift` | 120kg 롤러 적재대·각50kg 문6개, 40kN 수직/600N 문 유한 구동, 접촉 운반·실제 하역 확인. 정격과 사용은 [MEZZANINE.md](MEZZANINE.md) |
 | 하중·손상 | `WarehouseDamageSystem` | 실제 접촉 속도/충격량, 질량 보존, 파손 뒤에도 무게 전달 |
 | 별도 실험 차량 | `Agv/AgvDynamicDriveComponent`, `AgvTestVehicle` | Chaos 강체에 접지점 타이어 힘을 적용하는 근사 모델; 별도 사양 유지 |
 

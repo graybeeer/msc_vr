@@ -4,7 +4,7 @@
 #include "WarehouseLayoutEditor.generated.h"
 
 UENUM(BlueprintType)
-enum class EWarehouseLayoutCategory:uint8 { Rack, Forklift, Elevator, Zone, Other, Charger, WaitingBay, Cargo, Pallet };
+enum class EWarehouseLayoutCategory:uint8 { Rack, Forklift, Elevator, Zone, Other, Charger, WaitingBay, Cargo, Pallet, All };
 UENUM(BlueprintType)
 enum class EWarehouseLayoutAction:uint8 { Move, Delete, Add };
 
@@ -47,6 +47,8 @@ public:
  UFUNCTION(BlueprintCallable,Category="Layout") void CycleAddChoice();
  UFUNCTION(BlueprintPure,Category="Layout") FString GetAddChoiceLabel() const;
  UFUNCTION(BlueprintCallable,Category="Layout") bool DeleteSelection();
+ UFUNCTION(BlueprintPure,Category="Layout") bool CanRotateSelection() const;
+ UFUNCTION(BlueprintCallable,Category="Layout") bool RotateSelection(float DeltaYawDegrees);
  UFUNCTION(BlueprintCallable,Category="Layout") bool BeginAdd(FVector FloorPoint);
  UFUNCTION(BlueprintCallable,Category="Layout") void UpdateSurfaceDrag(FVector FloorPoint,AActor* Support,FVector SurfacePoint);
  UFUNCTION(BlueprintCallable,Category="Layout") void SetSelection(const TArray<AActor*>& Actors);
@@ -81,11 +83,14 @@ private:
  struct FMember { TWeakObjectPtr<AActor> Actor;FTransform Pose;TArray<FPart> Parts;bool Collision=true; };
  TArray<FMember> Moving;
  UPROPERTY(Transient) TArray<TObjectPtr<AActor>> SelectedActors;
- TArray<FBox> OriginalAreas;
+ TArray<FBox> ReferenceAreas,ShaftReferenceAreas;
  TArray<int32> MovingZones;
  FBox OriginalBounds{ForceInit};
  FBox OriginalSnapBounds{ForceInit};
+ FBox RotationBounds{ForceInit};
  FVector GrabPoint,Delta;
+ FQuat Rotation=FQuat::Identity;
+ FVector RotationPivot=FVector::ZeroVector;
  int32 FloorIndex=0;
  bool WasPaused=false,MouseWasDown=false,MarqueeAdditive=false;
  bool bAdding=false;
@@ -103,4 +108,6 @@ private:
  bool PlacementClear();
  void Restore(bool Rollback);
  void UpdateReferences();
+ FTransform EditedPose(const FTransform& Pose) const;
+ void ApplyPreview();
 };

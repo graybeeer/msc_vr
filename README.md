@@ -21,7 +21,7 @@ Unreal Engine 5.8 기반 PC 프로젝트다. 물류창고에서 무인 지게차
 | [REFINED_AGV.md](REFINED_AGV.md) | 현재 지게차 모델·치수 보정·기계 리그 |
 | [CHARGER_MODEL.md](CHARGER_MODEL.md) | 충전기 교체용 Blender 외형·FBX·접점 배치 기준 및 검증 범위 |
 | [WAREHOUSE_SERVICES_MODEL.md](WAREHOUSE_SERVICES_MODEL.md) | 천장·벽면 설비/보호대 모델·FBX·현재 맵 배치 및 실제 검증 범위 |
-| [MEZZANINE.md](MEZZANINE.md) | 3층 복층·승강기 규격·층간 이동 인터록 |
+| [MEZZANINE.md](MEZZANINE.md) | 3층 복층·범용/팔레트 전용 화물용 승강기·층간 이동 인터록 |
 | [CARGO_RULES.md](CARGO_RULES.md) | 상품 특성·상자 크기·밀도·무게 생성 규칙 |
 | [TEAM_ASSETS.md](TEAM_ASSETS.md) | 팀원용 외부 에셋 설치·로컬 재생성·Git 제외 |
 | [MCP_SETUP.md](MCP_SETUP.md) | Unreal·Blender·Photoshop MCP 연결 설정과 실제 연결 검증 |

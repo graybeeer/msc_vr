@@ -88,9 +88,28 @@ def rig(label, point):
 block('WH_SensorBuildingFloor', (0, 1200, -10), (6000, 6400, 20), ('WarehouseMapStructure', 'LayoutFixed'))
 block('WH_SensorUpperFloor', (0, 3200, 390), (2400, 1200, 20), ('WarehouseMapStructure', 'LayoutFixed'))
 block('WH_SensorBuildingWall', (600, -735, 150), (240, 10, 300), ('WarehouseMapStructure', 'LayoutFixed'))
-# Full-height opaque occluder hides even the upper LiDAR from this unknown rack.
-block('WH_SensorOccluderWall', (310, 0, 250), (30, 280, 500), ('WarehouseMapStructure', 'LayoutFixed'), movable=True)
-block('SensorUnmappedStaticRack', (650, 0, 100), (110, 90, 200), ('LayoutType:Rack', 'LayoutGroup:SensorRack'))
+# Full-height opaque occluder hides rack contents and collapsed rack bodies.
+# Fixed rack frames/decks are published map geometry even behind the wall.
+block('WH_SensorOccluderWall', (310, 0, 250), (30, 360, 500), ('WarehouseMapStructure', 'LayoutFixed'), movable=True)
+rack_tags = ('LayoutType:Rack', 'LayoutGroup:SensorRack', 'WarehouseFloor0')
+block('SensorKnownRackLeft', (600, 0, 92.5), (10, 90, 185), rack_tags)
+block('SensorKnownRackRight', (700, 0, 92.5), (10, 90, 185), rack_tags)
+block('SensorKnownRackDeck', (650, 0, 180), (110, 90, 10), rack_tags)
+# The top scanner's -1 degree channel reaches this actual pallet at ~196cm.
+# Keep the 15cm pallet in that beam, without changing sensor resolution/range.
+stock = spawn(unreal.WarehousePallet, 'SensorRackPallet', (650, 0, 185.1))
+# Erroneous inherited rack/building tags must not publish a cargo/pallet class.
+stock.tags = ['LayoutType:Rack', 'WarehouseMapStructure']
+carton = spawn(unreal.WarehouseCargo, 'SensorRackCargo', (650, 0, 225.3))
+carton.set_cargo_mesh(cube)
+carton.set_actor_scale3d(unreal.Vector(.6, .6, .5))
+carton.set_gross_mass_kg(12)
+carton.tags = ['LayoutType:Rack', 'WarehouseMapStructure']
+collapsed = block('SensorCollapsedRack', (650, -250, 100), (50, 50, 200),
+                  ('LayoutType:Rack', 'WarehouseMapStructure', 'LayoutGroup:CollapsedRack'), movable=True)
+collapsed.static_mesh_component.set_simulate_physics(True)
+block('SensorCollapseTransitionRack', (900, -300, 100), (50, 50, 200),
+      ('LayoutType:Rack', 'LayoutGroup:TransitionRack'))
 block('SensorPhysicalDecoration', (-650, 500, 100), (30, 30, 200), ('LayoutType:Other',), movable=True)
 block('SensorPaint', (550, -650, 2), (120, 120, 4), ('TransportRouteVisual',), physical=False)
 trigger = block('SensorTrigger', (750, -650, 100), (80, 80, 200))
@@ -130,6 +149,7 @@ saved_revision = 0
 remote_count = remote_beams = remote_obstacle_count = 0
 remote_scans = None
 added_vehicle = None
+added_rack_members = []
 drive_samples = []
 drive_started = drive_triggered = None
 stop_since = None
@@ -153,6 +173,22 @@ def labels(v):
     return {o.actor.get_actor_label() for o in records(v) if o.actor}
 
 
+def known(v):
+    return kit(v).get_known_obstacles()
+
+
+def known_labels(v):
+    return {o.actor.get_actor_label() for o in known(v) if o.actor}
+
+
+def fixed_rack(v, members):
+    for actor in members:
+        parts = [p for p in actor.get_components_by_class(unreal.PrimitiveComponent)
+                 if unreal.WarehouseDamageSystem.is_physical_contact(p)]
+        assert parts and all(kit(v).is_known_component(p) for p in parts), ('Fixed rack part missing from map', actor.get_actor_label())
+        assert not any(p.is_simulating_physics() for p in parts)
+
+
 def vec(v):
     return [v.x, v.y, v.z]
 
@@ -172,7 +208,7 @@ def check(name, **details):
 def finish(ok, detail):
     result = dict(passed=ok, detail=detail, phase=phase, checks=checks, measurements=measurements,
                   actual_drive_samples=drive_samples,
-                  script_revision='sensor-boundaries-4-operating-fleet-isolation',
+                  script_revision='sensor-boundaries-5-fixed-racks-and-sensed-contents',
                   wall_seconds=round(time.monotonic() - started, 2),
                   scope='Unsaved native production rigs and clock, sensor snapshots and normal spatial queries; separate regression logs cover actual transport/contact/layout/elevator. No OS input claim.')
     (out / 'Report.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -216,7 +252,7 @@ def begin_case(now):
 
 def tick(dt):
     global phase, at, live, vehicles, pc, layout, index, wait_count, saved_revision
-    global remote_count, remote_beams, remote_obstacle_count, remote_scans, added_vehicle
+    global remote_count, remote_beams, remote_obstacle_count, remote_scans, added_vehicle, added_rack_members
     global drive_started, drive_triggered, stop_since
     try:
         assert time.monotonic() - started < 300, ('Sensor test timeout', phase, index)
@@ -318,8 +354,17 @@ def tick(dt):
             return
         if phase == 'occluded' and prop(kit(a), 'snapshot_count') > wait_count:
             seen = labels(a)
-            assert 'SensorUnmappedStaticRack' not in seen, ('Occluded rack was observed', seen)
-            assert query(a, 650, 0), 'Static rack leaked into the known building map before observation'
+            frames = [live[n] for n in ('SensorKnownRackLeft', 'SensorKnownRackRight', 'SensorKnownRackDeck', 'SensorCollapseTransitionRack')]
+            fixed_rack(a, frames)
+            assert not {p.get_actor_label() for p in frames} & seen, ('Fixed map geometry was duplicated as measured observations', seen)
+            assert not query(a, 650, 0), 'Occluded fixed rack missing from published map'
+            assert query(a, 650, 0, 185), 'Unobserved pallet/cargo above the known deck leaked into spatial queries'
+            for name in ('SensorRackPallet', 'SensorRackCargo', 'SensorCollapsedRack'):
+                actor = live[name]
+                assert name not in known_labels(a) and name not in seen, ('Hidden dynamic rack or rack contents entered perception', name, seen)
+                assert not any(kit(a).is_known_component(p) for p in actor.get_components_by_class(unreal.PrimitiveComponent))
+            assert live['SensorCollapsedRack'].static_mesh_component.is_simulating_physics()
+            assert query(a, 650, -250), 'Occluded collapsed rack leaked into fixed geometry'
             assert not query(a, 600, -735), 'Known building wall missing from spatial queries'
             assert {'SensorPersonBesideWall', 'SensorPersonBesideTarget', 'SensorPhysicalDecoration'} <= seen, ('Physical person/decoration missing', seen)
             assert not {'SensorPaint', 'SensorTrigger', 'SensorSelectionOnlyBay'} & seen, ('Nonphysical display entered perception', seen)
@@ -331,27 +376,32 @@ def tick(dt):
                     assert abs(getattr(o.world_bounds.min, key) - low + 2) < .05
                     assert abs(getattr(o.world_bounds.max, key) - high - 2) < .05
             assert abs(prop(kit(vehicles[2]), 'snapshot_floor_z_cm') - 400) < 1, 'Upper rig used a ground-floor snapshot'
-            check('building_only_map_hidden_static_rack_people_displays_and_measured_point_bounds', observed=sorted(seen))
+            check('known_building_and_fixed_rack_exclude_hidden_contents_and_simulated_rack', observed=sorted(seen), known=sorted(known_labels(a)))
             live['WH_SensorOccluderWall'].set_actor_enable_collision(False)
             wait_count = prop(kit(a), 'snapshot_count')
-            phase = 'visible'
+            at, phase = now, 'visible'
             return
         if phase == 'visible' and prop(kit(a), 'snapshot_count') > wait_count:
-            assert 'SensorUnmappedStaticRack' in labels(a), 'Uncovered rack was not detected by physical rays'
-            assert not query(a, 650, 0), 'Measured rack points did not affect normal autonomous spatial queries'
-            check('observed_rack_updates_autonomous_spatial_query')
+            expected = {'SensorRackPallet', 'SensorRackCargo', 'SensorCollapsedRack'}
+            if not expected <= labels(a) and now-at < 4:
+                return  # Allow actual one-second rays, never synthesize returns.
+            assert expected <= labels(a), ('Uncovered rack contents or collapsed rack were not sensed', labels(a))
+            assert not expected & known_labels(a), 'Rack contents or simulated rack became fixed map geometry'
+            assert not query(a, 650, 0, 185), 'Measured rack contents did not block a query above the fixed frame/deck'
+            assert not query(a, 650, -250), 'Measured collapsed rack did not block autonomous spatial queries'
+            check('observed_rack_contents_and_collapsed_rack_update_autonomous_queries')
             live['WH_SensorOccluderWall'].set_actor_enable_collision(True)
-            # Move only the obstacle behind its opaque screen: no vehicle or AI state is edited.
-            rack = live['SensorUnmappedStaticRack']
-            rack.static_mesh_component.set_mobility(unreal.ComponentMobility.MOVABLE)
-            rack.set_actor_location(unreal.Vector(650, 180, 100), False, True)
+            # This hidden cargo move is a visibility stimulus. Fixed rack map
+            # changes below must instead pass the real layout transaction API.
+            live['SensorRackCargo'].set_actor_location(unreal.Vector(650, 180, 25.1), False, True)
             wait_count = prop(kit(a), 'snapshot_count')
             at, phase = now, 'reoccluded'
             return
         if phase == 'reoccluded' and prop(kit(a), 'snapshot_count') >= wait_count + 2:
-            assert 'SensorUnmappedStaticRack' not in labels(a), 'Hidden rack was tracked using its live transform'
-            assert query(a, 650, 180), 'AI predicted a hidden rack at its new true location'
-            check('reocclusion_does_not_follow_live_actor_geometry')
+            assert not {'SensorRackPallet', 'SensorRackCargo', 'SensorCollapsedRack'} & labels(a), 'Hidden dynamic bodies were tracked using live transforms'
+            assert query(a, 650, 180), 'AI predicted hidden cargo at its new true location'
+            assert not query(a, 650, 0), 'Fixed rack map disappeared when reoccluded'
+            check('reocclusion_keeps_fixed_rack_map_without_following_hidden_contents')
             remote_count = prop(kit(a), 'snapshot_count')
             remote_beams = prop(kit(a), 'last_beam_count')
             remote_scans = [s.get_revolution_count() for s in prop(kit(a), 'lidars')]
@@ -385,7 +435,7 @@ def tick(dt):
             layout.set_editing(True, 0)
             layout.set_category(unreal.WarehouseLayoutCategory.RACK)
             layout.set_editor_property('edge_snap_enabled', False)
-            rack = live['SensorUnmappedStaticRack']
+            rack = live['SensorKnownRackLeft']
             point = rack.get_actor_location()
             assert layout.begin_drag(rack, unreal.Vector(point.x, point.y, 0)), prop(layout, 'status')
             layout.update_drag(unreal.Vector(point.x + 400, point.y, 0))
@@ -399,6 +449,80 @@ def tick(dt):
         if phase == 'layout_reacquire' and prop(kit(a), 'snapshot_count') > wait_count:
             assert prop(kit(a), 'snapshot_valid') and kit(a).is_snapshot_fresh(now)
             assert prop(kit(a), 'map_revision') > saved_revision, 'Layout did not rebuild the invalidated map generation'
+            frames = [live[n] for n in ('SensorKnownRackLeft', 'SensorKnownRackRight', 'SensorKnownRackDeck')]
+            fixed_rack(a, frames)
+            assert query(a, 650, 0) and not query(a, 1050, 0), 'Relocated rack map kept its old footprint or missed its new footprint'
+            assert not {p.get_actor_label() for p in frames} & labels(a), 'Relocated fixed rack required live observation'
+            check('native_fixed_rack_relocation_rebuilds_published_footprint')
+            saved_revision = prop(kit(a), 'map_revision')
+            assert query(a, 1650, 0), 'Rack addition fixture was already blocked'
+            layout.set_editing(True, 0)
+            layout.set_category(unreal.WarehouseLayoutCategory.RACK)
+            layout.set_action(unreal.WarehouseLayoutAction.ADD)
+            for _ in range(4):
+                if layout.get_add_choice_label() == 'SensorKnownRackLeft':
+                    break
+                layout.cycle_add_choice()
+            assert layout.get_add_choice_label() == 'SensorKnownRackLeft', 'Native fixed-rack prototype is unavailable'
+            before = set(unreal.GameplayStatics.get_all_actors_of_class(game, unreal.Actor))
+            point = unreal.Vector(1600, 0, 0)
+            assert layout.begin_add(point), prop(layout, 'status')
+            layout.update_drag(point)
+            assert layout.end_drag(), prop(layout, 'status')
+            added_rack_members = [actor for actor in unreal.GameplayStatics.get_all_actors_of_class(game, unreal.Actor)
+                                  if actor not in before and actor.actor_has_tag('LayoutType:Rack')]
+            assert len(added_rack_members) == 3, ('Native rack prototype lost its two frames and deck', len(added_rack_members))
+            assert not prop(kit(a), 'snapshot_valid'), 'Native rack addition retained a stale map snapshot'
+            layout.set_editing(False, 0)
+            wait_count = prop(kit(a), 'snapshot_count')
+            at, phase = now, 'rack_added_reacquire'
+            return
+        if phase == 'rack_added_reacquire' and prop(kit(a), 'snapshot_count') > wait_count:
+            assert prop(kit(a), 'snapshot_valid') and kit(a).is_snapshot_fresh(now)
+            assert prop(kit(a), 'map_revision') > saved_revision, 'Added rack did not rebuild the known map'
+            fixed_rack(a, added_rack_members)
+            assert not query(a, 1650, 0), 'New fixed rack did not block its published footprint'
+            assert not {p.get_actor_label() for p in added_rack_members} & labels(a), 'Unseen added rack required measured returns'
+            check('native_fixed_rack_addition_publishes_all_frame_and_deck_components')
+            saved_revision = prop(kit(a), 'map_revision')
+            layout.set_editing(True, 0)
+            layout.set_action(unreal.WarehouseLayoutAction.DELETE)
+            layout.set_selection([added_rack_members[0]])
+            assert layout.delete_selection(), prop(layout, 'status')
+            assert not prop(kit(a), 'snapshot_valid'), 'Native rack deletion retained a stale map snapshot'
+            layout.set_editing(False, 0)
+            wait_count = prop(kit(a), 'snapshot_count')
+            at, phase = now, 'rack_deleted_reacquire'
+            return
+        if phase == 'rack_deleted_reacquire' and prop(kit(a), 'snapshot_count') > wait_count:
+            assert prop(kit(a), 'snapshot_valid') and kit(a).is_snapshot_fresh(now)
+            assert prop(kit(a), 'map_revision') > saved_revision and query(a, 1650, 0), 'Deleted rack still blocks the published map'
+            check('native_fixed_rack_deletion_removes_published_footprint')
+            transition = live['SensorCollapseTransitionRack'].static_mesh_component
+            assert kit(a).is_known_component(transition), 'Collapse fixture was never a known fixed rack'
+            saved_revision = prop(kit(a), 'map_revision')
+            transition.set_mobility(unreal.ComponentMobility.MOVABLE)
+            transition.set_simulate_physics(True)
+            assert transition.is_simulating_physics()
+            wait_count = prop(kit(a), 'snapshot_count')
+            at, phase = now, 'rack_collapse_hidden'
+            return
+        if phase == 'rack_collapse_hidden' and prop(kit(a), 'snapshot_count') > wait_count:
+            assert prop(kit(a), 'map_revision') > saved_revision, 'Physics transition did not rebuild the fixed rack cache at the next normal scan'
+            assert not kit(a).is_known_component(live['SensorCollapseTransitionRack'].static_mesh_component)
+            assert 'SensorCollapseTransitionRack' not in labels(a) and query(a, 900, -300), 'Hidden collapsed rack leaked its live geometry'
+            check('actual_rack_physics_transition_leaves_known_map_without_forced_invalidation')
+            live['WH_SensorOccluderWall'].set_actor_enable_collision(False)
+            wait_count = prop(kit(a), 'snapshot_count')
+            at, phase = now, 'rack_collapse_visible'
+            return
+        if phase == 'rack_collapse_visible' and prop(kit(a), 'snapshot_count') > wait_count:
+            if 'SensorCollapseTransitionRack' not in labels(a) and now-at < 4:
+                return
+            assert 'SensorCollapseTransitionRack' in labels(a) and not query(a, 900, -300), 'Uncovered collapsed rack was not sensed as a real obstacle'
+            assert not kit(a).is_known_component(live['SensorCollapseTransitionRack'].static_mesh_component)
+            check('collapsed_rack_returns_as_measured_obstacle_only_after_visibility')
+            live['WH_SensorOccluderWall'].set_actor_enable_collision(True)
             a.set_editor_property('sensor_mode', unreal.WarehouseSensorMode.DISABLED)
             wait_count = prop(kit(a), 'snapshot_count')
             at, phase = now, 'disabled'
@@ -519,7 +643,7 @@ def tick(dt):
                 return
             if position.x > obstacle.get_actor_location().x + 250 and speed > 20:
                 check('native_autonomy_replans_or_resumes_after_obstacle_removal', position=vec(position), speed_cm=speed)
-                finish(True, 'Five sensors; 1/2/4 vehicles x 1/2/4 speed cadence; building-only known map; occluded rack and live-truth isolation; people/decoration/display roles; remote zero; native layout/fault/add/delete readiness; actual sensor braking before contact and native resumption passed')
+                finish(True, 'Five sensors; 1/2/4 vehicles x 1/2/4 speed cadence; building and fixed-rack map; sensed-only rack contents and collapsed racks; native rack move/add/delete map updates; live-truth isolation; people/decoration/display roles; remote zero; layout/fault/vehicle add/delete readiness; actual sensor braking before contact and native resumption passed')
     except Exception:
         finish(False, traceback.format_exc())
 

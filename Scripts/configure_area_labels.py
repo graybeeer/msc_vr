@@ -22,7 +22,7 @@ AREAS=[
     ('Pallets','빈 팔레트 보관',0,(1750,1710,230)),
     ('EmptyRacks','빈 랙 보관',0,(-1590,380,285)),
     ('Storage','1층 랙 보관',0,(0,-250,285)),
-    ('Lift_L1','1층 · AGV 승강기',0,(1000,1400,320)),
+    ('Lift_L1','1층 · 범용 엘리베이터',0,(1000,1400,320)),
     ('Stairs_L1','1층 · 계단',0,(-1840,-1240,220)),
 ]
 for floor in (1,2):
@@ -30,7 +30,7 @@ for floor in (1,2):
     AREAS.extend([
         (f'StorageWest_L{floor+1}',f'{floor+1}층 · 서측 랙 보관',floor,(-1550,-140,z+285)),
         (f'StorageEast_L{floor+1}',f'{floor+1}층 · 동측 랙 보관',floor,(1550,-140,z+285)),
-        (f'Lift_L{floor+1}',f'{floor+1}층 · AGV 승강기',floor,(1000,1400,z+320)),
+        (f'Lift_L{floor+1}',f'{floor+1}층 · 범용 엘리베이터',floor,(1000,1400,z+320)),
         (f'Stairs_L{floor+1}',f'{floor+1}층 · 계단',floor,(-1840,-410,z+220)),
     ])
 

@@ -77,7 +77,8 @@ bool UAgvShadowSensorsComponent::IsBuildingMapComponent(const UPrimitiveComponen
 {
 	if (!WarehousePhysics::IsPhysicalContact(Component) || !Component->IsQueryCollisionEnabled() || Component->IsSimulatingPhysics()) return false;
 	const AActor* Actor = Component->GetOwner();
-	if (!Actor || (!Actor->ActorHasTag(TEXT("WarehouseMapStructure")) && !Component->ComponentHasTag(TEXT("WarehouseMapStructure")))) return false;
+	if (!Actor || (!Actor->ActorHasTag(TEXT("WarehouseMapStructure")) && !Component->ComponentHasTag(TEXT("WarehouseMapStructure")) &&
+		!Actor->ActorHasTag(TEXT("LayoutType:Rack")))) return false;
 	if (Actor->IsA<APawn>() || Actor->IsA<AWarehouseWorker>() || Actor->IsA<AWarehouseCargo>() ||
 		Actor->IsA<AWarehousePallet>() || Actor->IsA<AWarehouseForklift>() || Actor->IsA<AWarehouseChargingStation>() ||
 		Actor->IsA<AWarehouseWaitingBay>() || Actor->IsA<AWarehouseElevator>() || Actor->IsA<AWarehouseLogisticsTruck>() ||
@@ -85,7 +86,7 @@ bool UAgvShadowSensorsComponent::IsBuildingMapComponent(const UPrimitiveComponen
 	for (FName Tag : Actor->Tags)
 	{
 		const FString Name = Tag.ToString();
-		const bool Facility = Name == TEXT("LayoutType:Rack") || Name == TEXT("LayoutType:Forklift") ||
+		const bool Facility = Name == TEXT("LayoutType:Forklift") ||
 			Name == TEXT("LayoutType:Elevator") || Name == TEXT("LayoutType:Zone") || Name == TEXT("LayoutType:Charger") ||
 			Name == TEXT("LayoutType:WaitingBay") || Name == TEXT("LayoutType:Cargo") || Name == TEXT("LayoutType:Pallet");
 		if (Facility || Name.StartsWith(TEXT("LayoutGroup:TruckDock")) ||
@@ -157,6 +158,10 @@ bool UAgvShadowSensorsComponent::RefreshSnapshot(double SimNow, double FloorZCm)
 	if (!FMath::IsFinite(SimNow) || !FMath::IsFinite(FloorZCm) || !BuildSensors()) return false;
 	if (bSnapshotValid && FMath::Abs(SnapshotFloorZCm-FloorZCm) < 50 && SimNow-LastSnapshotSeconds < 1.-KINDA_SMALL_NUMBER) return true;
 	const double Start = FPlatformTime::Seconds();
+	// A removed or physically released rack is no longer fixed map geometry.
+	// Check metadata on the ordinary one-second frame; moving debris still requires sensor returns.
+	bMapDirty = bMapDirty || KnownObstacles.ContainsByPredicate([](const FAgvObservedObstacle& Entry)
+	{ return !IsBuildingMapComponent(Entry.Component.Get()); });
 	if (bMapDirty || FMath::Abs(SnapshotFloorZCm-FloorZCm) > 50) BuildKnownMap();
 	SnapshotFloorZCm = FloorZCm;
 	ObservedObstacles.Reset();

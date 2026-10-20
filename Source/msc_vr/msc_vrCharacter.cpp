@@ -25,6 +25,7 @@
 #include "msc_vrCameraManager.h"
 #include "Engine/Engine.h"
 #include "WarehouseChargingStation.h"
+#include "WarehousePalletLift.h"
 #include "WarehouseComputer.h"
 #include "WarehouseCarryAnimInstance.h"
 #include "WarehouseWorker.h"
@@ -256,6 +257,12 @@ void Amsc_vrCharacter::ToggleCarry()
 		Station->RequestManualCharge();
 		return;
 	}
+	if (auto* Lift=Cast<AWarehousePalletLift>(Target))
+	{
+		const int32 Floor=FMath::Clamp(FMath::FloorToInt((GetActorLocation().Z-Lift->GetActorLocation().Z)/400.f),0,2);
+		Lift->TryInteract(Floor);
+		return;
+	}
 	if (auto* Pallet=Cast<AWarehousePallet>(Target)) { TryPickupPallet(Pallet); return; }
 	AWarehouseCargo* Best = Cast<AWarehouseCargo>(Target);
 	if (!Best)
@@ -274,7 +281,7 @@ AActor* Amsc_vrCharacter::GetInteractionTarget(float RangeCm) const
  FHitResult Hit;
  const bool Blocking=GetWorld()->LineTraceSingleByChannel(Hit,Eye,End,ECC_Visibility,Params);
  if (Blocking && (Cast<AWarehouseForklift>(Hit.GetActor()) || Cast<AWarehouseCargo>(Hit.GetActor()) ||
-     Cast<AWarehousePallet>(Hit.GetActor()) || Cast<AWarehouseChargingStation>(Hit.GetActor()) || Cast<AWarehouseComputer>(Hit.GetActor()))) return Hit.GetActor();
+     Cast<AWarehousePallet>(Hit.GetActor()) || Cast<AWarehouseChargingStation>(Hit.GetActor()) || Cast<AWarehouseComputer>(Hit.GetActor()) || Cast<AWarehousePalletLift>(Hit.GetActor()))) return Hit.GetActor();
  // A forklift's visible outline includes gaps between the mast and sensor
  // poles. Select that outline without adding any fake physical collider.
  AWarehouseForklift* Best=nullptr;float Nearest=1.f;

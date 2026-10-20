@@ -1,6 +1,7 @@
 #include "WarehouseElevatorLayout.h"
 #include "WarehouseDamageSystem.h"
 #include "WarehouseElevator.h"
+#include "WarehousePalletLift.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/StaticMesh.h"
@@ -10,12 +11,48 @@
 
 namespace
 {
- FBox2D Opening(const AWarehouseElevator* Lift,int32 Floor,bool Initial=false)
+ struct FShaft
  {
-  const FVector Position=Initial ? Lift->InitialShaftPosition : Lift->GetActorLocation();
-  const FVector2D Centre=FVector2D(Position)+(Floor==0 ? FVector2D::ZeroVector : Lift->UpperOpeningOffsetCm);
-  const FVector2D Half=(Floor==0 ? Lift->GroundOpeningSizeCm : Lift->UpperOpeningSizeCm)*.5;
-  return FBox2D(Centre-Half,Centre+Half);
+  AActor* Actor;
+  FVector InitialPosition;
+  FQuat Rotation;
+  FVector2D GroundSize,UpperSize,UpperOffset;
+  FBox2D Landing;
+  FVector StrokeCentre,StrokeHalf;
+ };
+ TArray<FShaft> Shafts(UWorld* World,const TArray<AActor*>& Removed)
+ {
+  TArray<FShaft> Result;
+  for (TActorIterator<AWarehouseElevator> It(World);It;++It) if (!Removed.Contains(*It))
+  {
+   // Legacy opening/landing XY was authored for the north-facing yaw 90 model.
+   // Preserve its 350x240 platform, dimensions and travel prism exactly.
+   const FQuat Rotation(FVector::UpVector,FMath::DegreesToRadians(It->GetActorRotation().Yaw-90.));
+   Result.Add({*It,It->InitialShaftPosition,Rotation,It->GroundOpeningSizeCm,It->UpperOpeningSizeCm,
+    It->UpperOpeningOffsetCm,FBox2D(FVector2D(-175,-625),FVector2D(175,-190)),
+    FVector(0,0,395),FVector(It->GroundOpeningSizeCm.X*.5-21.5,It->GroundOpeningSizeCm.Y*.5-1.5,404.9)});
+  }
+  for (TActorIterator<AWarehousePalletLift> It(World);It;++It) if (!Removed.Contains(*It))
+   Result.Add({*It,It->InitialShaftPosition,FQuat(FVector::UpVector,FMath::DegreesToRadians(It->GetActorRotation().Yaw)),
+    It->OpeningSizeCm,It->OpeningSizeCm,FVector2D::ZeroVector,FBox2D(It->LandingLocalMin,It->LandingLocalMax),
+    It->ShaftClearanceCenter,It->ShaftClearanceHalf});
+  return Result;
+ }
+ FBox2D LayoutRectangle(const FShaft& Lift,const FBox2D& Rect,bool Initial=false)
+ {
+  const FVector Position=Initial ? Lift.InitialPosition : Lift.Actor->GetActorLocation();
+  FBox2D Bounds(ForceInit);
+  for (double X:{Rect.Min.X,Rect.Max.X}) for (double Y:{Rect.Min.Y,Rect.Max.Y})
+   Bounds+=FVector2D(Position+Lift.Rotation.RotateVector(FVector(X,Y,0)));
+  // Runtime quarter turns remain axis-aligned; other authored yaw values use
+  // the conservative AABB because floor rebuilding subtracts rectangles.
+  return Bounds;
+ }
+ FBox2D Opening(const FShaft& Lift,int32 Floor,bool Initial=false)
+ {
+  const FVector2D Centre=Floor==0 ? FVector2D::ZeroVector : Lift.UpperOffset;
+  const FVector2D Half=(Floor==0 ? Lift.GroundSize : Lift.UpperSize)*.5;
+  return LayoutRectangle(Lift,FBox2D(Centre-Half,Centre+Half),Initial);
  }
  struct FSource
  {
@@ -107,12 +144,12 @@ namespace
    State.Base.Add({FBox2D(FVector2D(Bounds.Min),FVector2D(Bounds.Max)),Bounds.Min.Z,Bounds.Max.Z,Index,Floor});
   }
   if (State.Sources.IsEmpty()) return false;
-  for (TActorIterator<AWarehouseElevator> Lift(World);Lift;++Lift) for (int32 Floor=0;Floor<3;++Floor)
+  for (const FShaft& Lift:Shafts(World,{})) for (int32 Floor=0;Floor<3;++Floor)
   {
    const int32 Source=State.Sources.IndexOfByPredicate([Floor](const FSource& S){return S.Floor==Floor;});
    if (Source==INDEX_NONE) return false;
    const FBox& Bounds=State.Sources[Source].Bounds;
-   TArray<FBox2D> Missing={Opening(*Lift,Floor,true)};
+   TArray<FBox2D> Missing={Opening(Lift,Floor,true)};
    for (const auto& Existing:State.Base) if (Existing.Floor==Floor)
    { TArray<FBox2D> Next;for (const auto& Piece:Missing) Next.Append(Subtract(Piece,Existing.Rect));Missing=MoveTemp(Next); }
    for (const auto& Rect:Missing) State.Base.Add({Rect,Bounds.Min.Z,Bounds.Max.Z,Source,Floor});
@@ -148,20 +185,19 @@ bool WarehouseElevatorLayout::Rebuild(AActor* Context,bool ValidatePlacement,con
  if (!World || !World->IsGameWorld() || !Initialize(Context)) return false;
  const TWeakObjectPtr<UWorld> Key(World);
  FState* State=States.Find(Key);
- TArray<AWarehouseElevator*> Lifts;TSet<FName> Groups;
- for (TActorIterator<AWarehouseElevator> It(World);It;++It) if (!Removed.Contains(*It))
- { Lifts.Add(*It);for (FName Tag:It->Tags) if (Tag.ToString().StartsWith(TEXT("LayoutGroup:"))) Groups.Add(Tag); }
- // Keep the same U-gallery/atrium and require a full supported AGV approach
- // (350cm wide, from its 5m wait pose to the door), on every served floor.
+ const TArray<FShaft> Lifts=Shafts(World,Removed);TSet<FName> Groups;
+ for (const FShaft& Lift:Lifts)
+  for (FName Tag:Lift.Actor->Tags) if (Tag.ToString().StartsWith(TEXT("LayoutGroup:"))) Groups.Add(Tag);
+ // Keep the same U-gallery/atrium and the appropriate supported approach for
+ // each device. A pallet-only lift does not need a vehicle-sized landing.
  if (ValidatePlacement)
  {
-  for (AWarehouseElevator* Lift:Lifts) for (int32 Floor=0;Floor<3;++Floor)
+  for (const FShaft& Lift:Lifts) for (int32 Floor=0;Floor<3;++Floor)
   {
-   const FVector2D Centre(Lift->GetActorLocation());
-   const FBox2D Landing(Centre+FVector2D(-175,-625),Centre+FVector2D(175,-190));
+   const FBox2D Landing=LayoutRectangle(Lift,Lift.Landing);
    const FBox2D Hole=Opening(Lift,Floor);
    if (!Covered(*State,Floor,Hole) || !Covered(*State,Floor,Landing)) return false;
-   for (AWarehouseElevator* Other:Lifts) if (Other!=Lift && Intersection(Hole,Opening(Other,Floor)).bIsValid) return false;
+   for (const FShaft& Other:Lifts) if (Other.Actor!=Lift.Actor && Intersection(Hole,Opening(Other,Floor)).bIsValid) return false;
   }
   // The presently parked platform cannot reveal a beam crossing its future
   // stroke. Check its entire native-sized travel prism without excluding real
@@ -170,12 +206,12 @@ bool WarehouseElevatorLayout::Rebuild(AActor* Context,bool ValidatePlacement,con
   for (const FSource& Source:State->Sources) if (Source.Actor.IsValid()) Params.AddIgnoredActor(Source.Actor.Get());
   for (auto Actor:State->Replacements) if (Actor.IsValid()) Params.AddIgnoredActor(Actor.Get());
   for (TActorIterator<AActor> It(World);It;++It)
-   if (It->IsA<AWarehouseElevator>() || It->Tags.ContainsByPredicate([&](FName Tag) { return Groups.Contains(Tag); }) || Removed.Contains(*It)) Params.AddIgnoredActor(*It);
-  for (AWarehouseElevator* Lift:Lifts)
+   if (It->IsA<AWarehouseElevator>() || It->IsA<AWarehousePalletLift>() ||
+       It->Tags.ContainsByPredicate([&](FName Tag) { return Groups.Contains(Tag); }) || Removed.Contains(*It)) Params.AddIgnoredActor(*It);
+  for (const FShaft& Lift:Lifts)
   {
-   const FVector Centre=Lift->GetActorLocation()+FVector(0,0,395);
-   const FVector Half(Lift->GroundOpeningSizeCm.X*.5-21.5,Lift->GroundOpeningSizeCm.Y*.5-1.5,404.9);
-   if (World->OverlapBlockingTestByChannel(Centre,FQuat::Identity,ECC_Visibility,FCollisionShape::MakeBox(Half),Params)) return false;
+   const FVector Centre=Lift.Actor->GetActorLocation()+Lift.Rotation.RotateVector(Lift.StrokeCentre);
+   if (World->OverlapBlockingTestByChannel(Centre,Lift.Rotation,ECC_Visibility,FCollisionShape::MakeBox(Lift.StrokeHalf),Params)) return false;
   }
  }
  auto* Cube=LoadObject<UStaticMesh>(nullptr,TEXT("/Engine/BasicShapes/Cube.Cube"));
@@ -183,9 +219,9 @@ bool WarehouseElevatorLayout::Rebuild(AActor* Context,bool ValidatePlacement,con
  TArray<TWeakObjectPtr<AStaticMeshActor>> Next;
  TArray<TPair<AStaticMeshActor*,AStaticMeshActor*>> Members;
  TArray<FBox2D> ColumnOpenings;
- for (AWarehouseElevator* Lift:Lifts)
+ for (const FShaft& Lift:Lifts)
  {
-  TArray<UStaticMeshComponent*> Parts;Lift->GetComponents(Parts);
+  TArray<UStaticMeshComponent*> Parts;Lift.Actor->GetComponents(Parts);
   for (auto* Part:Parts) if (Part->GetName().StartsWith(TEXT("Column_")))
   {
    const FBox Box=Part->Bounds.GetBox();
@@ -198,7 +234,7 @@ bool WarehouseElevatorLayout::Rebuild(AActor* Context,bool ValidatePlacement,con
   auto* Original=Source.Mesh.Get();
   if (!Original) { Destroy(Next);return false; }
   TArray<FBox2D> Pieces={Region.Rect};
-  for (AWarehouseElevator* Lift:Lifts)
+  for (const FShaft& Lift:Lifts)
   { TArray<FBox2D> Remaining;for (const auto& Piece:Pieces) Remaining.Append(Subtract(Piece,Opening(Lift,Region.Floor)));Pieces=MoveTemp(Remaining); }
   // The fixed shaft posts pass through upper slabs outside the moving deck's
   // opening. Cut their actual footprints too; retain the door landing between

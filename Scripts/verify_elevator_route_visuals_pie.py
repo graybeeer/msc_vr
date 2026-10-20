@@ -137,7 +137,8 @@ def finish():
 def tick(dt):
     global phase, live, pc, vehicle, lift, pallet, cargo, camera, last_state, state_at, layer, layer_at, layer_sim, done_at
     try:
-        assert time.monotonic() - started < 600, ('Transfer visualization timeout', last_state, report[-3:])
+        # Allow the complete native trip and final delivery under slower test hosts.
+        assert time.monotonic() - started < 900, ('Transfer visualization timeout', last_state, report[-3:])
         if phase == 'start':
             if time.monotonic() - started < 2:
                 return

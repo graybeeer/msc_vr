@@ -129,6 +129,12 @@ Windows 기준으로 아래 순서로 런처의 검색 경로를 등록합니다
 
 일반 설치에서는 맵을 다시 만드는 `build_first_person_warehouse.py`, `configure_mezzanine.py`, `apply_real_world_scale.py`, `configure_cargo_variety.py`, `configure_dual_forklifts.py`를 실행하지 않습니다. 최신 Git 맵에는 복층과 1층 지게차 2대의 배치가 이미 들어 있습니다. ③·④·⑤도 개인적으로 해당 영역을 편집한 뒤 반복 실행할 준비 작업은 아닙니다.
 
+### ⑥ 관찰 카메라의 벽 페이드 재질 준비
+
+C++ 빌드 후 일반 Unreal Editor의 **Tools → Execute Python Script...**에서 `Scripts/prepare_observer_wall_fade.py`를 실행합니다. 기존 벽 재질을 복제해 색·질감·노멀을 보존한 페이드 재질과 `DA_ObserverWallPalette`를 생성하고, 현재 창고의 벽에 관찰용 태그만 저장합니다. 위치·충돌과 원본 Fab 재질은 변경하지 않습니다. 완료 문구는 `OBSERVER_WALL_FADE_PREPARED`입니다.
+
+`Content/Warehouse/Materials/ObserverWalls/`는 원본 팩에서 재생성하는 Git 제외 폴더입니다. 처음 설치하거나 이 폴더가 없을 때 준비하며, 새로운 벽 재질을 추가했을 때도 다시 실행합니다. 관찰 화면에서의 동작과 검증 범위는 [WAREHOUSE.md](WAREHOUSE.md#설정과-전지적-관찰)를 따릅니다.
+
 ## 5. 따로 다운로드하지 않아도 되는 것
 
 | 항목 | 이미 받는 방법 |
@@ -136,6 +142,7 @@ Windows 기준으로 아래 순서로 런처의 검색 경로를 등록합니다
 | 지게차 원본 `orange_agv.fbx`, 수정 원본 `orange_agv_refined.fbx` | `SourceAssets/OrangeAGV/`에서 Git으로 받음 |
 | 게임용 수정 지게차 메시·재질 | `Content/Warehouse/AGV/`의 최종 에셋을 Git으로 받음. 다른 지게차 팩 다운로드 불필요 |
 | 플레이어·작업자 기본 캐릭터, 맵, 코드, 복층·승강기 구성 | 프로젝트 Git에 포함됨 |
+| 자체 제작 팔레트 전용 승강기 | `Art/Equipment/PalletLift/`의 Blender 원본·부품 FBX와 `Content/Warehouse/PalletLift/`의 최종 메시·재질. 추가 Fab 다운로드 불필요 |
 | 기존 Poly Haven 상자·크레이트 | `Content/Warehouse/Cargo/PolyHaven/`가 Git에 포함됨. 현재 배치 화물은 위의 Fab 상자 팩을 사용 |
 | 충돌 복사본, 파손용 물리 메시, 열린 트럭 파생 메시 | 위 4절의 스크립트로 로컬 생성. 별도 구매할 에셋이 아님 |
 | 기둥·보·난간 후보로 전에 검색했던 다른 팩 | 현재 맵의 필수 다운로드 목록에 포함되지 않음 |
@@ -153,6 +160,12 @@ Windows 기준으로 아래 순서로 런처의 검색 경로를 등록합니다
 - [ ] 기본 맵 `Content/FirstPerson/Lvl_FirstPerson.umap`에서 랙·팔레트·상자·트럭·나무·관목이 보인다.
 
 모델이 안 보이면 **프로젝트 안의 폴더 경로**부터 확인합니다. 팩을 다른 폴더로 옮기면 저장된 맵의 참조가 맞지 않을 수 있습니다. 상자 품목·질량 규칙은 [CARGO_RULES.md](CARGO_RULES.md), 지게차 모델·바퀴 충돌 재생성 순서는 [REFINED_AGV.md](REFINED_AGV.md), 실제 강체 구동과 물리 준비·검사 기준은 [PHYSICS.md](PHYSICS.md)를 확인합니다.
+
+## 자체 제작 화물용 승강기 재생성
+
+일반 설치는 Git의 완성 에셋을 사용한다. 모델 수정 시 Blender5.2의 전용 백그라운드 프로세스에서 `Scripts/build_pallet_lift.py`를 실행하면 `Art/Equipment/PalletLift/`에 원본·FBX·재질 명세·미리보기가 생성된다. 이 스크립트는 해당 프로세스의 장면을 초기화하므로 사용자가 편집 중인 Blender 장면에서 실행하지 않는다.
+
+그다음 C++ 빌드를 마친 프로젝트의 Unreal Python에서 `Scripts/apply_pallet_lift.py`를 실행한다. 자체 PBR 재질과 세 부품을 임포트하고 기존 범용 승강기의 자세·부품을 비교해 보존하면서 별도 화물용을 배치한다. 준비된 메시를 재사용하므로 FBX 자체를 수정했으면 에디터 실행 인수 `-PalletLiftReimport`를 지정한다. 새 샤프트에 걸치는 바닥만 실제로 분할 저장하며 재실행은 설치된 위치를 유지한다. 새 위치에서의 실험은 게임의 배치 모드를 사용한다. 동적 적재대·문은 FBX에 포함된 개별 볼록 충돌체, 정적 프레임은 삼각형 충돌을 사용한다. 장비 사용·규격·검증 범위는 [MEZZANINE.md](MEZZANINE.md)가 담당한다.
 
 ## Game Animation Sample 설치
 

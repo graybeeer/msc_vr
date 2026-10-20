@@ -21,12 +21,14 @@
 #include "WarehousePallet.h"
 #include "WarehouseCargo.h"
 #include "WarehouseForklift.h"
+#include "WarehousePalletLift.h"
 #include "WarehouseComputer.h"
 #include "WarehouseUIStyle.h"
 #include "WarehouseLayoutEditor.h"
 #include "WarehouseLayoutInventory.h"
 #include "WarehouseSimulationClock.h"
 #include "WarehouseTransportVisualizer.h"
+#include "WarehouseObserverWallFade.h"
 #include "Misc/App.h"
 #include "HAL/PlatformTime.h"
 #include "Widgets/SBoxPanel.h"
@@ -54,7 +56,7 @@ class SWarehouseLayoutCanvas:public SLeafWidget
 public:
  SLATE_BEGIN_ARGS(SWarehouseLayoutCanvas) {}
   SLATE_ARGUMENT(AWarehouseLayoutEditor*,Layout)
-  SLATE_ARGUMENT(APlayerController*,Controller)
+  SLATE_ARGUMENT(Amsc_vrPlayerController*,Controller)
   SLATE_EVENT(FSimpleDelegate,OnEnded)
  SLATE_END_ARGS()
  void Construct(const FArguments& Args) { Layout=Args._Layout;Controller=Args._Controller;OnEnded=Args._OnEnded; }
@@ -67,6 +69,11 @@ public:
  }
  virtual FReply OnMouseButtonDown(const FGeometry& Geometry,const FPointerEvent& Event) override
  {
+  if (Event.GetEffectingButton()==EKeys::RightMouseButton && Layout.IsValid() && Controller.IsValid())
+  {
+   if (Layout->bDragging || Layout->bMarqueeSelecting) Layout->PointerUp(false);
+   return Controller->OpenLayoutRotationMenu(Event.GetScreenSpacePosition()) ? FReply::Handled().ReleaseMouseCapture() : FReply::Unhandled();
+  }
   if (Event.GetEffectingButton()!=EKeys::LeftMouseButton || !Layout.IsValid() || !Controller.IsValid()) return FReply::Unhandled();
   Layout->PointerDown(Controller.Get(),ViewportPoint(Geometry,Event),Event.IsControlDown());
   return FReply::Handled().CaptureMouse(SharedThis(this));
@@ -111,7 +118,7 @@ public:
  }
 private:
  TWeakObjectPtr<AWarehouseLayoutEditor> Layout;
- TWeakObjectPtr<APlayerController> Controller;
+ TWeakObjectPtr<Amsc_vrPlayerController> Controller;
  FSimpleDelegate OnEnded;
 };
 }
@@ -123,6 +130,7 @@ Amsc_vrPlayerController::Amsc_vrPlayerController()
 	PrimaryActorTick.bTickEvenWhenPaused=true;
 	bShouldPerformFullTickWhenPaused=true;
 	TransportVisualizer=CreateDefaultSubobject<UWarehouseTransportVisualizer>(TEXT("TransportVisualizer"));
+	ObserverWallFade=CreateDefaultSubobject<UWarehouseObserverWallFade>(TEXT("ObserverWallFade"));
 }
 
 void Amsc_vrPlayerController::BeginPlay()
@@ -176,6 +184,13 @@ void Amsc_vrPlayerController::BeginPlay()
 				[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity_Lambda([this,I]() { return LayoutEditor && int32(LayoutEditor->Action)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(ActionNames[I]))]];
 		Tools->AddSlot().AutoHeight()[Actions];
 		auto Row=SNew(SWrapBox).UseAllottedSize(true);
+		Row->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			.Visibility_Lambda([this]() { return LayoutEditor && LayoutEditor->Action!=EWarehouseLayoutAction::Add ? EVisibility::Visible : EVisibility::Collapsed; })
+			.ToolTipText(FText::FromString(TEXT("현재 층의 모든 편집 가능한 종류를 함께 선택합니다.")))
+			.OnClicked_Lambda([this]() { SetLayoutCategory(int32(EWarehouseLayoutCategory::All));return FReply::Handled(); })
+			[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize))
+				.ColorAndOpacity_Lambda([this]() { return LayoutEditor && LayoutEditor->Category==EWarehouseLayoutCategory::All ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; })
+				.Text(FText::FromString(TEXT("모두")))]];
 		const TCHAR* Labels[]={TEXT("랙"),TEXT("지게차"),TEXT("승강기"),TEXT("입출고 구역"),TEXT("기타 물건"),TEXT("충전기"),TEXT("일반 대기 자리"),TEXT("상자"),TEXT("팔레트")};
 		for (int32 I=0;I<UE_ARRAY_COUNT(Labels);++I)
 			Row->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
@@ -191,10 +206,12 @@ void Amsc_vrPlayerController::BeginPlay()
 		SelectionRow->AddSlot().AutoWidth().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
 			.OnClicked_Lambda([this]() { if (LayoutEditor) LayoutEditor->bEdgeSnapEnabled=!LayoutEditor->bEdgeSnapEnabled;return FReply::Handled(); })
 			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text_Lambda([this]() { return FText::FromString(LayoutEditor && LayoutEditor->bEdgeSnapEnabled ? TEXT("스냅 켜짐"):TEXT("스냅 꺼짐")); })]];
+		SelectionRow->AddSlot().AutoWidth().Padding(12,0)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize))
+			.ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(TEXT("선택 후 우클릭 · 좌우 90도 회전 / 삭제")))];
 		Tools->AddSlot().AutoHeight()[SelectionRow];
 		Tools->AddSlot().AutoHeight()[SNew(SButton).IsFocusable(false).ContentPadding(8)
 			.Visibility_Lambda([this]() { return LayoutEditor && LayoutEditor->Action==EWarehouseLayoutAction::Delete ? EVisibility::Visible : EVisibility::Collapsed; })
-			.OnClicked_Lambda([this]() { if (LayoutEditor) { LayoutEditor->DeleteSelection();SetObserverRoofVisibility(false);SetObserverRoofVisibility(true); }return FReply::Handled(); })
+			.OnClicked_Lambda([this]() { DeleteLayoutSelection();return FReply::Handled(); })
 			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text(FText::FromString(TEXT("선택한 요소 모두 삭제 · 상자는 보류 목록으로")))]];
 		Tools->AddSlot().AutoHeight()[SNew(SButton).IsFocusable(false).ContentPadding(8)
 			.Visibility_Lambda([this]() { return LayoutEditor && LayoutEditor->Action==EWarehouseLayoutAction::Add ? EVisibility::Visible : EVisibility::Collapsed; })
@@ -393,6 +410,7 @@ void Amsc_vrPlayerController::ToggleObserverView()
 	{
 		if (LayoutEditor && LayoutEditor->bEditing) LayoutEditor->SetEditing(false,ObserverFloor);
 		bObserverView=false;
+		if (ObserverWallFade) ObserverWallFade->Restore();
 		SetObserverRoofVisibility(false);
 		SetViewTarget(GetPawn());
 	}
@@ -458,9 +476,52 @@ void Amsc_vrPlayerController::ToggleLayoutEditing()
  UpdateInputMode();
 }
 void Amsc_vrPlayerController::SetLayoutCategory(int32 CategoryIndex)
-{ if (LayoutEditor && CategoryIndex>=0 && CategoryIndex<=int32(EWarehouseLayoutCategory::Pallet)) LayoutEditor->SetCategory(EWarehouseLayoutCategory(CategoryIndex)); }
+{ if (LayoutEditor && CategoryIndex>=0 && CategoryIndex<=int32(EWarehouseLayoutCategory::All)) LayoutEditor->SetCategory(EWarehouseLayoutCategory(CategoryIndex)); }
 void Amsc_vrPlayerController::SetLayoutAction(int32 ActionIndex)
 { if (LayoutEditor && ActionIndex>=0 && ActionIndex<=int32(EWarehouseLayoutAction::Add)) LayoutEditor->SetAction(EWarehouseLayoutAction(ActionIndex)); }
+
+bool Amsc_vrPlayerController::OpenLayoutRotationMenu(FVector2D ScreenPosition)
+{
+ if (!bObserverView || IsWarehouseMenuOpen() || !LayoutEditor || !LayoutEditor->CanRotateSelection() ||
+     ScreenPosition.ContainsNaN() || !LayoutCanvas.IsValid() || !FSlateApplication::IsInitialized()) return false;
+ auto Menu=SNew(SVerticalBox);
+ const TWeakObjectPtr<Amsc_vrPlayerController> MenuOwner(this);
+ for (int32 Side=0;Side<2;++Side)
+  Menu->AddSlot().AutoHeight().Padding(2)[SNew(SButton).IsFocusable(true).ContentPadding(FMargin(16,10))
+   .IsEnabled_Lambda([MenuOwner]() { return MenuOwner.IsValid() && MenuOwner->LayoutEditor && MenuOwner->LayoutEditor->CanRotateSelection(); })
+   .OnClicked_Lambda([MenuOwner,Side]() { if (MenuOwner.IsValid()) MenuOwner->RotateLayoutSelection(Side==0 ? -90.f : 90.f);return FReply::Handled(); })
+   [SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Text)
+    .Text(FText::FromString(Side==0 ? TEXT("좌측으로 90도 회전") : TEXT("우측으로 90도 회전")))]];
+ Menu->AddSlot().AutoHeight().Padding(2,6,2,2)[SNew(SButton).IsFocusable(true).ContentPadding(FMargin(16,10))
+  .IsEnabled_Lambda([MenuOwner]() { return MenuOwner.IsValid() && MenuOwner->LayoutEditor && MenuOwner->LayoutEditor->CanRotateSelection(); })
+  .ToolTipText(FText::FromString(TEXT("선택한 요소를 삭제합니다. 상자는 보류된 물류에 보관됩니다.")))
+  .OnClicked_Lambda([MenuOwner]() { if (MenuOwner.IsValid()) MenuOwner->DeleteLayoutSelection();return FReply::Handled(); })
+  [SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Warning)
+   .Text(FText::FromString(TEXT("선택한 요소 삭제")))]];
+ const auto Content=SNew(SBorder).Padding(4).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+  .BorderBackgroundColor(WarehouseUIStyle::Panel)[Menu];
+ FSlateApplication::Get().DismissAllMenus();
+ return FSlateApplication::Get().PushMenu(LayoutCanvas.ToSharedRef(),FWidgetPath(),Content,ScreenPosition,
+  FPopupTransitionEffect::ContextMenu,true,FVector2D::ZeroVector,EPopupMethod::UseCurrentWindow).IsValid();
+}
+
+bool Amsc_vrPlayerController::RotateLayoutSelection(float DeltaYawDegrees)
+{
+ if (FSlateApplication::IsInitialized()) FSlateApplication::Get().DismissAllMenus();
+ if (!bObserverView || IsWarehouseMenuOpen() || !LayoutEditor) return false;
+ const bool Accepted=LayoutEditor->RotateSelection(DeltaYawDegrees);
+ SetObserverRoofVisibility(false);SetObserverRoofVisibility(true);
+ return Accepted;
+}
+
+bool Amsc_vrPlayerController::DeleteLayoutSelection()
+{
+ if (FSlateApplication::IsInitialized()) FSlateApplication::Get().DismissAllMenus();
+ if (!bObserverView || IsWarehouseMenuOpen() || !LayoutEditor || !LayoutEditor->CanRotateSelection()) return false;
+ const bool Accepted=LayoutEditor->DeleteSelection();
+ if (Accepted) { SetObserverRoofVisibility(false);SetObserverRoofVisibility(true); }
+ return Accepted;
+}
 
 void Amsc_vrPlayerController::SetObserverRoofVisibility(bool Hide)
 {
@@ -502,6 +563,7 @@ void Amsc_vrPlayerController::UpdateObserverCamera()
 void Amsc_vrPlayerController::PlayerTick(float Dt)
 {
 	Super::PlayerTick(Dt);
+	if (ObserverWallFade) ObserverWallFade->Update(this,bObserverView);
 	const double ObserverNow=FPlatformTime::Seconds();
 	const float CameraDt=ObserverLastWall>0 ? float(FMath::Clamp(ObserverNow-ObserverLastWall,0.,.05)) : 1.f/60.f;
 	ObserverLastWall=ObserverNow;
@@ -528,8 +590,9 @@ void Amsc_vrPlayerController::PlayerTick(float Dt)
 	ObserverCamera->GetCameraComponent()->SetFieldOfView(ViewFOV);
 	if (MenuWidget.IsValid() || !GetWorld()->GetGameViewport() || !GetWorld()->GetGameViewport()->Viewport || !GetWorld()->GetGameViewport()->Viewport->HasFocus()) return;
 	// Layout gestures are handled by the Slate canvas, including while paused.
+	if (FSlateApplication::IsInitialized() && FSlateApplication::Get().AnyMenusVisible()) return;
 	float X=0,Y=0; GetInputMouseDelta(X,Y);
-	if (IsInputKeyDown(EKeys::RightMouseButton))
+	if (IsInputKeyDown(EKeys::RightMouseButton) && !(LayoutEditor && LayoutEditor->bEditing && LayoutEditor->CanRotateSelection()))
 	{
 		ObserverRotation.Yaw+=X*MouseSensitivity*.2f;
 		ObserverRotation.Pitch=FMath::Clamp(ObserverRotation.Pitch-Y*MouseSensitivity*.2f,-85.f,-45.f);
@@ -562,6 +625,9 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
    if (Cast<AWarehouseComputer>(OperatorCharacter->GetInteractionTarget()))
     return FText::FromString(TEXT("E : 관제 컴퓨터 접속\n실시간 재고 · 운반 작업 · 지게차 관리"));
   if (!bObserverView)
+   if (auto* Lift=Cast<AWarehousePalletLift>(OperatorCharacter->GetInteractionTarget()))
+    return Lift->GetInteractionText(FMath::Clamp(FMath::FloorToInt((OperatorCharacter->GetActorLocation().Z-Lift->GetActorLocation().Z)/400.f),0,2));
+  if (!bObserverView)
    if (auto* Vehicle=Cast<AWarehouseForklift>(OperatorCharacter->GetInteractionTarget()))
     return FText::FromString(FString::Printf(TEXT("E : %s  |  G : 스마트폰 원격 조작\n%s\n속도 %.2f m/s · 배터리 %.0f%% · 적재 %.0f / %.0f kg"),
      Vehicle->bPowered ? TEXT("자율 운행 정지") : TEXT("자율 운행 시작 / 재개"),
@@ -583,6 +649,8 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
 
 void Amsc_vrPlayerController::EndPlay(const EEndPlayReason::Type Reason)
 {
+	if (ObserverWallFade) ObserverWallFade->Restore();
+	if (FSlateApplication::IsInitialized()) FSlateApplication::Get().DismissAllMenus();
 	if (LayoutEditor && LayoutEditor->bEditing) LayoutEditor->SetEditing(false,ObserverFloor);
 	if (LayoutToolbar.IsValid() && GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(LayoutToolbar.ToSharedRef());
 	LayoutToolbar.Reset();

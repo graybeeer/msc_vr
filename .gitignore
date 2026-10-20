@@ -116,3 +116,6 @@ __pycache__/
 # Regenerate selected Game Animation Sample motions with the import/configure scripts.
 /Content/Warehouse/AnimationSample/
 /Content/Characters/UE5_Mannequins/
+
+# Rebuild observer wall fade variants from each installed source material.
+/Content/Warehouse/Materials/ObserverWalls/

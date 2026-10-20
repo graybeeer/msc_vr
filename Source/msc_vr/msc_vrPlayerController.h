@@ -17,6 +17,7 @@ class AWarehouseComputer;
 class AWarehouseLayoutEditor;
 class AWarehouseSimulationClock;
 class UWarehouseTransportVisualizer;
+class UWarehouseObserverWallFade;
 
 /**
  *  Simple first person Player Controller
@@ -42,6 +43,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Layout") void ToggleLayoutEditing();
 	UFUNCTION(BlueprintCallable, Category="Layout") void SetLayoutCategory(int32 CategoryIndex);
 	UFUNCTION(BlueprintCallable, Category="Layout") void SetLayoutAction(int32 ActionIndex);
+	UFUNCTION(BlueprintCallable, Category="Layout") bool OpenLayoutRotationMenu(FVector2D ScreenPosition);
+	UFUNCTION(BlueprintCallable, Category="Layout") bool RotateLayoutSelection(float DeltaYawDegrees);
+	UFUNCTION(BlueprintCallable, Category="Layout") bool DeleteLayoutSelection();
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Settings") int32 ObserverFloor=-1;
 	UFUNCTION(BlueprintPure, Category="Settings") bool IsObserverView() const { return bObserverView; }
 	UFUNCTION(BlueprintPure, Category="Settings") bool IsWarehouseMenuOpen() const { return MenuWidget.IsValid() || ComputerWidget.IsValid(); }
@@ -96,6 +100,7 @@ protected:
 	void UpdateEmergencyAlerts(float Dt);
 	void PlayEmergencyAlarm();
 	UPROPERTY(VisibleAnywhere, Category="Warehouse|Display") TObjectPtr<UWarehouseTransportVisualizer> TransportVisualizer;
+	UPROPERTY(VisibleAnywhere, Category="Warehouse|Display") TObjectPtr<UWarehouseObserverWallFade> ObserverWallFade;
 	double NextTransportOutlineUpdate=0;
 	float EmergencyPollElapsed=0, EmergencyAlarmElapsed=0, EmergencyToneElapsed=0;
 	TSharedPtr<SBox> CargoReadoutBox;
