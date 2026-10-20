@@ -206,6 +206,20 @@ bool AWarehouseElevator::CanExit(AWarehouseForklift* Vehicle) const
  return ReservedVehicle==Vehicle && IsValid(Vehicle) && State==EWarehouseElevatorState::AwaitExit &&
   CurrentFloor==DestinationFloor && ActualDoorOpening()>=124 && FMath::Abs(PlatformHeight-DestinationFloor*400)<1.f && CheckInterlocks().IsEmpty();
 }
+bool AWarehouseElevator::TraceCertifiedPlatformSupport(AWarehouseForklift* Vehicle,FVector Point,FHitResult& Support) const
+{
+ // The existing PLC handshake certifies this vehicle, this floor, a stationary
+ // aligned deck and open doors. It grants no knowledge of other facilities or
+ // unknown ground, nor permission for a vehicle merely placed in the cabin.
+ if (!IsValid(Platform) || (!CanEnter(Vehicle) && !CanExit(Vehicle)) ||
+     FMath::Abs(Point.Z-FloorHeight(CurrentFloor))>2.f || Platform->GetPhysicsLinearVelocity().Size()>2.f) return false;
+ FCollisionQueryParams Params(SCENE_QUERY_STAT(CertifiedLiftDeckBearing),false,Vehicle);
+ FHitResult Hit;
+ if (!Platform->LineTraceComponent(Hit,Point+FVector(0,0,3),Point-FVector(0,0,5),Params) ||
+     Hit.ImpactNormal.Z<.98f || FMath::Abs(Hit.ImpactPoint.Z-FloorHeight(CurrentFloor))>1.f) return false;
+ Support=Hit;
+ return true;
+}
 bool AWarehouseElevator::ConfirmBoarded(AWarehouseForklift* Vehicle)
 {
  if (!CanEnter(Vehicle) || !FitsInside(Vehicle) || !PortalClear() ||

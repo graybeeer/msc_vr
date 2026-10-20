@@ -65,7 +65,14 @@ bool AWarehouseWaitingBay::TryReserve(AWarehouseForklift* Vehicle)
  if (!IsValid(Vehicle) || Vehicle->GetWorld()!=GetWorld() || (IsValid(Occupant) && Occupant!=Vehicle)) return false;
  const FBox Space=FBox(FVector(-SizeCm.X*.5,-SizeCm.Y*.5,0),FVector(SizeCm.X*.5,SizeCm.Y*.5,240)).TransformBy(GetActorTransform().ToMatrixWithScale());
  for (TActorIterator<AWarehouseForklift> Other(GetWorld());Other;++Other)
-  if (*Other!=Vehicle && AWarehouseDamageSystem::GetPhysicalBounds(*Other).Intersect(Space)) return false;
+  if (*Other!=Vehicle)
+  {
+   FBox Observed(ForceInit);
+   const bool Occupies=Vehicle->SensorMode==EWarehouseSensorMode::Autonomous ?
+    Vehicle->GetPerceivedActorBounds(*Other,Observed) && Observed.Intersect(Space) :
+    AWarehouseDamageSystem::GetPhysicalBounds(*Other).Intersect(Space);
+   if (Occupies) return false;
+  }
  Occupant=Vehicle;return true;
 }
 void AWarehouseWaitingBay::Release(AWarehouseForklift* Vehicle)

@@ -35,12 +35,16 @@ FString AWarehouseForklift::ValidateJobResources(const FWarehouseWorkOrder& Job)
    return TEXT("운반할 수 없다: 입고 담당 NPC의 입고 확정을 기다리세요. [INBOUND_PENDING]");
  if (Job.bRequiresDestinationResource && !IsValid(Job.DestinationResource)) return TEXT("운반할 수 없다: 목적지 랙 또는 입출고 구역이 삭제되었습니다. [NO_DESTINATION_RESOURCE]");
  const auto Floor=[](double Z) { return FMath::FloorToInt((FMath::Max(0.,Z)+1.)/400.); };
- if ((Floor(GetActorLocation().Z)!=Floor(Job.Pallet->GetActorLocation().Z) ||
-      Floor(Job.Pallet->GetActorLocation().Z)!=Floor(Job.Destination.GetLocation().Z)))
+ // Initial submission supplies a WMS source coordinate. Subsequent validation
+ // must retain its last published/observed value while the pallet is hidden.
+ const FTransform* Source=SensorMode==EWarehouseSensorMode::Autonomous ? WorkOrderSourcePoses.Find(Job.JobId) : nullptr;
+ const double SourceZ=Source ? Source->GetLocation().Z : Job.Pallet->GetActorLocation().Z;
+ if ((Floor(GetActorLocation().Z)!=Floor(SourceZ) ||
+      Floor(SourceZ)!=Floor(Job.Destination.GetLocation().Z)))
  {
   bool Found=false;
   for (TActorIterator<AWarehouseElevator> It(GetWorld());It;++It)
-   if (It->FloorAtHeight(Job.Pallet->GetActorLocation().Z)!=INDEX_NONE && It->FloorAtHeight(Job.Destination.GetLocation().Z)!=INDEX_NONE) { Found=true;break; }
+   if (It->FloorAtHeight(SourceZ)!=INDEX_NONE && It->FloorAtHeight(Job.Destination.GetLocation().Z)!=INDEX_NONE) { Found=true;break; }
   if (!Found) return TEXT("지게차가 올라갈 수 없다: 해당 층을 연결하는 승강기가 없습니다. [NO_ELEVATOR]");
  }
  return FString();
@@ -73,27 +77,70 @@ AWarehouseChargingStation* AWarehouseFleetCoordinator::AllocateCharger(AWarehous
   if ((OtherRequired && !Required) || (OtherRequired==Required &&
       (It->BatteryPercent<Vehicle->BatteryPercent-.01f || (FMath::IsNearlyEqual(It->BatteryPercent,Vehicle->BatteryPercent,.01f) && It->GetName()<Vehicle->GetName())))) return nullptr;
  }
- AWarehouseChargingStation* Best=nullptr;double Cost=MAX_dbl;bool HasPowered=false,HasReachable=false;
+ AWarehouseChargingStation* Best=nullptr;AWarehouseForklift* BestBlocker=nullptr;
+ double Cost=MAX_dbl;bool HasPowered=false,HasReachable=false;
  for (TActorIterator<AWarehouseChargingStation> It(GetWorld());It;++It)
  {
   if (!It->bMainsPower || It->PowerKw<=0 || It->Efficiency<=0 || (IsValid(It->Occupant) && It->Occupant!=Vehicle)) continue;
   HasPowered=true;if (!Reachable(Vehicle,*It)) continue;HasReachable=true;
-  bool PhysicallyOccupied=false;
+  TArray<AWarehouseForklift*> ObservedOccupants;
+  const FBox DockSpace=Vehicle->NavigationEnvelope().TransformBy(It->GetActorTransform().ToMatrixWithScale());
   for (TActorIterator<AWarehouseForklift> Other(GetWorld());Other;++Other)
-   if (*Other!=Vehicle && FVector::Dist(Other->GetActorLocation(),It->GetActorLocation())<5.f)
+   if (*Other!=Vehicle)
    {
-    PhysicallyOccupied=true;
-    if (Other->bPowered && Other->bAutonomousMode && Other->IsIdleForLayout() && Other->BatteryPercent>Other->ChargeBelowPercent && !Other->bChargePending)
-     Other->PlanIdleParking(true); // Vacate the shared dock for this request.
+    FBox Observed(ForceInit);
+    const bool Occupies=Vehicle->SensorMode==EWarehouseSensorMode::Autonomous ?
+     Vehicle->GetPerceivedActorBounds(*Other,Observed) && Observed.Intersect(DockSpace) :
+     FVector::Dist(Other->GetActorLocation(),It->GetActorLocation())<5.f;
+    if (!Occupies) continue;
+    // A reservation is server data; unreserved physical occupancy requires
+    // this requesting vehicle's measured surfaces, even for an idle peer.
+    ObservedOccupants.Add(*Other);
    }
-  if (PhysicallyOccupied) continue;
+  AWarehouseForklift* Blocker=nullptr;
+  if (!ObservedOccupants.IsEmpty())
+  {
+   if (ObservedOccupants.Num()!=1) continue;
+   Blocker=ObservedOccupants[0];
+   const auto* Bay=Vehicle->WaitingBay.Get();
+   if (!Blocker->bPowered || !Blocker->bAutonomousMode || !Blocker->bIdleParkingEnabled || !Blocker->IsIdleForLayout() ||
+       Blocker->AIState!=EWarehouseAIState::Ready || Blocker->SensorMode!=EWarehouseSensorMode::Autonomous ||
+       !Blocker->CheckSystems().IsEmpty() || Blocker->BatteryPercent<=Blocker->ChargeBelowPercent ||
+       Blocker->bChargePending || Blocker->bChargeToFull || Blocker->bOpportunityCharge || Blocker->AIState==EWarehouseAIState::Charging ||
+       !IsValid(Bay) || Bay->Occupant!=Vehicle || Bay->GetWorld()!=GetWorld() ||
+       FMath::Abs(Bay->GetActorLocation().Z-It->GetActorLocation().Z)>5.f) continue;
+  }
   const double Distance=FVector::DistSquared(It->GetActorLocation(),Vehicle->GetActorLocation());
-  if (Distance<Cost) { Cost=Distance;Best=*It; }
+  if (Distance<Cost) { Cost=Distance;Best=*It;BestBlocker=Blocker; }
  }
+ AWarehouseForklift* PreviousChargerOccupant=Best ? Best->Occupant.Get() : nullptr;
  if (!Best || !Best->TryReserve(Vehicle))
  {
   if (HasPowered && !HasReachable) Vehicle->SetOperationError(TEXT("NO_ELEVATOR"),TEXT("충전할 수 없다: 충전기 층으로 올라갈 수 있는 승강기가 없습니다."));
   return nullptr;
+ }
+ if (BestBlocker)
+ {
+  auto* Bay=Vehicle->WaitingBay.Get();
+  auto* PreviousBlockerBay=BestBlocker->WaitingBay.Get();
+  const FTransform PreviousIdlePose=BestBlocker->IdlePose;
+  // Exchange service reservations before requesting either real vehicle move.
+  // The vacating requester may still occupy the bay; planning and Chaos retain
+  // that measured obstruction until the independently driven vehicle clears it.
+  Bay->Occupant=BestBlocker;
+  Vehicle->WaitingBay=nullptr;
+  BestBlocker->WaitingBay=Bay;
+  if (!BestBlocker->PlanIdleParking(true))
+  {
+   BestBlocker->WaitingBay=PreviousBlockerBay;BestBlocker->IdlePose=PreviousIdlePose;
+   Vehicle->WaitingBay=Bay;Bay->Occupant=Vehicle;Best->Occupant=PreviousChargerOccupant;
+   UE_LOG(LogTemp,Log,TEXT("FLEET_CHARGE_PARKING_EXCHANGE_ROLLBACK requester=%s blocker=%s charger=%s bay=%s"),
+    *Vehicle->VehicleName,*BestBlocker->VehicleName,*Best->GetName(),*Bay->GetName());
+   return nullptr;
+  }
+  if (IsValid(PreviousBlockerBay) && PreviousBlockerBay!=Bay) PreviousBlockerBay->Release(BestBlocker);
+  UE_LOG(LogTemp,Log,TEXT("FLEET_CHARGE_PARKING_EXCHANGE requester=%s blocker=%s charger=%s bay=%s"),
+   *Vehicle->VehicleName,*BestBlocker->VehicleName,*Best->GetName(),*Bay->GetName());
  }
  if (IsValid(Vehicle->WaitingBay)) Vehicle->WaitingBay->Release(Vehicle);
  return Best;
@@ -114,6 +161,9 @@ bool AWarehouseForklift::PlanIdleParking(bool WaitingForCharge)
  if (!bIdleParkingEnabled || bSupportingPallet || !ActiveJob.JobId.IsEmpty() || IsRemoteControlled()) return false;
  auto FindBay=[&]()
  {
+  // An existing lease is service data, not a claim that its physical space is
+  // clear. PlanParking still waits/replans against actual saved sensor points.
+  if (IsValid(WaitingBay) && WaitingBay->Occupant==this) return WaitingBay.Get();
   if (IsValid(WaitingBay) && WaitingBay->TryReserve(this)) return WaitingBay.Get();
   AWarehouseWaitingBay* Best=nullptr;double Cost=MAX_dbl;
   for (TActorIterator<AWarehouseWaitingBay> It(GetWorld());It;++It)

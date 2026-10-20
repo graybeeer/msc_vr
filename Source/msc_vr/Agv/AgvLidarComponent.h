@@ -4,6 +4,15 @@
 #include "Components/SceneComponent.h"
 #include "AgvLidarComponent.generated.h"
 
+class UPrimitiveComponent;
+
+/** A measured return; the component identifies the reflector, not its hidden shape or live pose. */
+struct FAgvLidarReturn
+{
+	TWeakObjectPtr<UPrimitiveComponent> Component;
+	FVector SensorPoint = FVector::ZeroVector;
+};
+
 /**
  * Spinning multi-channel LiDAR, attached at its real mount. Each step it traces only the columns the head sweeps
  * through in that time, so a scan taken while driving is distorted exactly like a real one. Ranges get Gaussian
@@ -22,10 +31,16 @@ public:
 	/** Advances the head by Dt; called by the owning vehicle after the drive has moved it. */
 	void Step(float Dt);
 
+	/** One instantaneous revolution, called only by the warehouse's shared one-second observation frame. */
+	void CaptureSnapshot();
+	void DiscardSnapshot();
+	const TArray<FAgvLidarReturn>& GetLastReturns() const { return LastReturns; }
+
 	/** Moves the points measured since the last call into Out (appended). */
 	void TakePoints(TArray<FVector>& Out);
 
 	/** Increments every time the head completes a revolution (a full scan). */
+	UFUNCTION(BlueprintPure, Category="AGV|LiDAR")
 	int32 GetRevolutionCount() const { return RevolutionCount; }
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|LiDAR")
@@ -92,6 +107,7 @@ public:
 
 private:
 	TArray<FVector> Points;
+	TArray<FAgvLidarReturn> LastReturns;
 	FRandomStream Noise;
 	bool bNoiseSeeded = false;
 	/** Head position in columns, fractional. */

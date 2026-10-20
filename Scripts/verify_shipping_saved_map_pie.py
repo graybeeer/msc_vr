@@ -79,6 +79,31 @@ def check(name):
     print('SHIPPING_SAVED_MAP_CHECK_PASSED', name)
 
 
+def validate_dock_clearance(named, trucks, stage):
+    bridges = {a for a in named.values() if a.actor_has_tag('LogisticsFixedDock')
+               and any(unreal.WarehouseDamageSystem.is_physical_contact(p)
+                       for p in a.get_components_by_class(unreal.PrimitiveComponent))}
+    assert len(bridges) == 3, ('Missing physical fixed dock bridges', stage, len(bridges))
+    cartons = [named[label] for label in original]
+    pallets = [p for truck in trucks for p in truck.get_editor_property('initial_pallets')]
+    assert len(cartons) == 48 and len(pallets) == 6 and len(set(pallets)) == 6
+    parts_checked = 0
+    for actor in cartons+pallets:
+        parts = [p for p in actor.get_components_by_class(unreal.PrimitiveComponent)
+                 if unreal.WarehouseDamageSystem.is_physical_contact(p)]
+        assert parts, ('Truck stock has no physical body', stage, actor.get_actor_label())
+        for part in parts:
+            overlaps = unreal.SystemLibrary.component_overlap_components(part, part.get_world_transform(),
+                [unreal.ObjectTypeQuery.OBJECT_TYPE_QUERY1, unreal.ObjectTypeQuery.OBJECT_TYPE_QUERY2],
+                unreal.PrimitiveComponent, [actor]) or []
+            hits = [(p.get_owner().get_actor_label(), p.get_name()) for p in overlaps if p.get_owner() in bridges]
+            assert not hits, ('Truck stock overlaps a fixed dock bridge', stage, actor.get_actor_label(), part.get_name(), hits)
+            parts_checked += 1
+    report.setdefault('dock_clearance', {})[stage] = {'cartons': len(cartons), 'pallets': len(pallets),
+                                                    'physical_parts': parts_checked, 'fixed_bridges': len(bridges)}
+    check(stage+' native clearance: all 48 cartons and six pallet bodies avoid all three fixed dock bridges')
+
+
 def complete(ok, message):
     report.update(passed=ok, message=message, wall_seconds=round(time.monotonic() - started, 2))
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -113,6 +138,7 @@ def validate_editor(named):
     assert not trucks[0].get_editor_property('initial_pallets') and not trucks[2].get_editor_property('initial_pallets')
     assert all(len(t.get_editor_property('load_slots')) == 6 and t.get_editor_property('dock_anchor') for t in trucks)
     assert len({str(t.get_editor_property('truck_id')) for t in trucks}) == 3
+    validate_dock_clearance(named, trucks, 'editor')
     report.update(inbound_slots=len(inbound.slots), outbound_slots=len(outbound.slots), original_cartons=len(original))
     check('three trucks, independent dock assignments and enough receiving manifest slots')
 
@@ -193,6 +219,7 @@ def tick(dt):
             assert all(not t.get_editor_property('manifest_pallets') for t in trucks if t != incoming)
             assert all(not a.get_component_by_class(unreal.StaticMeshComponent).is_simulating_physics() for a in contents)
             assert all(a.actor_has_tag('LogisticsInTransit') for a in contents + manifest)
+            validate_dock_clearance(live, trucks, 'runtime')
             assert not system.get_editor_property('shipments'), 'Map startup fabricated a shipping order'
             report.update(inbound_pallets=len(manifest), manifest_cartons=len(contents), payload_kg=incoming.payload_mass_kg())
             check('real saved warehouse: six original pallet units / 48 unique unchanged cartons, expected payload and three ready docks')

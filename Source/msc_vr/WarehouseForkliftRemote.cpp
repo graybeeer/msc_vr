@@ -4,6 +4,7 @@
 #include "WarehousePallet.h"
 #include "WarehouseChargingStation.h"
 #include "WarehouseElevator.h"
+#include "Agv/AgvShadowSensors.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
 #include "Engine/OverlapResult.h"
@@ -73,6 +74,7 @@ void AWarehouseForklift::BeginPlay()
  Super::BeginPlay();
  InitializePhysicalRig();
  FleetCoordinator=AWarehouseFleetCoordinator::Find(this);
+ for (const auto& Job : PendingJobs) if (IsValid(Job.Pallet)) WorkOrderSourcePoses.Add(Job.JobId,Job.Pallet->GetActorTransform());
  if (bAutoStart)
  {
   FTimerHandle Handle;
@@ -116,6 +118,7 @@ bool AWarehouseForklift::BeginRemoteControl(AActor* Operator)
  else ResumeState=State;
  if (IsValid(ChargingStation)) ChargingStation->Release(this);
  RemoteOperator=Operator; bPowered=true; bReplanAfterRemote=true;
+ InvalidateSensorSnapshot(TEXT("SMARTPHONE REMOTE - ALL SENSOR SAMPLING DISABLED"));
  // Poll the operator before consuming its heartbeat, including a slow frame.
  AddTickPrerequisiteActor(Operator);
  RemoteForward=RemoteSteering=RemoteLift=0; BrakeDrive();
@@ -130,6 +133,7 @@ void AWarehouseForklift::EndRemoteControl(AActor* Operator)
  RemoveTickPrerequisiteActor(Operator);
  RemoteForward=RemoteSteering=RemoteLift=0; BrakeDrive(); bPowered=false;
  RemoteOperator=nullptr;
+ InvalidateSensorSnapshot(TEXT("REMOTE ENDED - FRESH AUTONOMOUS SCAN REQUIRED"));
  if (bAutonomousMode) TransitionAI(EWarehouseAIState::Paused,TEXT("REMOTE ENDED / E: SELF CHECK AND REPLAN"));
  else SetStatus(TEXT("REMOTE ENDED / E: SELF CHECK / G: REMOTE"));
 }
@@ -166,8 +170,33 @@ bool AWarehouseForklift::UpdateLoadSupport(float Dt)
 bool AWarehouseForklift::RemotePoseClear(const FTransform& Pose)
 {
  if (IsRemoteControlled()) return true;
- if (!RefreshObstacleChecks()) return bTurnObstacleClear;
+ const float StepYaw=FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,Pose.Rotator().Yaw);
+ if (SensorMode==EWarehouseSensorMode::Autonomous)
+ {
+  const float Direction=FMath::IsNearlyZero(StepYaw) ? 0.f : FMath::Sign(StepYaw);
+  if (Direction!=LastTurnScanDirection) TurnObstacleSnapshot=INDEX_NONE;
+  LastTurnScanDirection=Direction;
+ }
+ if (!ConsumeObstacleSnapshot(TurnObstacleSnapshot)) return bTurnObstacleClear;
  bTurnObstacleClear=PhysicalPoseClear(Pose);
+ float HorizonYaw=0;
+ FTransform LastCandidate=Pose;
+ if (bTurnObstacleClear && SensorMode==EWarehouseSensorMode::Autonomous && Wheels.Num()>=3)
+ {
+  const FVector Pivot=(Wheels[1]->GetComponentLocation()+Wheels[2]->GetComponentLocation())*.5f;
+  HorizonYaw=FMath::Clamp(StepYaw*1.1f/FMath::Max(.008f,GetWorld()->GetDeltaSeconds()),-35.f,35.f);
+  for (float Alpha=.2f;Alpha<=1.001f;Alpha+=.2f)
+  {
+   const FQuat Turn(FVector::UpVector,FMath::DegreesToRadians(HorizonYaw*Alpha));
+   LastCandidate=FTransform(Turn*GetActorQuat(),Pivot+Turn.RotateVector(GetActorLocation()-Pivot));
+   if (!PhysicalPoseClear(LastCandidate))
+   { bTurnObstacleClear=false;break; }
+  }
+ }
+ if ((AIState==EWarehouseAIState::NavigateCharge || AIState==EWarehouseAIState::DockCharge) && FParse::Param(FCommandLine::Get(),TEXT("DriveDiagnostics")))
+  UE_LOG(LogTemp,Log,TEXT("AGV_CHARGE_TURN_SCAN %s clear=%d stepYaw=%.4f horizonYaw=%.4f candidate=%s routeGoal=%s route=%d/%d snapshot=%d"),
+   *VehicleName,bTurnObstacleClear,StepYaw,HorizonYaw,*LastCandidate.ToString(),
+   PlannedRoute.IsEmpty() ? TEXT("NONE") : *PlannedRoute.Last().Pose.ToString(),RouteIndex,PlannedRoute.Num(),SensorKit ? SensorKit->SnapshotCount : -1);
  return bTurnObstacleClear;
 }
 bool AWarehouseForklift::PhysicalPoseClear(const FTransform& Pose,bool CheckTranslation) const
@@ -176,8 +205,10 @@ bool AWarehouseForklift::PhysicalPoseClear(const FTransform& Pose,bool CheckTran
  FloorParams.AddIgnoredActors(GetPhysicalLoads());
  FHitResult Ground;
  const FVector P=Pose.GetLocation();
- if (!GetWorld()->LineTraceSingleByChannel(Ground,P+FVector(0,0,3),P-FVector(0,0,5),ECC_Visibility,FloorParams) ||
-     Ground.ImpactNormal.Z<.98f) return false;
+ if (SensorMode==EWarehouseSensorMode::Autonomous)
+ { if (!PerceivedFloorSupport(P,&Ground)) return false; }
+ else if (!GetWorld()->LineTraceSingleByChannel(Ground,P+FVector(0,0,3),P-FVector(0,0,5),ECC_Visibility,FloorParams) ||
+          Ground.ImpactNormal.Z<.98f) return false;
  // Linear movement uses ClearToMove's swept contact test. A snapshot overlap
  // cannot distinguish bearing contact from a jam on a continuously dynamic load.
  if (!CheckTranslation && Pose.GetRotation().Equals(GetActorQuat(),1.e-5f)) return true;
@@ -192,8 +223,15 @@ bool AWarehouseForklift::PhysicalPoseClear(const FTransform& Pose,bool CheckTran
  }
  for (auto* Part : Parts)
  {
-  if (!WarehousePhysics::IsPhysicalContact(Part) || !Part->IsQueryCollisionEnabled() || Part->BodyInstance.WeldParent) continue;
+  if (!WarehousePhysics::IsPhysicalContact(Part) || !Part->IsQueryCollisionEnabled()) continue;
   const FTransform Candidate=Part->GetComponentTransform().GetRelativeTransform(GetActorTransform())*Pose;
+  if (SensorMode==EWarehouseSensorMode::Autonomous)
+  {
+   TArray<AActor*> Ignored=Loads;
+   if (!PerceivedPartClear(Part,Candidate,Ignored,Ground.GetComponent())) return false;
+   continue;
+  }
+  if (Part->BodyInstance.WeldParent) continue;
   TArray<FOverlapResult> Hits;
   GetWorld()->ComponentOverlapMultiByChannel(Hits,Part,Candidate.GetLocation(),Candidate.GetRotation(),Part->GetCollisionObjectType(),Params);
   for (const auto& Hit : Hits) if (Hit.bBlockingHit)

@@ -4,7 +4,7 @@
 
 Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. 센서 인식 이상, 충돌, 포크와 팔레트/적재물 결합 실패 같은 상황을 재현하고, 창고 운영 조건별 효율을 비교하는 것이 목표다. 향후 물리 거동은 질량·관성·마찰·접촉·하중을 실제 장비에 맞춰 검증해야 한다.
 
-**현재 맵:** 3층 복층·승강기, 트럭 적재함과 외부 환경, 양손 화물 운반, 1층 지게차 2대의 자율 작업·G 스마트폰 원격 조작, 센서/충돌/하중 검사와 자동 충전이 있다. 사람·차량·화물은 Chaos 강체와 유한 구동력을 사용한다. 실행 검증·계수·한계는 `PHYSICS.md`, 맵은 `WAREHOUSE.md`, 장비 사양은 `VNSL14_SPEC.md`를 확인한다. 별도 개발 중인 `Source/msc_vr/Agv/`의 타이어·LiDAR 모듈은 현재 `WarehouseForklift`에 통합되지 않았다.
+**현재 맵:** 3층 복층·승강기, 트럭 적재함과 외부 환경, 양손 화물 운반, 1층 지게차 2대의 자율 작업·G 스마트폰 원격 조작, 센서/충돌/하중 검사와 자동 충전이 있다. 사람·차량·화물은 Chaos 강체와 유한 구동력을 사용한다. 실행 검증·계수·한계는 `PHYSICS.md`, 맵은 `WAREHOUSE.md`, 장비 사양은 `VNSL14_SPEC.md`를 확인한다. 기존 `WarehouseForklift`에 `Agv`의 센서만 연결하며, 별도 타이어·주행 알고리즘은 연결하지 않는다.
 
 ## 작업별 첫 탐색 경로
 
@@ -72,7 +72,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 정적 삼각형·동적 볼록 충돌 에셋 | `Scripts/prepare_warehouse_assets.py`, `Source/msc_vr/WarehouseCargo.cpp` | `Content/Warehouse/Collision/`, `Content/Warehouse/Physics/` (로컬 재생성물) |
 | 물리 실측·LiDAR·경로 계획 확장 | `PHYSICS.md`의 실측 전 가정, `AUTONOMY.md`의 경로·인식 범위 | `WarehouseForkliftPhysics.cpp`, `Config/DefaultEngine.ini`, 관련 레벨/블루프린트 |
 | 별도 Agv 동역학·LiDAR·내비게이션 모듈 | `Source/msc_vr/Agv/FORKLIFT_NAVIGATION.md`, 같은 폴더의 관련 컴포넌트 | `Scripts/verify_agv_*.py`; 현재 맵 지게차의 자율 작업은 `WarehouseForkliftAI.cpp` |
-| 센서 브랜치 분석·선별 병합 기획·원격/주기/지도·관측 계약 | `AUTONOMY.md`의 센서 브랜치 병합 기획(2026-10-20, 미적용) | 대상 `feature/forklift-navigation`의 `AgvShadowSensors`·`AgvAutoAttach`; 현재 운용 코드에는 아직 병합·활성화하지 않음 |
+| 센서·고정 건물 지도·관측 정보 경계·1초 검사·원격 분리 | `AUTONOMY.md`, `WarehouseForkliftPerception.cpp`, `Agv/AgvShadowSensors.h/.cpp`, `Scripts/verify_forklift_sensors_pie.py` | 지도 태그·독립 시험 차량의 운용 맵 제외는 `Scripts/configure_sensor_structure_tags.py`, 경로 연결은 `WarehouseForkliftAI`, 원격은 `WarehouseForkliftRemote`. 별도 타이어/주행 AI는 연결하지 않음 |
 | 달리기·앉기·팔레트에 내려놓기·쌓인 상자 중력 | `Source/msc_vr/msc_vrCharacter.h/.cpp`, `WarehouseCargo.h/.cpp`, `Scripts/verify_warehouse_interaction_pie.py` | `WAREHOUSE.md`의 플레이어 조작, 기존 운반/파손 검사 |
 | 설정 메뉴·전지적 관찰 카메라·지붕 숨김·F1 와이어프레임 충돌 | `Source/msc_vr/msc_vrPlayerController.h/.cpp`, `Config/DefaultInput.ini`의 `DebugExecBindings`, `Scripts/configure_observer_view.py` | `Scripts/verify_view_and_wheel_fixes_pie.py`, `Scripts/verify_observer_view_pie.py`, `Scripts/verify_warehouse_interaction_pie.py`, `Saved/Config/WindowsEditor/Game.ini` (로컬 설정) |
 | 1인칭 조작·카메라 | `Source/msc_vr/msc_vrCharacter.*`, `msc_vrPlayerController.*`, `msc_vrCameraManager.*` | `Content/FirstPerson/Blueprints/`, `Content/Input/`, `Config/DefaultInput.ini` |
@@ -150,6 +150,7 @@ msc_vr/
     configure_mezzanine.py
     configure_multi_truck_docks.py
     configure_observer_view.py
+    configure_sensor_structure_tags.py
     configure_shipping_system.py
     configure_truck_interior.py
     configure_warehouse_computer.py
@@ -219,6 +220,7 @@ msc_vr/
     verify_forklift_autonomy.py
     verify_forklift_autonomy_pie.py
     verify_forklift_recovery_pie.py
+    verify_forklift_sensors_pie.py
     verify_forklift_training.py
     verify_heavy_test_cargo_pie.py
     verify_human_landing_pie.py
@@ -302,6 +304,7 @@ msc_vr/
       WarehouseForklift.h
       WarehouseForkliftAI.cpp
       WarehouseForkliftParking.cpp
+      WarehouseForkliftPerception.cpp
       WarehouseForkliftPhysics.cpp
       WarehouseForkliftRecovery.cpp
       WarehouseForkliftRemote.cpp

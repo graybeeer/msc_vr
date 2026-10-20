@@ -217,7 +217,7 @@ bool WarehouseElevatorLayout::Rebuild(AActor* Context,bool ValidatePlacement,con
    if (!Actor) { Destroy(Next);return false; }
    Next.Add(Actor);
    Members.Emplace(Actor,Source.Actor.Get());
-   Actor->Tags={TEXT("LayoutFixed"),TEXT("ElevatorRuntimeFloor"),FName(*FString::Printf(TEXT("WarehouseFloor%d"),Region.Floor))};
+   Actor->Tags={TEXT("LayoutFixed"),TEXT("ElevatorRuntimeFloor"),TEXT("WarehouseMapStructure"),FName(*FString::Printf(TEXT("WarehouseFloor%d"),Region.Floor))};
    if (Region.Floor==0) Actor->Tags.Add(TEXT("ObserverArea"));
    auto* Mesh=Actor->GetStaticMeshComponent();
    Mesh->SetMobility(EComponentMobility::Movable);

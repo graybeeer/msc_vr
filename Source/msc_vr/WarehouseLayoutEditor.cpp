@@ -520,7 +520,11 @@ bool AWarehouseLayoutEditor::PlacementClear()
   // Truck walls, doors and cargo floors are supported by their chassis. Only
   // the chassis touches the yard; tracing beneath every internal panel would
   // reject a valid truck move because its own grouped floor is ignored.
-  const FBox B=Actor->GetComponentsBoundingBox(true);
+  // Logical anchors and editor sprites move with their group but do not need
+  // physical support. Use the same contact classification as overlap checks.
+  FBox B(ForceInit);
+  for (const auto& Part:A.Parts)
+   if (auto* C=Cast<UPrimitiveComponent>(Part.Component.Get());WarehousePhysics::IsPhysicalContact(C)) B+=C->Bounds.GetBox();
   if (GroupOf(Actor).ToString().StartsWith(TEXT("LayoutGroup:TruckDock")) &&
       B.IsValid && B.Min.Z>OriginalBounds.Min.Z+2.) continue;
   if (!B.IsValid || B.Min.Z>FloorIndex*400.+8 || B.Max.Z<FloorIndex*400.) continue;
@@ -531,7 +535,11 @@ bool AWarehouseLayoutEditor::PlacementClear()
    const double SupportHeight=FMath::Min(FloorIndex*400.,FMath::GridSnap(B.Min.Z,10.));
    const FVector Point(X,Y,SupportHeight+3);
    if (!GetWorld()->LineTraceSingleByChannel(Hit,Point,Point-FVector(0,0,12),ECC_Visibility,FloorParams) || Hit.ImpactNormal.Z<.9f)
-   { Status=TEXT("바닥 밖이거나 개구부입니다. 원래 위치로 되돌렸습니다.");return false; }
+   {
+    UE_LOG(LogTemp,Warning,TEXT("LAYOUT_FLOOR_REJECT actor=%s point=%s bounds=%s hit=%s normal=%s floor=%d"),
+     *Actor->GetActorNameOrLabel(),*Point.ToString(),*B.ToString(),*GetNameSafe(Hit.GetComponent()),*Hit.ImpactNormal.ToString(),FloorIndex);
+    Status=TEXT("바닥 밖이거나 개구부입니다. 원래 위치로 되돌렸습니다.");return false;
+   }
   }
  }
  return true;
@@ -617,6 +625,7 @@ void AWarehouseLayoutEditor::UpdateReferences()
    // Moving a cabinet must not promote an unfinished lift to delivery. Only a
    // charging trip needs a new route; ongoing work keeps its physical phase.
    It->LastObstacleCheckSeconds=-1;It->ObstacleCheckFrame=MAX_uint64;
+   It->InvalidateSensorSnapshot(TEXT("CHARGER LAYOUT UPDATED"));
    const bool ChargingPhase=It->AIState>=EWarehouseAIState::PlanCharge && It->AIState<=EWarehouseAIState::LeaveCharger;
    if (RelocatedChargerVehicles.Contains(*It) && (ChargingPhase || (It->bChargePending && It->ActiveJob.JobId.IsEmpty()))) It->RefreshAfterLayout();
   }

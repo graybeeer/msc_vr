@@ -67,6 +67,8 @@ def production_rig(label, position):
 
 floors = [block('ManualFloorA', (-1850, 0, -10), (4300, 8000, 20)),
           block('ManualFloorB', (2150, 0, -10), (3700, 8000, 20))]
+for floor in floors:
+    floor.tags = ['WarehouseMapStructure']
 block('ManualWall', (1200, 0, 100), (40, 600, 200))
 # Physical Pawn beside the aisle, inside the old scanner envelope but clear of the vehicle.
 person = block('ManualPerson', (180, 82, 85), (30, 30, 170))
@@ -126,7 +128,8 @@ def finish(ok, detail):
         print('OBSTACLE_INTERVAL_PIE_PASSED autonomous one-second sampling; manual operation performs no scanner queries')
     unreal.unregister_slate_post_tick_callback(handle)
     level.editor_request_end_play()
-    unreal.SystemLibrary.quit_editor()
+    if '-keeptesteditoropen' not in unreal.SystemLibrary.get_command_line().lower():
+        unreal.SystemLibrary.quit_editor()
 
 
 def tick(dt):

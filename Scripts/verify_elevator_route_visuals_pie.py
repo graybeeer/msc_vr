@@ -4,6 +4,8 @@ Copies the saved vehicle rig into an unsaved three-floor Entry fixture. A real
 work order, finite motors, doors/platform and Chaos contacts perform the trip.
 No actor poses, velocities, AI states or routes are assigned after PIE starts.
 Only camera/floor visibility and the production 4x clock are controlled.
+Use -SensorRegressionSkipCapture for native transport/component checks without
+screenshots; this does not certify rendered image quality.
 """
 import json
 from pathlib import Path
@@ -11,6 +13,10 @@ import sys
 import time
 import traceback
 import unreal
+
+SKIP_CAPTURE = '-sensorregressionskipcapture' in unreal.SystemLibrary.get_command_line().lower()
+if SKIP_CAPTURE:
+    print('ELEVATOR_ROUTE_CAPTURE_SKIPPED', 'Native two-trip transport, floor and arrow-component assertions retained; no rendered-image claim')
 
 sys.path.insert(0, str(Path(__file__).parent))
 from apply_real_world_scale import fit
@@ -47,12 +53,12 @@ for floor in range(3):
         deck.static_mesh_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Cube'))
         deck.static_mesh_component.set_collision_profile_name('BlockAll')
         deck.set_actor_scale3d(unreal.Vector(width / 100, depth / 100, .2))
-        if floor:
-            deck.tags = [f'WarehouseFloor{floor}']
+        deck.tags = ['WarehouseMapStructure'] + ([f'WarehouseFloor{floor}'] if floor else [])
 pit = spawn(unreal.StaticMeshActor, 'ArrowPitBase', (1000, 1600, -30))
 pit.static_mesh_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Cube'))
 pit.static_mesh_component.set_collision_profile_name('BlockAll')
 pit.set_actor_scale3d(unreal.Vector(2.82, 3.52, .2))
+pit.tags = ['WarehouseMapStructure']
 lift = spawn(unreal.WarehouseElevator, 'ArrowElevator', (1000, 1600, 0), 90)
 vehicle = spawn(unreal.WarehouseForklift, 'ArrowAGV', (300, 400, .1), 90)
 vehicle.set_editor_property('auto_start', False)
@@ -124,7 +130,8 @@ def finish():
     (out / 'Report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     unreal.unregister_slate_post_tick_callback(handle)
     level.editor_request_end_play()
-    unreal.SystemLibrary.quit_editor()
+    if '-keeptesteditoropen' not in unreal.SystemLibrary.get_command_line().lower():
+        unreal.SystemLibrary.quit_editor()
 
 
 def tick(dt):
@@ -196,8 +203,9 @@ def tick(dt):
                 assert body(pallet).get_editor_property('custom_depth_stencil_value') == 192
                 assert abs(part.get_instance_transform(0, True).translation.z - (floor * 400 + .8)) < .1
                 filename = f'{trip}_{stage}_L{floor + 1}.png'
-                unreal.SystemLibrary.execute_console_command(game, 'HighResShot 1600x900 filename=' + (out / filename).as_posix(), pc)
-                captures.add(filename)
+                if not SKIP_CAPTURE:
+                    unreal.SystemLibrary.execute_console_command(game, 'HighResShot 1600x900 filename=' + (out / filename).as_posix(), pc)
+                    captures.add(filename)
             seen.add(key)
             report.append({'trip': trip, 'stage': stage, 'time': now, 'floor': lift.floor_at_height(vehicle.get_actor_location().z),
                            'route': [[p.x, p.y, p.z] for p in route], 'bars': part.get_instance_count() if part else 0})
@@ -232,7 +240,8 @@ def tick(dt):
             assert not route and part.get_instance_count() == 0, 'Completed route arrows remained'
             c, e = pallet.get_actor_bounds(False)
             assert abs(c.z - e.z - 400) < 2, ('Pallet did not unload on L2', c, e)
-            assert all((out / name).is_file() for name in captures), 'Screenshot missing'
+            if not SKIP_CAPTURE:
+                assert all((out / name).is_file() for name in captures), 'Screenshot missing'
             print('ELEVATOR_ROUTE_VISUALS_PIE_PASSED', 'native empty 1->3, loaded 3->2, floor arrows, observer filter, completion cleanup')
             finish()
     except Exception:

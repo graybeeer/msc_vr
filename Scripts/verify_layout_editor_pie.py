@@ -3,12 +3,21 @@
 Calls the native drag transaction API, rather than injecting mouse input.
 Commit/cancel/overlap/floor checks retain actual meshes and physical joints.
 Metadata must first be authored by configure_warehouse_layout.py.
+
+-LayoutPhysicalOnly excludes screen projection/marquee checks for NullRHI.
+It retains all native layout, face-snap and post-resume physics assertions.
 """
+import json
+from pathlib import Path
 import time
+import math
 import traceback
 import unreal
 
 LEVEL = '/Game/FirstPerson/Lvl_FirstPerson'
+PHYSICAL_ONLY = '-layoutphysicalonly' in unreal.SystemLibrary.get_command_line().lower()
+report = {'passed': False, 'physicalOnly': PHYSICAL_ONLY, 'renderedUIExcluded': PHYSICAL_ONLY,
+          'excludedChecks': ['screen-projected marquee selection and cursor projection'] if PHYSICAL_ONLY else []}
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
@@ -61,6 +70,7 @@ phase = 0
 game = layout = live = selected = snapshot = None
 resume_at = None
 truck_snapshot = None
+truck_controller = truck_cargo_identity = None
 selection_pair = None
 selection_at = None
 
@@ -123,6 +133,7 @@ def capture(members):
         components = {}
         for component in actor.get_components_by_class(unreal.SceneComponent):
             physical = isinstance(component, unreal.PrimitiveComponent)
+            transit_body = physical and 'LogisticsInTransit' in tag_values(actor) and unreal.WarehouseDamageSystem.is_physical_contact(component)
             components[component.get_name()] = {
                 'part': component,
                 'pose': component.get_world_transform(),
@@ -131,6 +142,8 @@ def capture(members):
                 'collision': component.get_collision_enabled() if physical else None,
                 'simulated': component.is_simulating_physics() if physical else None,
                 'mass': component.get_mass() if physical and component.is_simulating_physics() else None,
+                'mass_override': (component.get_editor_property('body_instance').get_editor_property('override_mass'), component.get_editor_property('body_instance').get_editor_property('mass_in_kg_override')) if transit_body else None,
+                'gravity': component.is_gravity_enabled() if transit_body else None,
             }
         result[actor] = {'pose': actor.get_actor_transform(), 'components': components,
                          'actor_collision': actor.get_actor_enable_collision()}
@@ -177,6 +190,56 @@ def restored(snapshot):
                 assert part.is_simulating_physics() == state['simulated'], ('Physics not restored', part.get_name())
                 if state['mass'] is not None:
                     assert abs(part.get_mass() - state['mass']) < .01, ('Physical mass changed', actor.get_actor_label(), part.get_name())
+                if state['gravity'] is not None:
+                    assert part.is_gravity_enabled() == state['gravity'], ('Transit body gravity changed', actor.get_actor_label(), part.get_name())
+                if state['mass_override'] is not None:
+                    body = part.get_editor_property('body_instance')
+                    assert (body.get_editor_property('override_mass'), body.get_editor_property('mass_in_kg_override')) == state['mass_override'], ('Transit saved mass override changed', actor.get_actor_label(), part.get_name())
+
+
+def truck_cargo_contract(controller, cartons, identity=None):
+    assert controller.is_manifest_ready(), controller.get_editor_property('status')
+    manifest = list(controller.get_editor_property('manifest_pallets'))
+    assert set(manifest) == set(controller.get_editor_property('initial_pallets')), 'Original truck pallet manifest changed'
+    unit_cargo = [cargo for pallet in manifest for cargo in controller.get_unit_cargo(pallet)]
+    assert len(unit_cargo) == len(set(unit_cargo)), 'Carton belongs to multiple truck units'
+    transit = {cargo for cargo in cartons if 'LogisticsInTransit' in tag_values(cargo)}
+    assert set(unit_cargo) == transit, 'Transit cartons do not match the exact truck manifest'
+    assert all(controller.is_unit_on_truck(pallet) for pallet in manifest), 'A manifested unit left its recorded truck slot'
+    expected_mass = sum(p.get_editor_property('pallet_mass_kg') + p.get_editor_property('payload_mass_kg') for p in manifest)
+    expected_mass += sum(c.get_editor_property('gross_mass_kg') for c in unit_cargo)
+    assert abs(controller.payload_mass_kg() - expected_mass) < .1, 'Truck unit mass metadata changed'
+    current_identity = {}
+    for carton in cartons:
+        part = carton.get_component_by_class(unreal.StaticMeshComponent)
+        mass = carton.get_editor_property('gross_mass_kg')
+        assert part.is_simulating_physics() == (carton not in transit), ('Truck cinematic/dynamic body contract changed', carton.get_actor_label())
+        if carton in transit:
+            body = part.get_editor_property('body_instance')
+            assert body.get_editor_property('override_mass') and abs(body.get_editor_property('mass_in_kg_override') - mass) < .1, ('Truck carton saved mass override changed', carton.get_actor_label())
+        else:
+            assert abs(part.get_mass() - mass) < .1, ('Truck carton native mass changed', carton.get_actor_label())
+        current_identity[carton] = (str(carton.get_editor_property('cargo_id')), mass)
+    if identity is not None:
+        assert current_identity == identity, 'Truck carton identity or gross mass changed during layout editing'
+    return current_identity
+
+
+def truck_overlap_diagnostic(stage, controller, carton, bridge, restore_pose=None):
+    pallet = next((p for p in controller.get_editor_property('manifest_pallets') if carton in controller.get_unit_cargo(p)), None)
+    part = carton.get_component_by_class(unreal.StaticMeshComponent)
+    for actor in (bridge, carton, pallet):
+        if actor:
+            print('LAYOUT_TRUCK_PROBE_BOUNDS', stage, actor.get_actor_label(), actor.get_actor_transform(),
+                  [(p.get_name(), unreal.SystemLibrary.get_component_bounds(p)) for p in actor.get_components_by_class(unreal.PrimitiveComponent) if unreal.WarehouseDamageSystem.is_physical_contact(p)])
+    print('LAYOUT_TRUCK_PROBE_FRAME', stage, controller.get_actor_transform(), 'manifest_valid', bool(pallet and controller.is_unit_on_truck(pallet)),
+          'cargo_in_pallet', unreal.MathLibrary.make_relative_transform(carton.get_actor_transform(), pallet.get_actor_transform()) if pallet else None,
+          'pallet_in_truck', unreal.MathLibrary.make_relative_transform(pallet.get_actor_transform(), controller.get_actor_transform()) if pallet else None)
+    for name, pose in [('current', part.get_world_transform())] + ([('restore_preview', restore_pose)] if restore_pose else []):
+        overlaps = unreal.SystemLibrary.component_overlap_components(part, pose,
+            [unreal.ObjectTypeQuery.OBJECT_TYPE_QUERY1, unreal.ObjectTypeQuery.OBJECT_TYPE_QUERY2], unreal.PrimitiveComponent, [carton]) or []
+        print('LAYOUT_TRUCK_PROBE_NATIVE', stage, name, pose, 'bridge_overlap', any(p.get_owner() == bridge for p in overlaps),
+              'hits', [(p.get_owner().get_actor_label(), p.get_name()) for p in overlaps])
 
 
 def drag(actor, point, delta, commit):
@@ -603,16 +666,24 @@ def face_snap_checks():
 
 
 def finish(ok, detail):
-    print('LAYOUT_EDITOR_PIE_PASSED' if ok else 'LAYOUT_EDITOR_PIE_FAILED', detail)
+    report.update(passed=ok, message=detail, wall_seconds=round(time.monotonic()-started, 2))
+    output = Path(unreal.Paths.project_saved_dir()) / 'Testing/LayoutEditor'
+    output.mkdir(parents=True, exist_ok=True)
+    (output / ('PhysicalReport.json' if PHYSICAL_ONLY else 'Report.json')).write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    marker = 'LAYOUT_PHYSICAL_PIE_' if PHYSICAL_ONLY else 'LAYOUT_EDITOR_PIE_'
+    print(marker + ('PASSED' if ok else 'FAILED'), detail)
     if layout and layout.get_editor_property('editing'):
         layout.set_editing(False, 0)
     unreal.unregister_slate_post_tick_callback(handle)
     level.editor_request_end_play()
-    unreal.SystemLibrary.quit_editor()
+    if '-keeptesteditoropen' not in unreal.SystemLibrary.get_command_line().lower():
+        unreal.SystemLibrary.quit_editor()
 
 
 def tick(dt):
     global game, layout, live, phase, selected, snapshot, resume_at, truck_snapshot, selection_pair, selection_at, selection_camera
+    global truck_controller, truck_cargo_identity
     try:
         assert time.monotonic() - started < 180, 'Layout transaction wall timeout'
         game = editor.get_game_world()
@@ -623,6 +694,18 @@ def tick(dt):
             if now < 3:
                 return
             live = list(unreal.GameplayStatics.get_all_actors_of_class(game, unreal.Actor))
+            for actor in live:
+                if isinstance(actor, unreal.AgvTestVehicle):
+                    nav = actor.get_editor_property('navigator')
+                    drive = actor.get_editor_property('drive')
+                    localizer = actor.get_editor_property('localizer')
+                    print('LAYOUT_EXISTING_AGV_PROTOTYPE', actor.get_actor_label(), actor.get_class().get_path_name(),
+                          'tick_enabled', actor.is_actor_tick_enabled(), 'editor_only', actor.get_editor_property('is_editor_only_actor'),
+                          'navigating', nav.is_navigating(), 'nav_state', nav.get_editor_property('state'),
+                          'sensors_sleep_when_parked', actor.get_editor_property('sleep_sensors_when_parked'),
+                          'sensors_asleep', actor.get_editor_property('sensors_asleep'), 'speed_cm', drive.get_editor_property('speed_cm_s'),
+                          'map_cells', localizer.get_editor_property('map_occupied_cells'),
+                          'sensor_scans', [s.get_revolution_count() for s in (actor.get_editor_property(n) for n in ('top_lidar', 'scanner_l', 'scanner_r', 'fork_sensor_l', 'fork_sensor_r'))])
             # Fleet membership is now discovered dynamically. This geometry/
             # restart test needs idle vehicles; full dispatch is tested separately.
             for actor in live:
@@ -695,6 +778,7 @@ def tick(dt):
         if phase == 1:
             layout.set_category(unreal.WarehouseLayoutCategory.ZONE)
             computer = next(a for a in live if isinstance(a, unreal.WarehouseComputer))
+            shipping = next(a for a in live if isinstance(a, unreal.WarehouseShippingSystem))
             for index, zone in enumerate(list(layout.get_editor_property('zones'))):
                 low = [zone.centre.x - zone.half_size.x, zone.centre.y - zone.half_size.y, zone.centre.z - zone.half_size.z]
                 high = [zone.centre.x + zone.half_size.x, zone.centre.y + zone.half_size.y, zone.centre.z + zone.half_size.z]
@@ -703,6 +787,12 @@ def tick(dt):
                             and low[1] <= a.get_actor_location().y <= high[1] and a.get_actor_location().z < 398]
                 members = with_supported(list(zone.members) + goods_inside(low, high) + vehicles)
                 assert any(isinstance(a, unreal.WarehousePallet) for a in members), ('No zone pallet contents', zone.name)
+                anchors = [a for a in zone.members if a.get_actor_label() == 'WH_ShippingZone_' + zone.name]
+                assert len(anchors) == 1 and anchors[0] in members, ('Shipping anchor missing from its moving zone group', zone.name)
+                anchor = anchors[0]
+                assert all(not unreal.WarehouseDamageSystem.is_physical_contact(p) for p in anchor.get_components_by_class(unreal.PrimitiveComponent)), ('Logical shipping anchor became a physical object', zone.name)
+                assert any(z.anchor == anchor for z in shipping.get_editor_property('zones')), ('Shipping lost the zone anchor reference', zone.name)
+                anchor_start = anchor.get_actor_location()
                 snapshot = capture(members)
                 value = computer.get_editor_property('outbound_centre')
                 centre = unreal.Vector(value.x, value.y, value.z)
@@ -710,11 +800,16 @@ def tick(dt):
                 point = zone.centre
                 delta = find_accepted(None, point, snapshot, [(-80, 0), (80, 0), (0, -80), (0, 80), (-150, 0), (150, 0)])
                 assert (layout.get_editor_property('zones')[index].centre - point - delta).length() < .1
+                assert anchor in layout.get_editor_property('zones')[index].members
+                assert (anchor.get_actor_location() - anchor_start - delta).length() < .1, ('Logical shipping anchor stayed behind during a valid zone move', zone.name)
                 if zone.name == 'Outbound':
                     assert (computer.get_editor_property('outbound_centre') - centre - delta).length() < .1, ('Computer outbound centre stale',computer.get_editor_property('outbound_centre'),centre,delta)
                     for old, new in zip(goals, computer.get_editor_property('outbound_destinations')):
                         assert (new.translation - old - delta).length() < .1, 'Computer outbound destination stale'
                 rollback_committed(None, point, delta)
+                assert (anchor.get_actor_location() - anchor_start).length() < .1, ('Shipping anchor did not return with its zone', zone.name)
+                assert all(not unreal.WarehouseDamageSystem.is_physical_contact(p) for p in anchor.get_components_by_class(unreal.PrimitiveComponent))
+                print('LAYOUT_NONPHYSICAL_SHIPPING_ANCHOR_PASSED', zone.name, anchor.get_actor_label())
                 print('LAYOUT_ZONE_CONTENTS_CENTRE_GOALS_PASSED', zone.name, len(members))
             phase = 2
             return
@@ -795,9 +890,11 @@ def tick(dt):
             truck_snapshot = capture(members)
             other_trucks = capture([a for a in live if 'LayoutGroup:TruckDock01' in tag_values(a)
                                     or 'LayoutGroup:TruckDock03' in tag_values(a)])
-            for carton in cartons:
-                part = carton.get_component_by_class(unreal.StaticMeshComponent)
-                assert part.is_simulating_physics() and abs(part.get_mass() - carton.get_editor_property('gross_mass_kg')) < .1
+            truck_controller = next(a for a in live if isinstance(a, unreal.WarehouseLogisticsTruck) and truck in a.get_editor_property('truck_parts'))
+            truck_cargo_identity = truck_cargo_contract(truck_controller, cartons)
+            bridge = next(a for a in live if a.get_actor_label() == 'TRK_DockLeveller')
+            probe_carton = next(a for a in cartons if a.get_actor_label() == 'TRK_Cargo_000')
+            truck_overlap_diagnostic('before_drag', truck_controller, probe_carton, bridge)
             point = truck.get_actor_location()
             assert layout.begin_drag(truck, point), str(layout.get_editor_property('status'))
             layout.update_drag(point + unreal.Vector(0, -10, 400))
@@ -806,26 +903,49 @@ def tick(dt):
             assert not layout.end_drag(False)
             translated(truck_snapshot, unreal.Vector())
             restored(truck_snapshot)
-            delta = find_accepted(truck, point, truck_snapshot, [(0, -100), (0, -50), (-20, -50), (20, -50)])
+            bridge = next(a for a in live if a.get_actor_label() == 'TRK_DockLeveller')
+            assert 'LogisticsFixedDock' in tag_values(bridge) and bridge not in members
+            bridge_before = capture([bridge])
+            bridge_centre, bridge_extent = bridge.get_actor_bounds(False)
+            solid_bounds = [unreal.SystemLibrary.get_component_bounds(p) for a in members
+                            for p in a.get_components_by_class(unreal.PrimitiveComponent)
+                            if unreal.WarehouseDamageSystem.is_physical_contact(p)]
+            # The bridge now belongs to the fixed dock. The previous small
+            # offsets can intersect it, so also try separating their real
+            # physical bounds longitudinally, without bypassing collision.
+            south = math.floor((bridge_centre.y - bridge_extent.y - max(c.y + e.y for c, e, r in solid_bounds) - 20) / 10) * 10
+            north = math.ceil((bridge_centre.y + bridge_extent.y - min(c.y - e.y for c, e, r in solid_bounds) + 20) / 10) * 10
+            print('LAYOUT_FIXED_DOCK_CLEARANCE_CANDIDATES', 'south', south, 'north', north, 'fixed bridge', bridge_centre, bridge_extent)
+            delta = find_accepted(truck, point, truck_snapshot, [(0, -100), (0, -50), (-20, -50), (20, -50), (0, south), (0, north)])
+            translated(bridge_before, unreal.Vector())
+            restored(bridge_before)
             translated(other_trucks, unreal.Vector())
             restored(other_trucks)
+            probe_part = probe_carton.get_component_by_class(unreal.StaticMeshComponent)
+            truck_overlap_diagnostic('before_return', truck_controller, probe_carton, bridge,
+                truck_snapshot[probe_carton]['components'][probe_part.get_name()]['pose'])
             rollback_committed(truck, point, delta)
             translated(truck_snapshot, unreal.Vector())
             restored(truck_snapshot)
-            print('LAYOUT_TRUCK_INTERIOR_CARGO_COMMIT_RETURN_PASSED', len(members), 'group members, 48 dynamic cartons; delta', delta)
+            truck_cargo_contract(truck_controller, cartons, truck_cargo_identity)
+            print('LAYOUT_TRUCK_INTERIOR_CARGO_COMMIT_RETURN_PASSED', len(members), 'group members, 48 original cartons; manifested cinematic bodies frozen, nontransit bodies dynamic; mass/identity retained; delta', delta)
             layout.set_category(unreal.WarehouseLayoutCategory.RACK)
             selection_pair = multi_rack_checks()
-            pc = unreal.GameplayStatics.get_player_controller(game, 0)
-            selection_camera = next(a for a in live if a.get_actor_label() == 'LayoutSelectionTestCamera')
-            pc.set_view_target_with_blend(selection_camera, 0.)
-            selection_at = time.monotonic()
+            if not PHYSICAL_ONLY:
+                pc = unreal.GameplayStatics.get_player_controller(game, 0)
+                selection_camera = next(a for a in live if a.get_actor_label() == 'LayoutSelectionTestCamera')
+                pc.set_view_target_with_blend(selection_camera, 0.)
+                selection_at = time.monotonic()
             phase = 41
             return
 
         if phase == 41:
-            if time.monotonic() - selection_at < .2:
+            if not PHYSICAL_ONLY and time.monotonic() - selection_at < .2:
                 return  # Project through a real refreshed camera frame, including while paused.
-            marquee_checks(selection_pair)
+            if PHYSICAL_ONLY:
+                print('LAYOUT_RENDERED_UI_EXCLUDED', report['excludedChecks'])
+            else:
+                marquee_checks(selection_pair)
             face_snap_checks()
             pc = unreal.GameplayStatics.get_player_controller(game, 0)
             pc.set_view_target_with_blend(unreal.GameplayStatics.get_player_pawn(game, 0), 0.)
@@ -842,11 +962,14 @@ def tick(dt):
             assert selected.get_editor_property('ai_state') == unreal.WarehouseAIState.READY, selected.get_editor_property('status')
             assert selected.root_component.is_simulating_physics(), 'AGV body simulation was lost'
             restored(snapshot)  # Idle elevator attachment/physics survives real world ticks.
-            restored(truck_snapshot)  # Every truck carton retains native mass/collision/physics after real resume ticks.
+            restored(truck_snapshot)  # Restore the exact dynamic or cinematic body state after real resume ticks.
+            truck_cargo_contract(truck_controller, list(truck_cargo_identity), truck_cargo_identity)
             for part in selected.get_components_by_class(unreal.StaticMeshComponent):
                 assert part.get_world_location().z > -15, ('AGV part fell through floor', part.get_name())
             print('LAYOUT_UNPAUSE_AGV_RESTART_PASSED')
-            finish(True, 'Saved single/multiple racks and contents, projected marquee/floor scope, rack/wall face snap, zones, charger/parked rig references and remote/away exclusion, collision/floor rollback, physical AGV rig, common 3-floor elevator, truck cargo and simulation resume')
+            scope = ('screen-projected marquee and cursor projection excluded; ' if PHYSICAL_ONLY
+                     else 'projected marquee/floor scope, ')
+            finish(True, 'Saved single/multiple racks and contents, ' + scope + 'rack/wall face snap, zones, charger/parked rig references and remote/away exclusion, collision/floor rollback, physical AGV rig, common 3-floor elevator, truck cargo and simulation resume')
     except Exception:
         finish(False, traceback.format_exc())
 

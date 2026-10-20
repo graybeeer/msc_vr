@@ -76,14 +76,22 @@ def configure():
         width, length = high.y-low.y, high.x-low.x
         assert width >= 225 and length >= 450 and roof_low.z-high.z >= 200
         columns = ((low.y+high.y)/2-56, (low.y+high.y)/2+56)
-        rows = ((low.x+high.x)/2-160, (low.x+high.x)/2, (low.x+high.x)/2+160)
+        _, bridge_high = local_bounds(leveller, frame)
+        # The fixed inclined bridge reaches into the rear of the bed. Reserve
+        # its actual footprint before packing three 110 cm pallet rows forward.
+        row_start = max(low.x+57, bridge_high.x+57)
+        rows = tuple(row_start+i*115 for i in range(3))
+        assert rows[-1] <= high.x-57, ('Truck floor cannot fit three pallet rows clear of its fixed bridge',
+                                      index, low.x, high.x, bridge_high.x, rows)
         slots = [unreal.Transform(location=unreal.Vector(x, y, high.z+.15)) for x in rows for y in columns]
         truck.set_editor_property('truck_id', f'TRUCK-{index:02}')
         truck.set_editor_property('dock_id', f'DOCK-{index:02}')
         truck.set_editor_property('truck_parts', parts)
         truck.set_editor_property('dock_anchor', dock)
         truck.set_editor_property('load_slots', slots)
-        truck.set_editor_property('load_slot_size_cm', unreal.Vector(158, 111, roof_low.z-high.z-.3))
+        truck.set_editor_property('load_slot_size_cm', unreal.Vector(111, 111, roof_low.z-high.z-.3))
+        print('SHIPPING_TRUCK_BRIDGE_CLEARANCE', index, 'floor', low.x, high.x,
+              'bridge rear limit', bridge_high.x, 'rows', rows, 'slot x/y', 111)
         truck.set_editor_property('rated_payload_kg', 6000)
         # Presentation-only straight departure through the existing unobstructed bay.
         # It stops outside the visible apron; this is not a road traffic simulation.

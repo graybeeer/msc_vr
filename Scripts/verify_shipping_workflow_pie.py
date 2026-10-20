@@ -50,7 +50,7 @@ def cube(label, point, size):
     return a
 
 
-cube('ShippingFloor', (0, 0, -10), (7200, 5400, 20))
+cube('ShippingFloor', (0, 0, -10), (7200, 5400, 20)).tags = ['WarehouseMapStructure']
 spawn(unreal.PlayerStart, 'ShippingStart', (-2200, -2000, 125))
 vehicle = spawn(unreal.WarehouseForklift, 'ShippingAGV', (0, 0, .1))
 vehicle.set_editor_property('auto_start', False)
