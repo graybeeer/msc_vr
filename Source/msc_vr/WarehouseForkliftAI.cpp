@@ -420,9 +420,35 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  {
   if (Found && Query.bInsertionRetryEscape) RecoveryStart=RouteStart;
   if (!Found)
+  {
    UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_NO_ROUTE %s from=%s goal=%s candidates=%d start_edges=%d goal_edges=%d start_clear=%d goal_clear=%d"),
     *VehicleName,*GetActorLocation().ToString(),*Goal.GetLocation().ToString(),CandidateCount,StartConnections,GoalConnections,
     NavigationClear(GetActorTransform(),&Query),NavigationClear(Goal,&Query));
+   // Name what stands in the way so the log says why, not only that: the goal pose itself and, when it is free, the
+   // straight approach lane behind it (the stretch every route into this goal has to use last).
+   auto Blockers=[&](const FTransform& Pose)
+   {
+    TArray<FOverlapResult> Hits;
+    GetWorld()->OverlapMultiByChannel(Hits,Pose.TransformPosition(Query.Envelope.GetCenter()),Pose.GetRotation(),ECC_Visibility,
+     FCollisionShape::MakeBox(Query.Envelope.GetExtent()),Query.Params);
+    FString Names;
+    TSet<FString> Seen;
+    for (const FOverlapResult& Hit : Hits)
+     if (Hit.bBlockingHit && Hit.GetActor() && Seen.Num()<4 && !Seen.Contains(Hit.GetActor()->GetActorLabel()))
+     { Seen.Add(Hit.GetActor()->GetActorLabel()); Names+=Hit.GetActor()->GetActorLabel()+TEXT(" "); }
+    return Names;
+   };
+   FString GoalBlockers=Blockers(Goal);
+   FString LaneBlockers;
+   for (float Back=40.f; Back<=400.f && LaneBlockers.IsEmpty(); Back+=40.f)
+   {
+    FTransform Behind=Goal;
+    Behind.SetLocation(Goal.GetLocation()-Goal.GetUnitAxis(EAxis::X)*Back);
+    LaneBlockers=Blockers(Behind);
+    if (!LaneBlockers.IsEmpty()) LaneBlockers=FString::Printf(TEXT("%.0fcm behind the goal: %s"),Back,*LaneBlockers);
+   }
+   UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_BLOCKERS %s goal_pose=[%s] approach_lane=[%s]"),*VehicleName,*GoalBlockers,*LaneBlockers);
+  }
  };
  PlannedRoute.Reset(); RouteIndex=0;bEndpointDriving=false;bEndpointOrienting=false;bRouteTurning=false;EndpointSegment=-1;
  float DirectCost;
