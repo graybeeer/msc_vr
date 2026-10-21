@@ -11,6 +11,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
+| 화물 승강기 외형·양개문·캐빈·독립 스탠드 호출대·FBX·맵 적용·운행 검사 | `ELEVATOR_MODEL.md`, `Art/Equipment/CargoElevator/`, `Content/Warehouse/Elevator/`, `Scripts/apply_cargo_elevator.py`, `Scripts/verify_cargo_elevator_pie.py` | Blender 생성·렌더·내보내기는 `Scripts/*cargo_elevator.py`, 스탠드 수정은 `Scripts/refine_cargo_elevator_call_stands.py`, 공식 MCP 진입은 `Content/Python/warehouse_elevator_tools.py`; 구동은 `WarehouseElevator`, 운용 규격은 `MEZZANINE.md` |
 | 충돌/비충돌 공통 기준·선택 전용 판·모든 판정의 대상 분류 | `COLLISION_POLICY.md`, `WarehousePhysics.h/.cpp`, `Scripts/verify_collision_policy_pie.py` | `WarehouseWaitingBay`, `WarehouseDamageSystem`, `WarehouseLayoutEditor`, `WarehouseForklift*`, `WarehouseElevator`, `Config/DefaultEngine.ini` |
 | 배치 모드 재배치·추가·삭제·다중 선택·스냅 적재·시설 누락 | `WarehouseLayoutEditor.h/.cpp`, `WarehouseLayoutInventory.h/.cpp`, `WarehouseLayoutSnap.h/.cpp`, `Scripts/verify_layout_inventory_pie.py`, `Scripts/verify_layout_editor_pie.py` | 하단 Slate 도구·렌더링 검사는 `msc_vrPlayerController`, `Scripts/verify_layout_editing_ui_pie.py`, 승강기 개구부는 `WarehouseElevatorLayout`, 슬롯은 `WarehouseInboundZone`, 사용 기준은 `WAREHOUSE.md` |
 | 보류된 물류 FIFO·품목/질량/크기/재질 보존·컴퓨터 데이터 입력/삭제 | `WarehouseLayoutInventory.h/.cpp`, `WarehouseComputer.h/.cpp`, `WarehouseComputerUI.cpp`, `Scripts/verify_layout_inventory_pie.py` | 접촉/손상 참조는 `WarehouseDamageSystem`, 상품 생성 규칙은 `CARGO_RULES.md`, 사용자 조작은 `WAREHOUSE.md` |
@@ -96,6 +97,7 @@ msc_vr/
   CARGO_RULES.md
   CHARGER_MODEL.md
   COLLISION_POLICY.md
+  ELEVATOR_MODEL.md
   FLEET_ALGORITHM_COMPARISON.md
   MCP_SETUP.md
   MEZZANINE.md
@@ -118,6 +120,7 @@ msc_vr/
   Scripts/
     analyze_warehouse_profile.py
     apply_agv_charger.py
+    apply_cargo_elevator.py
     apply_exterior_fab_assets.py
     apply_forklift_drive_tuning.py
     apply_intact_cargo_physics.py
@@ -128,6 +131,7 @@ msc_vr/
     apply_warehouse_services.py
     build_agv_charger.py
     build_agv_motion_test.py
+    build_cargo_elevator.py
     build_cat_accessory.py
     build_column_protectors.py
     build_first_person_warehouse.py
@@ -166,6 +170,8 @@ msc_vr/
     export_agv_charger.py
     export_agv_counterbalance.py
     export_agv_refined.py
+    export_cargo_elevator.py
+    export_local_cargo.py
     export_orange_agv_unreal.py
     export_warehouse_services.py
     import_agv_original5.py
@@ -188,7 +194,9 @@ msc_vr/
     preview_warehouse_services.py
     profile_warehouse_pie.py
     refine_agv_original_proportions.py
+    refine_cargo_elevator_call_stands.py
     refine_warehouse_services_layout.py
+    render_cargo_elevator.py
     restore_front_wheel_mounts.py
     revise_agv_counterbalance.py
     update_structure_summary.ps1
@@ -201,6 +209,7 @@ msc_vr/
     verify_agv_warehouse.py
     verify_agv_warehouse_pie.py
     verify_area_labels_pie.py
+    verify_cargo_elevator_pie.py
     verify_cargo_pallet_physics_pie.py
     verify_cargo_rules.py
     verify_cargo_variety_pie.py
@@ -231,6 +240,7 @@ msc_vr/
     verify_layout_editing_ui_pie.py
     verify_layout_editor_pie.py
     verify_layout_inventory_pie.py
+    verify_local_cargo.py
     verify_mcp.py
     verify_mezzanine.py
     verify_mezzanine_pie.py
@@ -379,6 +389,8 @@ msc_vr/
       Textures/
     MSPresets/
       MS_Foliage_Material/
+    Python/
+      __pycache__/
     Scene_Warehouse/
     Variant_Horror/
       Lvl_Horror.umap
@@ -400,10 +412,10 @@ msc_vr/
       Textures/
     Warehouse/
       AGV/
-      AnimationSample/
       Cargo/
       ChargingStation/
       Collision/
+      Elevator/
       Exterior/
       Materials/
       Physics/
@@ -412,9 +424,10 @@ msc_vr/
       GrenadeLauncher/
       Pistol/
       Rifle/
+  .codex/
   Art/
-  Build/
   SourceAssets/
+  Tools/
 ```
 <!-- STRUCTURE:END -->
 

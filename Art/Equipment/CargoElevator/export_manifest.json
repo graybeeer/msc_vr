@@ -1,0 +1,443 @@
+{
+  "date": "2026-10-21",
+  "units": "metres in Blender; FBX unit metadata converts to centimetres",
+  "axis_forward": "-Y",
+  "axis_up": "Z",
+  "runtime_application_report": "../../../Saved/Testing/CargoElevator/ApplyReport.json",
+  "materials": {
+    "ELV Safety yellow": {
+      "base_color": [
+        0.9599999785423279,
+        0.5400000214576721,
+        0.02500000037252903,
+        1.0
+      ],
+      "metallic": 0.18000000715255737,
+      "roughness": 0.36000001430511475
+    },
+    "ELV Black rubber": {
+      "base_color": [
+        0.012000000104308128,
+        0.01600000075995922,
+        0.01899999938905239,
+        1.0
+      ],
+      "metallic": 0.05000000074505806,
+      "roughness": 0.6399999856948853
+    },
+    "ELV Graphite frame": {
+      "base_color": [
+        0.03799999877810478,
+        0.05000000074505806,
+        0.061000000685453415,
+        1.0
+      ],
+      "metallic": 0.6499999761581421,
+      "roughness": 0.36000001430511475
+    },
+    "ELV Brushed stainless": {
+      "base_color": [
+        0.46000000834465027,
+        0.5099999904632568,
+        0.5400000214576721,
+        1.0
+      ],
+      "metallic": 0.8799999952316284,
+      "roughness": 0.30000001192092896
+    },
+    "ELV Satin door steel": {
+      "base_color": [
+        0.36000001430511475,
+        0.4000000059604645,
+        0.41999998688697815,
+        1.0
+      ],
+      "metallic": 0.8399999737739563,
+      "roughness": 0.3499999940395355
+    },
+    "ELV Warm cabin LED": {
+      "base_color": [
+        1.0,
+        0.8700000047683716,
+        0.6600000262260437,
+        1.0
+      ],
+      "metallic": 0.05000000074505806,
+      "roughness": 0.30000001192092896
+    },
+    "ELV Display glass": {
+      "base_color": [
+        0.00800000037997961,
+        0.01899999938905239,
+        0.023000000044703484,
+        1.0
+      ],
+      "metallic": 0.25,
+      "roughness": 0.1599999964237213
+    },
+    "ELV Indicator mint": {
+      "base_color": [
+        0.03500000014901161,
+        0.6499999761581421,
+        0.33000001311302185,
+        1.0
+      ],
+      "metallic": 0.15000000596046448,
+      "roughness": 0.25999999046325684
+    },
+    "ELV White lettering": {
+      "base_color": [
+        0.7900000214576721,
+        0.8299999833106995,
+        0.8299999833106995,
+        1.0
+      ],
+      "metallic": 0.05000000074505806,
+      "roughness": 0.4300000071525574
+    },
+    "ELV Emergency red": {
+      "base_color": [
+        0.6499999761581421,
+        0.017999999225139618,
+        0.012000000104308128,
+        1.0
+      ],
+      "metallic": 0.15000000596046448,
+      "roughness": 0.33000001311302185
+    },
+    "ELV Loading deck steel": {
+      "base_color": [
+        0.18000000715255737,
+        0.20999999344348907,
+        0.23000000417232513,
+        1.0
+      ],
+      "metallic": 0.6800000071525574,
+      "roughness": 0.47999998927116394
+    }
+  },
+  "parts": [
+    {
+      "name": "SM_ELV_Bollards_L1",
+      "pivot_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "dimensions_cm": [
+        25.0,
+        328.99999618530273,
+        98.24999570846558
+      ],
+      "vertices": 3264,
+      "polygons": 2916,
+      "file": "UnrealParts/SM_ELV_Bollards_L1.fbx"
+    },
+    {
+      "name": "SM_ELV_Bollards_L2",
+      "pivot_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "dimensions_cm": [
+        25.0,
+        328.99999618530273,
+        98.25003147125244
+      ],
+      "vertices": 3264,
+      "polygons": 2916,
+      "file": "UnrealParts/SM_ELV_Bollards_L2.fbx"
+    },
+    {
+      "name": "SM_ELV_Bollards_L3",
+      "pivot_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "dimensions_cm": [
+        25.0,
+        328.99999618530273,
+        98.25005531311035
+      ],
+      "vertices": 3264,
+      "polygons": 2916,
+      "file": "UnrealParts/SM_ELV_Bollards_L3.fbx"
+    },
+    {
+      "name": "SM_ELV_CabinShell",
+      "pivot_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "dimensions_cm": [
+        343.4999942779541,
+        249.5000123977661,
+        289.0000104904175
+      ],
+      "vertices": 2112,
+      "polygons": 2156,
+      "file": "UnrealParts/SM_ELV_CabinShell.fbx"
+    },
+    {
+      "name": "SM_ELV_CallStand_L1",
+      "pivot_cm": [
+        -285.0,
+        -205.0,
+        0.0
+      ],
+      "dimensions_cm": [
+        30.000019073486328,
+        28.000009059906006,
+        145.00000476837158
+      ],
+      "vertices": 2684,
+      "polygons": 2443,
+      "file": "UnrealParts/SM_ELV_CallStand_L1.fbx"
+    },
+    {
+      "name": "SM_ELV_CallStand_L2",
+      "pivot_cm": [
+        -285.0,
+        -205.0,
+        400.0
+      ],
+      "dimensions_cm": [
+        30.000019073486328,
+        28.000009059906006,
+        144.99998092651367
+      ],
+      "vertices": 3356,
+      "polygons": 2947,
+      "file": "UnrealParts/SM_ELV_CallStand_L2.fbx"
+    },
+    {
+      "name": "SM_ELV_CallStand_L3",
+      "pivot_cm": [
+        -285.0,
+        -205.0,
+        800.0
+      ],
+      "dimensions_cm": [
+        30.000019073486328,
+        28.000009059906006,
+        145.0000286102295
+      ],
+      "vertices": 3312,
+      "polygons": 2914,
+      "file": "UnrealParts/SM_ELV_CallStand_L3.fbx"
+    },
+    {
+      "name": "SM_ELV_Gate_0_-1",
+      "pivot_cm": [
+        -205.0,
+        -60.000003814697266,
+        135.0
+      ],
+      "dimensions_cm": [
+        7.499980926513672,
+        120.05000114440918,
+        268.0000066757202
+      ],
+      "vertices": 1936,
+      "polygons": 1756,
+      "file": "UnrealParts/SM_ELV_Gate_0_-1.fbx"
+    },
+    {
+      "name": "SM_ELV_Gate_0_1",
+      "pivot_cm": [
+        -205.0,
+        60.000003814697266,
+        135.0
+      ],
+      "dimensions_cm": [
+        7.499980926513672,
+        120.05000114440918,
+        268.0000066757202
+      ],
+      "vertices": 1936,
+      "polygons": 1756,
+      "file": "UnrealParts/SM_ELV_Gate_0_1.fbx"
+    },
+    {
+      "name": "SM_ELV_Gate_1_-1",
+      "pivot_cm": [
+        -205.0,
+        -60.000003814697266,
+        535.0
+      ],
+      "dimensions_cm": [
+        7.499980926513672,
+        120.05000114440918,
+        268.0000305175781
+      ],
+      "vertices": 1936,
+      "polygons": 1756,
+      "file": "UnrealParts/SM_ELV_Gate_1_-1.fbx"
+    },
+    {
+      "name": "SM_ELV_Gate_1_1",
+      "pivot_cm": [
+        -205.0,
+        60.000003814697266,
+        535.0
+      ],
+      "dimensions_cm": [
+        7.499980926513672,
+        120.05000114440918,
+        268.0000305175781
+      ],
+      "vertices": 1936,
+      "polygons": 1756,
+      "file": "UnrealParts/SM_ELV_Gate_1_1.fbx"
+    },
+    {
+      "name": "SM_ELV_Gate_2_-1",
+      "pivot_cm": [
+        -205.0,
+        -60.000003814697266,
+        935.0000610351562
+      ],
+      "dimensions_cm": [
+        7.499980926513672,
+        120.05000114440918,
+        268.0000305175781
+      ],
+      "vertices": 1936,
+      "polygons": 1756,
+      "file": "UnrealParts/SM_ELV_Gate_2_-1.fbx"
+    },
+    {
+      "name": "SM_ELV_Gate_2_1",
+      "pivot_cm": [
+        -205.0,
+        60.000003814697266,
+        935.0000610351562
+      ],
+      "dimensions_cm": [
+        7.499980926513672,
+        120.05000114440918,
+        268.0000305175781
+      ],
+      "vertices": 1936,
+      "polygons": 1756,
+      "file": "UnrealParts/SM_ELV_Gate_2_1.fbx"
+    },
+    {
+      "name": "SM_ELV_GuideRails",
+      "pivot_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "dimensions_cm": [
+        13.499987125396729,
+        235.00001430511475,
+        1130.0000190734863
+      ],
+      "vertices": 960,
+      "polygons": 980,
+      "file": "UnrealParts/SM_ELV_GuideRails.fbx"
+    },
+    {
+      "name": "SM_ELV_Landing_L1",
+      "pivot_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "dimensions_cm": [
+        41.00000858306885,
+        511.9999885559082,
+        308.40001106262207
+      ],
+      "vertices": 9836,
+      "polygons": 7827,
+      "file": "UnrealParts/SM_ELV_Landing_L1.fbx"
+    },
+    {
+      "name": "SM_ELV_Landing_L2",
+      "pivot_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "dimensions_cm": [
+        41.00000858306885,
+        511.9999885559082,
+        308.40001106262207
+      ],
+      "vertices": 10508,
+      "polygons": 8331,
+      "file": "UnrealParts/SM_ELV_Landing_L2.fbx"
+    },
+    {
+      "name": "SM_ELV_Landing_L3",
+      "pivot_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "dimensions_cm": [
+        41.00000858306885,
+        511.9999885559082,
+        308.39996337890625
+      ],
+      "vertices": 10464,
+      "polygons": 8298,
+      "file": "UnrealParts/SM_ELV_Landing_L3.fbx"
+    },
+    {
+      "name": "SM_ELV_LiftPlatform",
+      "pivot_cm": [
+        0.0,
+        0.0,
+        -5.0
+      ],
+      "dimensions_cm": [
+        350.0,
+        240.00000953674316,
+        15.250000357627869
+      ],
+      "vertices": 4608,
+      "polygons": 1936,
+      "file": "UnrealParts/SM_ELV_LiftPlatform.fbx"
+    },
+    {
+      "name": "SM_ELV_ShaftEnclosure",
+      "pivot_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "dimensions_cm": [
+        383.75000953674316,
+        279.9999952316284,
+        1160.0000381469727
+      ],
+      "vertices": 864,
+      "polygons": 882,
+      "file": "UnrealParts/SM_ELV_ShaftEnclosure.fbx"
+    },
+    {
+      "name": "SM_ELV_ShaftFrame",
+      "pivot_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "dimensions_cm": [
+        402.99997329711914,
+        286.00001335144043,
+        1175.0000953674316
+      ],
+      "vertices": 1920,
+      "polygons": 1960,
+      "file": "UnrealParts/SM_ELV_ShaftFrame.fbx"
+    }
+  ],
+  "collision_note": "Use separate physical boxes for deck, walls and doors. Never one convex hull around the cabin void.",
+  "material_note": "FBX carries base PBR values. Procedural brushing is Blender-only; rebuild it in Unreal."
+}

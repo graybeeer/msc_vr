@@ -395,6 +395,7 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
    if (!LiftOnly && Wheels.Contains(Part) && Hit.Normal.Z>.98f &&
        Hit.PenetrationDepth<.5f && PartDelta.Z>=-.001f)
    {
+    if (IsValid(Elevator) && Elevator->IsCertifiedLandingSeam(this,Part,Hit)) continue;
     FCollisionQueryParams Bearing(SCENE_QUERY_STAT(RollingTyreSupport),false,this);
     Bearing.AddIgnoredActors(GetPhysicalLoads());
     FHitResult Ground;
@@ -470,7 +471,7 @@ bool AWarehouseForklift::MoveLift(float Height)
 bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt,float ArrivalTolerance)
 {
  const FVector Offset=Destination-GetActorLocation();
- const bool ElevatorLine=IsValid(Elevator) && (AIState==EWarehouseAIState::ElevatorBoard || AIState==EWarehouseAIState::ElevatorExit);
+ const bool ElevatorLine=IsValid(Elevator) && (AIState==EWarehouseAIState::ElevatorCall || AIState==EWarehouseAIState::ElevatorBoard || AIState==EWarehouseAIState::ElevatorExit);
  const float LateralLimit=AIState==EWarehouseAIState::DockCharge ? ChargingDockLateralLimitCm : AIState==EWarehouseAIState::AlignUnload ? 15.f : 5.f;
  // A long straight boarding line magnifies a small heading error. Measure
  // corridor departure against the shaft, then steer onto that same line.

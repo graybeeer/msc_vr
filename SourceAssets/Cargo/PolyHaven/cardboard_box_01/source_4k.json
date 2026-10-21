@@ -1,0 +1,29 @@
+{
+  "asset": "cardboard_box_01",
+  "source_mesh": "F:\\Works\\Unreal\\Assets\\cardboard_box_01_4k.blend\\cardboard_box_01_4k.blend",
+  "texture_directory": "F:\\Works\\Unreal\\Assets\\cardboard_box_01_4k.blend\\textures",
+  "normal_format": "OpenGL",
+  "files": {
+    "mesh": {
+      "filename": "cardboard_box_01_4k.fbx",
+      "sha256": "5538920bfcd3668f0e88dc680ae7d00a3a0f931c88d78aab21c1dbd2c41d0cc4"
+    },
+    "albedo": {
+      "filename": "cardboard_box_01_diff_4k.jpg",
+      "sha256": "a8fbd62deb25c6d540ab01341a71e608ba1fd0d6af4faad5bf8a0d02b3321c1d"
+    },
+    "normal": {
+      "filename": "cardboard_box_01_nor_gl_4k.png",
+      "sha256": "f0b8bde55974800d2e453be35d9c6caae1ba95bbcf29d90f328eb505240cff6e"
+    },
+    "roughness": {
+      "filename": "cardboard_box_01_rough_4k.png",
+      "sha256": "8ce906282cb674bf64bd8b9ecd89d1f70a6a9ab0cfc438ca6883f5246b06260e"
+    }
+  },
+  "dimensions_m": [
+    0.38702359795570374,
+    0.5158704519271851,
+    0.3417995572090149
+  ]
+}

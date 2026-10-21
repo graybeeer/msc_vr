@@ -20,6 +20,7 @@ Unreal Engine 5.8 기반 PC 프로젝트다. 물류창고에서 무인 지게차
 | [VNSL14_SPEC.md](VNSL14_SPEC.md) | 장비 공개 사양·게임 설정·배터리 모델의 가정 |
 | [REFINED_AGV.md](REFINED_AGV.md) | 현재 지게차 모델·치수 보정·기계 리그 |
 | [CHARGER_MODEL.md](CHARGER_MODEL.md) | 충전기 교체용 Blender 외형·FBX·접점 배치 기준 및 검증 범위 |
+| [ELEVATOR_MODEL.md](ELEVATOR_MODEL.md) | 화물 승강기 Blender 외형·분리 FBX·맵 적용과 실제 운행 검증 상태 |
 | [WAREHOUSE_SERVICES_MODEL.md](WAREHOUSE_SERVICES_MODEL.md) | 천장·벽면 설비/보호대 모델·FBX·현재 맵 배치 및 실제 검증 범위 |
 | [MEZZANINE.md](MEZZANINE.md) | 3층 복층·승강기 규격·층간 이동 인터록 |
 | [CARGO_RULES.md](CARGO_RULES.md) | 상품 특성·상자 크기·밀도·무게 생성 규칙 |

@@ -1,0 +1,28 @@
+{
+  "asset": "plastic_crate_01",
+  "source_mesh": "F:\\Works\\Unreal\\Projects\\msc_vr\\SourceAssets\\Cargo\\PolyHaven\\plastic_crate_01\\plastic_crate_01_2k.fbx",
+  "texture_directory": "F:\\Works\\Unreal\\Assets\\plastic_crate_01_4k.blend\\textures",
+  "normal_format": "OpenGL",
+  "files": {
+    "mesh": {
+      "filename": "plastic_crate_01_4k.fbx",
+      "sha256": "aaba0e90ab92e2dcce574bd465f71644deda838b1a79689072a169c552e95b07"
+    },
+    "albedo": {
+      "filename": "plastic_crate_01_diff_4k.jpg",
+      "sha256": "040541c52771bdf89f035518ba268dad87f672edf1d1ade64005df47d5bfdef5"
+    },
+    "normal": {
+      "filename": "plastic_crate_01_nor_gl_4k.png",
+      "sha256": "00a59378ce424dc559a5b291d8e3f5443fad22efdf2dfccc49d045967738974c"
+    },
+    "roughness": {
+      "filename": "plastic_crate_01_rough_4k.png",
+      "sha256": "51a5b1a090ecbf5567b2e031279a8736e43706db879553e3771c72d266178778"
+    },
+    "metallic": {
+      "filename": "plastic_crate_01_metal_4k.png",
+      "sha256": "cd589ea2979307bc850dba0fb3752279a3216f5c0e2c6fd03ab284e0fc9af744"
+    }
+  }
+}

@@ -40,6 +40,8 @@ Python MCP 검사기는 세션 종료 시 서버의 HTTP 202 응답에 대한 �
 
 ## Blender / Photoshop
 
+프로젝트에 추가된 승강기 적용·운행 검사 전용 MCP 도구의 진입점과 범위는 [승강기 모델 안내](ELEVATOR_MODEL.md)를 확인한다.
+
 | 구성 | 버전 / 커밋 | 위치 |
 | --- | --- | --- |
 | [mcp-for-blender](https://github.com/ahujasid/mcp-for-blender) | 2.1.1 / `41a1843`, 애드온 1.7 / protocol 11 | `Tools/MCP/mcp-for-blender/` |

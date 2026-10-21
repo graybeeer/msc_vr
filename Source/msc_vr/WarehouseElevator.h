@@ -4,6 +4,7 @@
 #include "WarehouseElevator.generated.h"
 
 class AWarehouseForklift;
+class UStaticMesh;
 class UStaticMeshComponent;
 class UTextRenderComponent;
 class UPhysicsConstraintComponent;
@@ -22,6 +23,10 @@ class MSC_VR_API AWarehouseElevator : public AActor
  GENERATED_BODY()
 public:
  AWarehouseElevator();
+ virtual void OnConstruction(const FTransform& Transform) override;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator|Model") bool bUseCargoModel=false;
+ UFUNCTION(BlueprintCallable, CallInEditor, Category="Elevator|Model") void ApplyCargoModel();
+ UFUNCTION(BlueprintCallable, Category="Elevator|Model") static void ConfigureModelCollision(UStaticMesh* Mesh,FName Part);
  virtual void BeginPlay() override;
  virtual void Tick(float DeltaSeconds) override;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator") bool bPowerAvailable=true;
@@ -48,8 +53,10 @@ public:
  UFUNCTION(BlueprintPure, Category="Elevator") FString CheckInterlocks() const;
  UFUNCTION(BlueprintPure, Category="Elevator") bool CanEnter(AWarehouseForklift* Vehicle) const;
  UFUNCTION(BlueprintPure, Category="Elevator") bool CanExit(AWarehouseForklift* Vehicle) const;
+ UFUNCTION(BlueprintPure, Category="Elevator") bool AreLandingDoorsClosed() const;
  // PLC-authorized deck support only; never a world/unknown-ground query.
  bool TraceCertifiedPlatformSupport(AWarehouseForklift* Vehicle,FVector Point,FHitResult& Support) const;
+ bool IsCertifiedLandingSeam(AWarehouseForklift* Vehicle,const UStaticMeshComponent* Wheel,const FHitResult& Contact) const;
  UFUNCTION(BlueprintCallable, Category="Elevator") bool RequestTransfer(AWarehouseForklift* Vehicle,int32 FromFloor,int32 ToFloor);
  UFUNCTION(BlueprintCallable, Category="Elevator") bool ConfirmBoarded(AWarehouseForklift* Vehicle);
  UFUNCTION(BlueprintCallable, Category="Elevator") bool ConfirmExited(AWarehouseForklift* Vehicle);
@@ -58,6 +65,10 @@ private:
  UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> Platform;
  UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UStaticMeshComponent>> Gates;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UTextRenderComponent> Display;
+ UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UStaticMeshComponent>> CargoParts;
+ UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> CargoCabin;
+ UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> CargoDeckVisual;
+ UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UStaticMeshComponent>> CargoDeckSupports;
  UPROPERTY(Transient) TObjectPtr<UPhysicsConstraintComponent> PlatformJoint;
  UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> GuideAnchor;
  UPROPERTY(Transient) TArray<TObjectPtr<UPhysicsConstraintComponent>> DoorJoints;
