@@ -218,6 +218,14 @@ private:
  FTransform PalletApproach(const FTransform& PalletPose,float Distance) const;
  EWarehouseAIState ResumeAI = EWarehouseAIState::Ready;
  EWarehouseAIState WaitResumeAI = EWarehouseAIState::Ready;
+ // A missing route (aisle blocked by a pallet, another vehicle's lease) is usually temporary. Wait and replan every
+ // RouteWaitRetrySeconds instead of faulting; only a very long wait ends in an operator fault.
+ static bool IsRouteWaitReason(const FString& Reason);
+ bool BeginRouteWait(EWarehouseAIState From,const FString& Reason);
+ bool bRouteWaiting=false;
+ float RouteWaitSeconds=0;
+ UPROPERTY(EditAnywhere, Category="Autonomy", meta=(ClampMin="0.5")) float RouteWaitRetrySeconds=3.f;
+ UPROPERTY(EditAnywhere, Category="Autonomy", meta=(ClampMin="10")) float RouteWaitTimeoutSeconds=900.f;
  UPROPERTY(Transient) TArray<TObjectPtr<AActor>> CarriedCargo;
  FTransform ObservedPallet;
  FVector RetractLocation = FVector::ZeroVector;

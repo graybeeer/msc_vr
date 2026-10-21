@@ -24,6 +24,12 @@ static uint32 WarehouseNavigationQueryCount=0;
 #include "PhysicsEngine/BodySetup.h"
 #include "HAL/IConsoleManager.h"
 
+// Individually switchable travel/alignment speed-ups (1 = on). They exist so a regression can be bisected without a rebuild.
+static TAutoConsoleVariable<int32> CVarOptPivotCost(TEXT("Warehouse.Opt.PivotCost"),1,TEXT("1: route planning charges a turn on the spot its real stop/turn/restart time; 0: arc length only."));
+static TAutoConsoleVariable<int32> CVarOptPivotRate(TEXT("Warehouse.Opt.PivotRate"),1,TEXT("1: turn on the spot at up to 0.4 rad/s (0.3 loaded); 0: the old 0.15-0.2 rad/s caps."));
+static TAutoConsoleVariable<int32> CVarOptIntermediatePivot(TEXT("Warehouse.Opt.IntermediatePivot"),1,TEXT("1: no exact stop-and-creep fit at a lane corner that is followed by another stretch of route."));
+static TAutoConsoleVariable<int32> CVarOptAlign(TEXT("Warehouse.Opt.Align"),1,TEXT("1: relaxed fork alignment tolerances and arrival-first decision before insertion."));
+static TAutoConsoleVariable<int32> CVarOptUnloadSpeed(TEXT("Warehouse.Opt.UnloadSpeed"),1,TEXT("1: faster approach into the unload slot and faster fork withdrawal."));
 static TAutoConsoleVariable<int32> CVarWarehouseGeometryPruning(TEXT("Warehouse.NavigationGeometryPruning"),1,
  TEXT("Reject unexecutable curves before native collision queries; 0 preserves the reference query order."));
 
@@ -69,6 +75,8 @@ void AWarehouseForklift::ReportJob(const FString& Result,const FString& Detail)
 void AWarehouseForklift::TransitionAI(EWarehouseAIState Next,const FString& Message)
 {
  AIState=Next; AIElapsed=0; DockStableSeconds=-1;bDockPullout=false;bRouteTurning=false; bRouteStarted=false; BrakeDrive();
+ if (Next==EWarehouseAIState::Ready || Next==EWarehouseAIState::Fault || Next==EWarehouseAIState::Off || Next==EWarehouseAIState::Paused || Next==EWarehouseAIState::SelfCheck)
+ { bRouteWaiting=false; RouteWaitSeconds=0; }
  if (FleetCoordinator && (Next==EWarehouseAIState::Ready || Next==EWarehouseAIState::Paused ||
      Next==EWarehouseAIState::Fault || Next==EWarehouseAIState::Off)) FleetCoordinator->Release(this);
  SetStatus(Message);
@@ -275,7 +283,9 @@ bool AWarehouseForklift::ConnectPoses(const FTransform& From,const FTransform& T
     if (!NavigationClear(FTransform(Turn,Point),Query)) return false;
    }
    FWarehouseRoutePoint Step;Step.Pose=To;Step.bPivot=true;Route.Add(Step);
-   Cost=FMath::Abs(FMath::DegreesToRadians(Angle))*MinimumTurningRadiusCm;
+   // Cost in cm of travel at cruise speed: a stop, a ~20deg/s turn and the restart take roughly 5s, far more than the
+   // arc length a turn on the spot would suggest, so prefer a few more metres of driving over extra pivots.
+   Cost=CVarOptPivotCost.GetValueOnGameThread()!=0 ? FMath::Abs(FMath::DegreesToRadians(Angle))*MinimumTurningRadiusCm*3.f+300.f : FMath::Abs(FMath::DegreesToRadians(Angle))*MinimumTurningRadiusCm;
    return true;
   }
  }
@@ -375,10 +385,37 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  ON_SCOPE_EXIT
  {
   if (Found && Query.bInsertionRetryEscape) RecoveryStart=RouteStart;
+  if (Found && bRouteWaiting && !bTrafficEscape) { bRouteWaiting=false; RouteWaitSeconds=0; }
   if (!Found)
+  {
    UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_NO_ROUTE %s from=%s goal=%s candidates=%d start_edges=%d goal_edges=%d start_clear=%d goal_clear=%d"),
     *VehicleName,*GetActorLocation().ToString(),*Goal.GetLocation().ToString(),CandidateCount,StartConnections,GoalConnections,
     NavigationClear(GetActorTransform(),&Query),NavigationClear(Goal,&Query));
+   // Name what stands in the way so the log says why, not only that: the goal pose itself and, when it is free, the
+   // straight approach lane behind it (the stretch every route into this goal has to use last).
+   auto Blockers=[&](const FTransform& Pose)
+   {
+    TArray<FOverlapResult> Hits;
+    GetWorld()->OverlapMultiByChannel(Hits,Pose.TransformPosition(Query.Envelope.GetCenter()),Pose.GetRotation(),ECC_Visibility,
+     FCollisionShape::MakeBox(Query.Envelope.GetExtent()),Query.Params);
+    FString Names;
+    TSet<FString> Seen;
+    for (const FOverlapResult& Hit : Hits)
+     if (Hit.bBlockingHit && Hit.GetActor() && Seen.Num()<4 && !Seen.Contains(Hit.GetActor()->GetActorLabel()))
+     { Seen.Add(Hit.GetActor()->GetActorLabel()); Names+=Hit.GetActor()->GetActorLabel()+TEXT(" "); }
+    return Names;
+   };
+   FString GoalBlockers=Blockers(Goal);
+   FString LaneBlockers;
+   for (float Back=40.f; Back<=400.f && LaneBlockers.IsEmpty(); Back+=40.f)
+   {
+    FTransform Behind=Goal;
+    Behind.SetLocation(Goal.GetLocation()-Goal.GetUnitAxis(EAxis::X)*Back);
+    LaneBlockers=Blockers(Behind);
+    if (!LaneBlockers.IsEmpty()) LaneBlockers=FString::Printf(TEXT("%.0fcm behind the goal: %s"),Back,*LaneBlockers);
+   }
+   UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_BLOCKERS %s goal_pose=[%s] approach_lane=[%s]"),*VehicleName,*GoalBlockers,*LaneBlockers);
+  }
  };
  PlannedRoute.Reset(); RouteIndex=0;bEndpointDriving=false;bEndpointOrienting=false;bRouteTurning=false;EndpointSegment=-1;
  float DirectCost;
@@ -491,8 +528,17 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
 bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
 {
  if (PlannedRoute.IsEmpty()) { BrakeDrive(); return true; }
+ // In-place turns are limited by the chassis (30 deg/s empty, 20 deg/s loaded, see CommandTurn). Command most of that
+ // and slow down proportionally to the remaining angle so the heading still settles inside its tolerance.
+ const bool OptPivotRate=CVarOptPivotRate.GetValueOnGameThread()!=0;
+ const bool OptAlign=CVarOptAlign.GetValueOnGameThread()!=0;
  const bool ChargingAlignment=AIState==EWarehouseAIState::NavigateCharge || (AIState==EWarehouseAIState::DockCharge && bDockPullout);
- const float HeadingTolerance=FMath::DegreesToRadians(ChargingAlignment && RouteIndex>=PlannedRoute.Num()-1 ? .2f : AIState==EWarehouseAIState::AlignUnload ? .5f : 1.f);
+ // Fork alignment only has to land inside the insertion window: the tines clear the holes by about 9.75cm each side and
+ // VerifyInsertion (CanEngage) accepts 2 degrees, so a 1 degree / 5cm fit only made the vehicle fidget at the pose.
+ const float HeadingTolerance=FMath::DegreesToRadians(ChargingAlignment && RouteIndex>=PlannedRoute.Num()-1 ? .2f : AIState==EWarehouseAIState::AlignUnload ? .5f : (OptAlign && AIState==EWarehouseAIState::AlignVehicle) ? 1.5f : 1.f);
+ // Fast turns on the spot only where the heading window is wide (>= 1 degree). Charger docking (0.2) and unload
+ // alignment (0.5) keep the old slow caps: a faster turn overshot those windows and broke the shared-charging run.
+ auto PivotRate=[&](float Error,float OldCap) { const bool Fast=OptPivotRate && HeadingTolerance>=FMath::DegreesToRadians(1.f)-1e-4f; return FMath::Clamp(FMath::Abs(Error)*2.f,.02f,Fast ? (bSupportingPallet ? .3f : .4f) : OldCap); };
  if (FleetCoordinator && !FleetCoordinator->Permit(this)) return false;
  RouteIndex=FMath::Min(RouteIndex,PlannedRoute.Num()-1);
  // AGV localization: travel decisions use NavigationTransform(); alignment/docking states keep the exact pose.
@@ -507,7 +553,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
   if (!bRouteTurning && FMath::Abs(CurrentSpeedCm)>1.f) return false;
   bRouteTurning=true;
   if (FMath::Abs(Angle)>HeadingTolerance)
-  { CommandTurn(FMath::Sign(Angle)*FMath::Clamp(FMath::Abs(Angle)*2.f,.02f,.15f),Dt);return false; }
+  { CommandTurn(FMath::Sign(Angle)*PivotRate(Angle,.15f),Dt);return false; }
   if (FMath::Abs(CurrentSpeedCm)>1.f) return false;
   if (ChassisBody && FMath::Abs(ChassisBody->GetPhysicsAngularVelocityInDegrees().Z)>.5f) return false;
   bRouteTurning=false;
@@ -527,8 +573,13 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  const float HeadingError=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(Pose.Rotator().Yaw,Goal.Pose.Rotator().Yaw));
  // Tighten heading for the loaded pallet's lever arm while retaining enough
  // position margin for nonholonomic steering. Final pallet acceptance stays 2cm.
- const float PositionTolerance=ChargingAlignment && SegmentEnd==PlannedRoute.Num()-1 ? .5f : AIState==EWarehouseAIState::AlignUnload ? 1.5f : 5.f;
- if (Remaining<80.f && Wheels.Num()>=3 && AIState!=EWarehouseAIState::AlignUnload)
+ // A lane corner that is followed by another stretch of route (not the final goal) only has to hand over to its pivot.
+ // Stopping, turning towards the node and creeping 80cm at 20cm/s for a 5cm fit there cost ~7s per corner and showed up as
+ // the vehicle fidgeting; the next segment steers back onto the line anyway. Final goals keep the exact approach.
+ const bool IntermediatePivot=CVarOptIntermediatePivot.GetValueOnGameThread()!=0 && SegmentEnd+1<PlannedRoute.Num()-1 && PlannedRoute[SegmentEnd+1].bPivot;
+ const bool RelaxedAlign=OptAlign && AIState==EWarehouseAIState::AlignVehicle;
+ const float PositionTolerance=ChargingAlignment && SegmentEnd==PlannedRoute.Num()-1 ? .5f : AIState==EWarehouseAIState::AlignUnload ? 1.5f : RelaxedAlign ? 7.f : IntermediatePivot ? 12.f : 5.f;
+ if (Remaining<(IntermediatePivot || RelaxedAlign ? 25.f : 80.f) && Wheels.Num()>=3 && AIState!=EWarehouseAIState::AlignUnload)
  {
   // Finish a lane pose at the real load-wheel axle. Rotating at the actor
   // origin moved the origin away from the goal and repeatedly replanned tiny
@@ -577,7 +628,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
   if (!bRouteTurning && FMath::Abs(CurrentSpeedCm)>=1.f) return false;
   bRouteTurning=true;
   if (FMath::Abs(HeadingError)>=HeadingTolerance)
-  { CommandTurn(FMath::Sign(HeadingError)*FMath::Clamp(FMath::Abs(HeadingError)*2.f,.02f,.2f),Dt);return false; }
+  { CommandTurn(FMath::Sign(HeadingError)*PivotRate(HeadingError,.2f),Dt);return false; }
   if (FMath::Abs(CurrentSpeedCm)>=1.f) return false;
   if (ChassisBody && FMath::Abs(ChassisBody->GetPhysicsAngularVelocityInDegrees().Z)>=.5f) return false;
   bRouteTurning=false;
@@ -597,7 +648,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
    if (SegmentEnd==PlannedRoute.Num()-1) return true;
    RouteIndex=SegmentEnd+1;return false;
   }
-  CommandTurn(FMath::Sign(HeadingError)*FMath::Clamp(FMath::Abs(HeadingError)*2.f,.02f,.15f),Dt);
+  CommandTurn(FMath::Sign(HeadingError)*PivotRate(HeadingError,.15f),Dt);
   return false;
  }
  // A force-driven vehicle can overshoot. Brake and plan a short reverse
@@ -1053,10 +1104,30 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   const FVector AlignmentOffset=AlignmentPose.GetLocation()-GetActorLocation();
   const float AlignmentYaw=FMath::Abs(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,AlignmentPose.Rotator().Yaw));
   // A short, already aligned creep does not need an infeasible tiny S curve.
-  // Full fork-hole/angle/support checks remain in VerifyInsertion.
-  if (FMath::Abs(FVector::DotProduct(AlignmentOffset,GetActorRightVector()))<=5.f && AlignmentYaw<1.5f)
+  // Full fork-hole/angle/support checks remain in VerifyInsertion (CanEngage accepts 2 degrees).
+  // Arrival is judged first: a pose that is already within a few centimetres and degrees of the alignment pose is done.
+  // Re-planning from there only produced a tiny cusp manoeuvre that drove back and forth for ~17s when the heading
+  // sat right at the old 1.5 degree limit.
+  if (CVarOptAlign.GetValueOnGameThread()==0)
   {
-   if (MovePrecise(AlignmentPose.GetLocation(),15,Dt)) Next(EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"));
+   // Original behaviour: tiny aligned creep, otherwise plan a route.
+   if (FMath::Abs(FVector::DotProduct(AlignmentOffset,GetActorRightVector()))<=5.f && AlignmentYaw<1.5f)
+   {
+    if (MovePrecise(AlignmentPose.GetLocation(),15,Dt)) Next(EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"));
+   }
+   else Route(AlignmentPose,EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"),15);
+   break;
+  }
+  const float AlignSide=FMath::Abs(FVector::DotProduct(AlignmentOffset,GetActorRightVector()));
+  const float AlignAlong=FVector::DotProduct(AlignmentOffset,GetActorForwardVector());
+  if (AlignSide<=7.f && AlignmentYaw<1.8f)
+  {
+   if (FMath::Abs(AlignAlong)<=3.f)
+   {
+    BrakeDrive();
+    if (FMath::Abs(CurrentSpeedCm)<1.f) Next(EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"));
+   }
+   else if (MovePrecise(AlignmentPose.GetLocation(),15,Dt)) Next(EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"));
   }
   else Route(AlignmentPose,EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"),15);
   break;
@@ -1198,7 +1269,8 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    { FaultAI(TEXT("NO CLEAR PRECISE RACK APPROACH"));break; }
    RouteIndex=0;bRouteStarted=true;
   }
-  if (FollowRoute(10,Dt))
+  // 10cm/s over the whole 220cm took ~20s. The route still brakes with sqrt(240*remaining) into the 1.5cm slot tolerance.
+  if (FollowRoute(CVarOptUnloadSpeed.GetValueOnGameThread()!=0 ? 22.f : 10.f,Dt))
   {
    // Loose loads can shift during the final pivot after the relative pose was
    // measured. Reapproach before lowering; never release outside the slot.
@@ -1271,7 +1343,8 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   }
   break;
  case EWarehouseAIState::WithdrawFork:
-  if (MovePrecise(RetractLocation,15,Dt))
+  // The load is already released and the tines are clear of it; 15cm/s made the 130-160cm retract take ~11s.
+  if (MovePrecise(RetractLocation,CVarOptUnloadSpeed.GetValueOnGameThread()!=0 ? 30.f : 15.f,Dt))
   {
    Next(EWarehouseAIState::VerifyUnload,TEXT("VERIFY UNLOAD COMPLETE"));
   }
@@ -1461,7 +1534,18 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   }
   break;
  case EWarehouseAIState::WaitingObstacle:
+ {
   WaitSeconds+=Dt;
+  // Route wait: no route now (blocked lane / pallet in the aisle). Keep the job, replan on a timer, and resume the
+  // moment a route exists. Cap the wait so a truly disconnected layout still ends in an operator fault.
+  if (bRouteWaiting && IsRouteWaitReason(WaitObstacleReason))
+  {
+   RouteWaitSeconds+=Dt;
+   if (RouteWaitSeconds>=RouteWaitTimeoutSeconds)
+   { ResumeAI=WaitResumeAI; FaultAI(TEXT("NO ROUTE TIMEOUT - CLEAR ROUTE / OPERATOR REQUIRED")); ResumeAI=WaitResumeAI; }
+   else if (AIElapsed>=RouteWaitRetrySeconds) Next(WaitResumeAI,TEXT("RECHECK ROUTE"));
+   break;
+  }
   if (WaitSeconds>=30.f) { ResumeAI=WaitResumeAI; FaultAI(TEXT("OBSTACLE TIMEOUT - CLEAR ROUTE")); ResumeAI=WaitResumeAI; }
   else if (AIElapsed>=1.f)
   {
@@ -1478,6 +1562,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    else BeginRecovery(WaitResumeAI,WaitObstacleReason);
   }
   break;
+ }
  case EWarehouseAIState::RecoverLower:
  case EWarehouseAIState::RecoverWithdraw:
  case EWarehouseAIState::RecoverReplan:

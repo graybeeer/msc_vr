@@ -1,3 +1,4 @@
+#include "HAL/IConsoleManager.h"
 #include "WarehouseForklift.h"
 #include "WarehousePhysics.h"
 #include "WarehousePerformance.h"
@@ -17,6 +18,8 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "UObject/ConstructorHelpers.h"
+static TAutoConsoleVariable<int32> CVarOptWheelNormal(TEXT("Warehouse.Opt.WheelNormal"),1,TEXT("1: a rolling tyre contact up to ~25 degrees off the floor normal still counts as rolling; 0: the old 11.5 degrees."));
+static TAutoConsoleVariable<int32> CVarOptInsertGate(TEXT("Warehouse.Opt.InsertGate"),1,TEXT("1: fork insertion start is judged against the pallet axis (7cm) with a wider bearing; 0: 5cm bearing check."));
 
 void AWarehouseForklift::RebuildEditedMesh(UStaticMesh* Mesh)
 {
@@ -346,10 +349,10 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
   }
   for (const FHitResult& Hit : Hits)
   {
-   // A rolling tyre's convex sweep can return a slightly tilted wheel normal
-   // against a flat floor. Confirm its actual bearing surface instead of
+   // A rolling tyre's convex sweep can return a tilted wheel normal (observed 0.957,
+   // about 17 degrees) against a flat floor. Confirm its actual bearing surface instead of
    // treating that ordinary rolling contact as an inward obstacle.
-   if (!LiftOnly && Wheels.Contains(Part) && Hit.Normal.Z>.98f &&
+   if (!LiftOnly && Wheels.Contains(Part) && Hit.Normal.Z>(CVarOptWheelNormal.GetValueOnGameThread()!=0 ? .9f : .98f) &&
        Hit.PenetrationDepth<.5f && PartDelta.Z>=-.001f)
    {
     FCollisionQueryParams Bearing(SCENE_QUERY_STAT(RollingTyreSupport),false,this);
@@ -427,9 +430,26 @@ bool AWarehouseForklift::MoveLift(float Height)
 bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt,float ArrivalTolerance)
 {
  const FVector Offset=Destination-GetActorLocation();
- const float LateralLimit=AIState==EWarehouseAIState::DockCharge ? ChargingDockLateralLimitCm : AIState==EWarehouseAIState::AlignUnload ? 15.f : 5.f;
- if (FMath::Abs(FVector::DotProduct(Offset,GetActorRightVector()))>LateralLimit || FMath::Abs(Offset.Z)>3)
- { StopFor(TEXT("ROUTE MISALIGNED")); return false; }
+ // Tines clear the pallet holes by about 9.75cm per side; the steering law keeps closing the lateral error while creeping,
+ // so insertion may start with up to 8cm instead of aborting (ROUTE MISALIGNED) and withdrawing for a 5cm fit.
+ const bool OptInsertGate=CVarOptInsertGate.GetValueOnGameThread()!=0;
+ float LateralLimit=AIState==EWarehouseAIState::DockCharge ? ChargingDockLateralLimitCm : AIState==EWarehouseAIState::AlignUnload ? 15.f : (OptInsertGate && AIState==EWarehouseAIState::InsertFork) ? 8.f : (OptInsertGate && AIState==EWarehouseAIState::AlignVehicle) ? 7.f : 5.f;
+ // Fork insertion: the destination bearing alone mixes the heading error into the lateral check (a 3.65 degree heading error
+ // looks like 7.7cm at 121cm range) although the steering law removes it while creeping. Judge the vehicle's lateral
+ // offset from the pallet axis directly (tines clear the holes by ~9.75cm per side) and allow a wider bearing.
+ float PalletAxisError=0.f;
+ if (OptInsertGate && AIState==EWarehouseAIState::InsertFork && bAutonomousMode)
+ {
+  const FVector PalletRight=FRotator(0,ObservedPallet.Rotator().Yaw,0).RotateVector(FVector::RightVector);
+  PalletAxisError=FVector::DotProduct(GetActorLocation()-ObservedPallet.GetLocation(),PalletRight);
+  LateralLimit=12.f;
+ }
+ if (FMath::Abs(FVector::DotProduct(Offset,GetActorRightVector()))>LateralLimit || FMath::Abs(PalletAxisError)>7.f || FMath::Abs(Offset.Z)>3)
+ {
+  UE_LOG(LogTemp,Log,TEXT("AGV_ROUTE_MISALIGNED %s state=%d lateral=%.1f limit=%.1f axis=%.1f z=%.1f along=%.1f yaw=%.2f speed=%.1f"),*VehicleName,int32(AIState),
+   FVector::DotProduct(Offset,GetActorRightVector()),LateralLimit,PalletAxisError,Offset.Z,FVector::DotProduct(Offset,GetActorForwardVector()),GetActorRotation().Yaw,CurrentSpeedCm);
+  StopFor(TEXT("ROUTE MISALIGNED")); return false;
+ }
  const float Distance=FVector::DotProduct(Offset,GetActorForwardVector());
  if (FMath::Abs(Distance)<ArrivalTolerance) { BrakeDrive(); return FMath::Abs(CurrentSpeedCm)<1.f; }
  if (bAutonomousMode && FleetCoordinator && !bTrafficEscape)

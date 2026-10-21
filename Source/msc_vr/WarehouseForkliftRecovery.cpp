@@ -4,6 +4,11 @@
 #include "WarehouseFleetCoordinator.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
+#include "HAL/IConsoleManager.h"
+
+// Default 0 (operator fault), the project owner's decision of 2026-10-21: a route that cannot be found ends in a fault so the
+// training scenario can show the cause. 1 turns on waiting and replanning every few seconds for unattended runs.
+static TAutoConsoleVariable<int32> CVarOptRouteWait(TEXT("Warehouse.Opt.RouteWait"),0,TEXT("1: no route -> wait and replan every few seconds instead of an operator fault; 0 (default): fault."));
 
 bool AWarehouseForklift::IsRecovering() const
 {
@@ -15,6 +20,24 @@ void AWarehouseForklift::RecoveryFault(const TCHAR* Reason,const TCHAR* PlayerMe
  bEmergencyBlocked=true; EmergencyReason=PlayerMessage; EmergencyLocation=GetActorLocation();
  ReportJob(TEXT("EMERGENCY"),Reason);
  FaultAI(Reason);
+}
+
+bool AWarehouseForklift::IsRouteWaitReason(const FString& Reason)
+{
+ return Reason.Contains(TEXT("NO PICKUP ROUTE")) || Reason.Contains(TEXT("NO DELIVERY ROUTE")) || Reason.Contains(TEXT("NO CLEAR ROUTE"));
+}
+
+bool AWarehouseForklift::BeginRouteWait(EWarehouseAIState From,const FString& Reason)
+{
+ // Only a vehicle that is itself clear waits; reversing cannot open a blocked lane or goal, and the next plan runs from here.
+ if (CVarOptRouteWait.GetValueOnGameThread()==0 || RouteWaitSeconds>=RouteWaitTimeoutSeconds) return false;
+ BrakeDrive();
+ bRouteWaiting=true;
+ WaitResumeAI=From; WaitObstacleReason=Reason; WaitSeconds=0;
+ if (!bRouteWaiting || RouteWaitSeconds<=0.f)
+  UE_LOG(LogTemp,Log,TEXT("AGV_ROUTE_WAIT %s: %s, waiting and replanning every %.1f s"),*VehicleName,*Reason,RouteWaitRetrySeconds);
+ TransitionAI(EWarehouseAIState::WaitingObstacle,FString::Printf(TEXT("%s · 통로가 열릴 때까지 대기 후 재계획 (WAITING FOR ROUTE)"),*Reason));
+ return true;
 }
 
 bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Reason)
@@ -101,7 +124,12 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
    if (!ConnectPoses(GetActorTransform(),Forward,Path,Cost) || Path.IsEmpty() ||
        Path.ContainsByPredicate([](const FWarehouseRoutePoint& P){return P.bReverse || P.bPivot;}) ||
        (FleetCoordinator && !FleetCoordinator->Permit(this,&Forward)))
-   { RecoveryFault(TEXT("NO SAFE CHARGER DEPARTURE - OPERATOR REQUIRED"),TEXT("충전기 앞에서 안전한 출차 경로를 확보하지 못했습니다."));return false; }
+   {
+    // No route and no free way out right now: another vehicle's lease or a blocked lane usually clears by itself.
+    // Wait and replan like any other missing route; only a long wait ends in the operator fault.
+    if (BeginRouteWait(From,Reason)) return true;
+    RecoveryFault(TEXT("NO SAFE CHARGER DEPARTURE - OPERATOR REQUIRED"),TEXT("충전기 앞에서 안전한 출차 경로를 확보하지 못했습니다."));return false;
+   }
    ChargerForwardRecovery=true;
    UE_LOG(LogTemp,Log,TEXT("AGV_CHARGER_DEPARTURE_RECOVERY %s from=%s to=%s"),*VehicleName,*GetActorLocation().ToString(),*Forward.GetLocation().ToString());
   }
@@ -113,6 +141,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
   TGuardValue<bool> Planning(bPlanningRoute,true);
   const FTransform Goal=PalletApproach(FailedPickupRoute ? TargetPallet->GetActorTransform() : ActiveJob.Destination,220);
   const bool GoalClear=NavigationClear(Goal);
+  if (BeginRouteWait(From,Reason)) return true;
   RecoveryFault(GoalClear ? TEXT("NO CONNECTED ROUTE AFTER LAYOUT CHANGE") : TEXT("PALLET APPROACH SPACE BLOCKED"),
    GoalClear ? TEXT("현재 배치에서 연결 가능한 경로를 찾지 못했습니다. 통로 폭과 랙 배치를 확인한 뒤 E로 재시도하세요.") :
     TEXT("팔레트 접근 공간이 막혀 있습니다. 랙 앞 작업 공간과 팔레트 방향을 확인한 뒤 E로 재시도하세요."));
@@ -242,7 +271,8 @@ void AWarehouseForklift::AdvanceRecovery(float Dt)
    TransitionAI(RecoveryResume,TEXT("DETOUR FOUND - RESUME WORK ORDER"));
    bRouteStarted=true;
   }
-  else RecoveryFault(TEXT("NO SAFE DETOUR - CLEAR SPACE / OPERATOR REQUIRED"),TEXT("안전하게 이동할 우회 경로를 찾지 못했습니다."));
+  else if (!BeginRouteWait(RecoveryResume,TEXT("OBSTACLE / NO CLEAR ROUTE")))
+   RecoveryFault(TEXT("NO SAFE DETOUR - CLEAR SPACE / OPERATOR REQUIRED"),TEXT("안전하게 이동할 우회 경로를 찾지 못했습니다."));
   ProgressLocation=GetActorLocation(); StalledSeconds=0;
  }
 }

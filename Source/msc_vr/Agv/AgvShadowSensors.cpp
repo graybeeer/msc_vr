@@ -232,7 +232,10 @@ void UAgvShadowSensorsComponent::Build()
 	Safety->Footprint = FBox2D(FVector2D(-97.4, -49.7), FVector2D(115.0, 49.7));
 	Safety->ForkRootXCm = 0.f;     // 115 cm forks (VNSL14) end at the footprint's +115
 	Safety->ForkHalfWidthCm = 34.f; // 68 cm over the forks
-	Safety->ForksFirstMaxSpeedCm = 60.f;
+	// VNSL14_SPEC.md picked one travel cap for both directions (180 cm/s empty, 100 cm/s loaded) and says its
+	// precision-approach speed must not double as a general forward limit. Set high enough that it never binds
+	// below those physics caps; forward slowdowns for real obstacles still come from the warning/protective fields.
+	Safety->ForksFirstMaxSpeedCm = 180.f;
 	Safety->WarningFieldLengthCm = 480.f;
 	// Speed-dependent fields down to creep speed, as safety scanners switch field sets by speed: at 20 cm/s the stop
 	// takes about 8 cm, so a fixed 1 m minimum (the test vehicle's) stopped the forklift at every slow manoeuvre.
