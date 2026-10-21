@@ -3,6 +3,7 @@
 #include "EngineUtils.h"
 #include "WarehousePhysics.h"
 #include "WarehouseDamageSystem.h"
+#include "WarehouseLogisticsTruck.h"
 #include "msc_vrPlayerController.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Components/CapsuleComponent.h"
@@ -261,6 +262,10 @@ void AWarehouseWorker::Tick(float DeltaSeconds)
  if (auto* Widget=Cast<UWarehouseRoleWidget>(RoleLabel->GetUserWidgetObject()))
  {
   Widget->Label=RoleName;
+  if (RoleName.ToString().Contains(TEXT("상하차")))
+   for (TActorIterator<AWarehouseLogisticsTruck> Truck(GetWorld());Truck;++Truck)
+    if (Truck->State==EWarehouseTruckState::Loading && FVector::DistSquared(GetActorLocation(),Truck->GetActorLocation())<FMath::Square(2000.f))
+    { Widget->Label=FText::FromString(RoleName.ToString()+TEXT("\n")+Truck->TruckId+TEXT(" · ")+Truck->Status);break; }
   Widget->FontSize=WarehousePC && WarehousePC->IsObserverView() ? WarehouseUIStyle::CompactSize : WarehouseUIStyle::LabelSize;
   if (Visible)
    for (TActorIterator<AWarehouseAreaLabel> Area(GetWorld());Area;++Area)

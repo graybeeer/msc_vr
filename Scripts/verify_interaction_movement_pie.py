@@ -222,7 +222,7 @@ def tick(dt):
             if phase=='stop60':enter('strafe');return
             if phase=='direction_stop':
                 unreal.SystemLibrary.execute_console_command(game,'t.OverrideFPS 15');enter('walk15');return
-            finish(True,'E/G mast-gap targeting, wall occlusion, 2.5m/s human direction changes and finite braking at 60/15Hz')
+            finish(True,'E/G mast-gap targeting, wall occlusion, human direction changes and finite braking at 60/15Hz')
     except Exception:
         traceback.print_exc();finish(False,'phase '+phase)
 handle=unreal.register_slate_post_tick_callback(tick)

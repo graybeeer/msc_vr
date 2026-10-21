@@ -74,7 +74,7 @@ protected:
 	UPROPERTY(Transient) TArray<TObjectPtr<UMaterialInterface>> RemoteWorldMaterials;
 	bool bObserverPresentation = false;
 	void UpdateRemoteControl();
-	bool InitializeRemotePresentation();
+	bool InitializeCarryPresentation();
 	void SetRemoteCharacterFade(bool Enabled);
 
 	UPROPERTY(EditDefaultsOnly, Category="Carry", meta=(ClampMin="0.05", ClampMax="1.0"))
@@ -96,7 +96,11 @@ protected:
 	FQuat CarryFacing = FQuat::Identity;
 	float CarryTargetYaw=0.f;
 	FTransform PickupTransform;
-	FTransform LastCarryPose;
+	FTransform CarryProgressPose;
+	float CarryStallTime = 0.f;
+	float PlacementContactTime = 0.f;
+	bool bPickupPending = false;
+	void CancelCarryAction(const TCHAR* Reason);
 	bool TryPickupObject(AActor* Object);
 	float PickupTime = 0.f;
 	bool InitializeCarryMesh();

@@ -5,6 +5,7 @@
 #include "WarehouseChargingStation.h"
 #include "WarehouseComputer.h"
 #include "WarehouseElevator.h"
+#include "WarehousePalletLift.h"
 #include "WarehouseWorker.h"
 #include "WarehouseElevatorLayout.h"
 #include "msc_vrCharacter.h"
@@ -167,7 +168,7 @@ void AWarehouseLayoutInventory::CapturePrototypes(AWarehouseLayoutEditor* Layout
   else if (A->IsA<AWarehouseChargingStation>()) Category=EWarehouseLayoutCategory::Charger;
   else if (A->IsA<AWarehouseWaitingBay>()) Category=EWarehouseLayoutCategory::WaitingBay;
   else if (A->IsA<AWarehousePallet>()) Category=EWarehouseLayoutCategory::Pallet;
-  else if (A->IsA<AWarehouseElevator>() || A->ActorHasTag(TEXT("LayoutType:Elevator"))) Category=EWarehouseLayoutCategory::Elevator;
+  else if (A->IsA<AWarehouseElevator>() || A->IsA<AWarehousePalletLift>() || A->ActorHasTag(TEXT("LayoutType:Elevator"))) Category=EWarehouseLayoutCategory::Elevator;
   else if (A->ActorHasTag(TEXT("LayoutType:Rack"))) Category=EWarehouseLayoutCategory::Rack;
   else if (!A->ActorHasTag(TEXT("LayoutType:Other"))) continue;
   const FName Group=GroupTag(A);TArray<AActor*> Members;
@@ -185,10 +186,14 @@ void AWarehouseLayoutInventory::CapturePrototypes(AWarehouseLayoutEditor* Layout
    if (Singles.Contains(Key)) continue;Singles.Add(Key);Members.Add(A);
   }
   if (Members.IsEmpty()) continue;
-  FVector Origin=A->GetActorLocation();
-  if (Category==EWarehouseLayoutCategory::Elevator) for (AActor* Member:Members) if (Member->IsA<AWarehouseElevator>()) { Origin=Member->GetActorLocation();break; }
+  FVector Origin=A->GetActorLocation();FString Name=A->GetActorNameOrLabel();
+  if (Category==EWarehouseLayoutCategory::Elevator) for (AActor* Member:Members)
+  {
+   if (Member->IsA<AWarehouseElevator>()) { Origin=Member->GetActorLocation();Name=TEXT("범용 엘리베이터");break; }
+   if (Member->IsA<AWarehousePalletLift>()) { Origin=Member->GetActorLocation();Name=TEXT("화물용 엘리베이터");break; }
+  }
   Origin.Z=400.*FMath::FloorToDouble((FMath::Max(0.,Origin.Z)+1)/400.);
-  Capture(Category,A->GetActorNameOrLabel(),Members,Origin);
+  Capture(Category,Name,Members,Origin);
  }
  for (const auto& Zone:Layout->Zones)
  {
@@ -197,17 +202,22 @@ void AWarehouseLayoutInventory::CapturePrototypes(AWarehouseLayoutEditor* Layout
  }
  auto AddDefault=[&](UClass* Class,EWarehouseLayoutCategory Category,const TCHAR* Name)
  {
-  if (Prototypes.ContainsByPredicate([&](const auto& P) { return P.Category==Category; })) return;
+  if (Prototypes.ContainsByPredicate([&](const auto& P)
+   { return P.Category==Category && (Category!=EWarehouseLayoutCategory::Elevator ||
+     P.Actors.ContainsByPredicate([&](const auto& A) { return A.Class && A.Class->IsChildOf(Class); })); })) return;
   FWarehouseLayoutPrototype P;P.Name=Name;P.Category=Category;FWarehouseLayoutActorTemplate A;A.Class=Class;P.Actors.Add(A);Prototypes.Add(P);
  };
  AddDefault(AWarehouseWaitingBay::StaticClass(),EWarehouseLayoutCategory::WaitingBay,TEXT("일반 대기 자리"));
  AddDefault(AWarehouseChargingStation::StaticClass(),EWarehouseLayoutCategory::Charger,TEXT("공유 충전 자리"));
  AddDefault(AWarehouseForklift::StaticClass(),EWarehouseLayoutCategory::Forklift,TEXT("무인 지게차"));
  AddDefault(AWarehousePallet::StaticClass(),EWarehouseLayoutCategory::Pallet,TEXT("빈 팔레트"));
+ AddDefault(AWarehouseElevator::StaticClass(),EWarehouseLayoutCategory::Elevator,TEXT("범용 엘리베이터"));
+ AddDefault(AWarehousePalletLift::StaticClass(),EWarehouseLayoutCategory::Elevator,TEXT("화물용 엘리베이터"));
 }
 TArray<FString> AWarehouseLayoutInventory::Choices(EWarehouseLayoutCategory Category) const
 {
  TArray<FString> Names;
+ if (Category==EWarehouseLayoutCategory::All) return Names;
  if (Category==EWarehouseLayoutCategory::Cargo)
  { if (!HeldCargo.IsEmpty()) Names.Add(HeldCargo[0].CargoId.ToString()+TEXT(" · ")+HeldCargo[0].Product.ToString());return Names; }
  for (const auto& P:Prototypes) if (P.Category==Category) Names.Add(P.Name);
@@ -216,6 +226,7 @@ TArray<FString> AWarehouseLayoutInventory::Choices(EWarehouseLayoutCategory Cate
 TArray<AActor*> AWarehouseLayoutInventory::SpawnPrototype(EWarehouseLayoutCategory Category,int32 Choice,FVector Point)
 {
  TArray<AActor*> Result;if (!HasAuthority() || Point.ContainsNaN()) return Result;
+ if (Category==EWarehouseLayoutCategory::All) { LastMessage=TEXT("추가할 물체의 개별 종류를 먼저 선택하세요.");return Result; }
  int32 Index=INDEX_NONE,Count=0;
  for (int32 I=0;I<Prototypes.Num();++I) if (Prototypes[I].Category==Category && Count++==Choice) { Index=I;break; }
  if (Index==INDEX_NONE) { LastMessage=TEXT("추가할 요소의 원본이 없습니다.");return Result; }

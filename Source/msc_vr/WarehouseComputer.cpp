@@ -5,6 +5,7 @@
 #include "WarehouseForklift.h"
 #include "WarehouseDamageSystem.h"
 #include "WarehouseInboundZone.h"
+#include "WarehouseShippingSystem.h"
 #include "WarehouseWorker.h"
 #include "WarehouseLayoutInventory.h"
 #include "msc_vrCharacter.h"
@@ -160,6 +161,7 @@ void AWarehouseComputer::RefreshState()
  }
  auto* Strength=AWarehouseDamageSystem::Find(this);
  TMap<AWarehouseCargo*,AWarehousePallet*> Owners;TMap<AWarehousePallet*,FString> Racks;
+ const auto* Shipping=AWarehouseShippingSystem::Find(this);
  if (Strength)
  {
   Strength->EnsureSupportSnapshot();
@@ -187,11 +189,13 @@ void AWarehouseComputer::RefreshState()
  }
  for (TActorIterator<AWarehouseCargo> It(GetWorld());It;++It)
  {
+  if (It->ActorHasTag(TEXT("LogisticsInTransit"))) continue;
   FWarehouseInventoryItem Item;Item.Cargo=*It;Item.Pallet=Owners.FindRef(*It);
   Item.CargoId=It->CargoId.IsNone() ? It->GetName() : It->CargoId.ToString();Item.Product=It->CargoKind.ToString();Item.MassKg=It->GrossMassKg;
   Item.Location=Locate(Item.Pallet ? static_cast<AActor*>(Item.Pallet.Get()) : *It);
   if (Item.Pallet && Racks.Contains(Item.Pallet) && !Item.Location.Contains(TEXT("운반 중"))) Item.Location=Racks[Item.Pallet];
-  Item.bReserved=Item.Pallet && Claimed(Item.Pallet);Inventory.Add(Item);
+  Item.bReserved=Item.Pallet && (Claimed(Item.Pallet) || (Shipping && !Shipping->GetPalletShipment(Item.Pallet).IsEmpty()));Inventory.Add(Item);
+  Inventory.Last().ReceiptStatus=Item.Pallet ? Item.Pallet->GetReceiptDescription().ToString() : TEXT("개별 상자");
  }
  Inventory.Sort([](const auto& A,const auto& B) { return A.CargoId<B.CargoId; });
  for (AWarehouseForklift* Vehicle : Fleet)
@@ -229,6 +233,8 @@ void AWarehouseComputer::RefreshLayoutDestinations()
  }
 }
 bool AWarehouseComputer::IssueOutbound(AWarehouseCargo* Cargo,AWarehouseForklift* Vehicle,int32 DestinationIndex)
+{ return IssueShipmentOutbound(Cargo,Vehicle,DestinationIndex,FString()); }
+bool AWarehouseComputer::IssueShipmentOutbound(AWarehouseCargo* Cargo,AWarehouseForklift* Vehicle,int32 DestinationIndex,const FString& ShipmentId)
 {
  auto Fail=[&](const TCHAR* Message) { LastMessage=Message;return false; };
  if (!CanUse()) return Fail(TEXT("컴퓨터가 손상되어 사용할 수 없습니다."));
@@ -240,6 +246,11 @@ bool AWarehouseComputer::IssueOutbound(AWarehouseCargo* Cargo,AWarehouseForklift
  auto* Pallet=Item ? Item->Pallet.Get() : nullptr;
  auto* Strength=AWarehouseDamageSystem::Find(this);
  if (!Pallet || !Strength) return Fail(TEXT("이 상품을 팔레트 위에 올린 뒤 지시하세요."));
+ if (const auto* Shipping=AWarehouseShippingSystem::Find(this))
+ {
+  const FString Reservation=Shipping->GetPalletShipment(Pallet);
+  if (!Reservation.IsEmpty() && Reservation!=ShipmentId) return Fail(TEXT("이 팔레트는 다른 배송편에 예약되어 있습니다."));
+ }
  if (Claimed(Pallet)) return Fail(TEXT("이 팔레트는 이미 다른 작업에 예약되어 있습니다."));
  // RefreshState above already refreshed support; the scene has not advanced.
  const auto Loads=Strength->GetSupportedActors(Pallet,false);

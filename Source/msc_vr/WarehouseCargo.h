@@ -4,6 +4,7 @@
 #include "WarehouseCargo.generated.h"
 class UStaticMesh;
 class UStaticMeshComponent;
+class AWarehousePallet;
 
 /** Generated packing specification. Densities include air/protection between products, not raw material density. */
 USTRUCT(BlueprintType)
@@ -54,6 +55,9 @@ public:
  virtual void OnConstruction(const FTransform& Transform) override;
  virtual void BeginPlay() override;
  void WakeStackAbove();
+ // Runtime unit-load membership; independent Chaos bodies are never welded.
+ TWeakObjectPtr<AWarehousePallet> WrappedPallet;
+ UFUNCTION(BlueprintPure,Category="Inbound") AWarehousePallet* GetWrappedPallet() const;
 private:
  UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> Body;
 };

@@ -1,5 +1,6 @@
 #include "WarehouseCargo.h"
 #include "WarehousePhysics.h"
+#include "WarehousePallet.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "PhysicsEngine/BodySetup.h"
@@ -119,11 +120,12 @@ void AWarehouseCargo::OnConstruction(const FTransform& Transform)
 }
 FText AWarehouseCargo::GetCargoDescription() const
 {
+ const FString Receipt=GetWrappedPallet() ? TEXT("\n")+GetWrappedPallet()->GetReceiptDescription().ToString() : FString();
  if (Packing.bValid)
   return FText::FromString(FString::Printf(TEXT("%s  |  %.2f kg\n%.0f × %.0f × %.0f cm · %s\n화물 %s · 포장 포함 무게"),
    *CargoKind.ToString(),GrossMassKg,Packing.SizeCm.X,Packing.SizeCm.Y,Packing.SizeCm.Z,
-   Packing.bFragile ? TEXT("취급 주의") : TEXT("일반 포장"),*CargoId.ToString()));
- return FText::FromString(FString::Printf(TEXT("%s  |  %.2f kg\n화물 %s · 포장 포함 무게"),*CargoKind.ToString(),GrossMassKg,*CargoId.ToString()));
+   Packing.bFragile ? TEXT("취급 주의") : TEXT("일반 포장"),*CargoId.ToString())+Receipt);
+ return FText::FromString(FString::Printf(TEXT("%s  |  %.2f kg\n화물 %s · 포장 포함 무게"),*CargoKind.ToString(),GrossMassKg,*CargoId.ToString())+Receipt);
 }
 void AWarehouseCargo::BeginPlay()
 {

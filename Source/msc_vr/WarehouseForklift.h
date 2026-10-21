@@ -13,7 +13,12 @@ class AWarehouseWaitingBay;
 class AWarehouseElevator;
 class UPhysicsConstraintComponent;
 class AWarehouseFleetCoordinator;
+class UAgvShadowSensorsComponent;
+class UPrimitiveComponent;
 struct FWarehouseNavigationQuery;
+
+UENUM(BlueprintType)
+enum class EWarehouseSensorMode : uint8 { Disabled, ObserveOnly, Autonomous };
 
 UENUM(BlueprintType)
 enum class EWarehouseCycle : uint8 { Idle, Approach, Lift, TravelLower, Reverse, Lower, Withdraw, Complete, ToCharger, Docking, Charging, Returning };
@@ -55,6 +60,8 @@ public:
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Self Check") bool bLoadSensorHealthy = true;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Perception") FVector PalletPositionBiasCm = FVector::ZeroVector;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Perception") float PalletYawBiasDegrees = 0;
+ // Staged sensor rollout: observation never changes the existing controller.
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Perception") EWarehouseSensorMode SensorMode=EWarehouseSensorMode::Autonomous;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Perception", meta=(ClampMin="100",ClampMax="1000")) float PalletDetectionRangeCm = 400;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Perception") int32 ObstacleCheckCount = 0;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Perception") double LastObstacleCheckSeconds = -1;
@@ -66,6 +73,8 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") EWarehouseAIState AIState = EWarehouseAIState::Off;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") FWarehouseWorkOrder ActiveJob;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") TArray<FWarehouseRoutePoint> PlannedRoute;
+ // Read-only presentation of the remaining plan; does not plan, sense or command motion.
+ UFUNCTION(BlueprintPure, Category="Warehouse|Display") TArray<FVector> GetDisplayRoute() const;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") TArray<FWarehouseJobReport> JobReports;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") TArray<FString> CompletedJobIds;
  UPROPERTY(BlueprintAssignable, Category="Autonomy") FWarehouseReportEvent OnJobReport;
@@ -76,18 +85,10 @@ public:
  UFUNCTION(BlueprintPure, Category="Autonomy") bool IsFloorPlacementValid(AWarehousePallet* Pallet,const FTransform& Destination,bool bForksStillInserted=false,bool Refresh=true) const;
  UFUNCTION(BlueprintCallable, Category="Autonomy") bool PlanAutonomousRoute(const FTransform& Goal);
  UFUNCTION(BlueprintCallable, Category="Layout") void RefreshAfterLayout();
- /** AGV module LiDAR localization (Source/msc_vr/Agv, agv.localize): route travel decisions use its estimate instead of
-  * the exact pose. On by default on the AGV branch (agv.localize 0 turns it off). The final approach (last 80 cm of a stop, rack/floor alignment, fork insertion,
-  * charger docking) keeps the exact pose, standing in for sensing the target directly. */
- UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV Localization") bool bUseAgvLocalization = true;
- /** Pose for travel decisions: the AGV module's estimate when bUseAgvLocalization and available, else the actual one. */
- UFUNCTION(BlueprintPure, Category="AGV Localization") FTransform NavigationTransform() const;
- /** AGV module safety fields (agv.safety): a protective-field stop waits like an obstacle, a warning caps the speed. On by default on the AGV branch (agv.safety 0). */
- UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV Localization") bool bUseAgvSafety = true;
- /** Travel speed cap from the AGV module (cm/s; 0 = stop, OutReason says why): safety fields when bUseAgvSafety,
-  * localization health when bUseAgvLocalization (lost = fault, odometry only = slow). Very large when neither. */
- float AgvTravelSpeedLimit(FString& OutReason) const;
- UFUNCTION(BlueprintPure, Category="Autonomy") FString CheckSystems() const;
+ UFUNCTION(BlueprintPure, Category="Autonomy") FString CheckSystems(bool bIncludeAutonomySensors=true) const;
+ UFUNCTION(BlueprintPure, Category="Perception") bool NavigationClearForDiagnostics(const FTransform& Pose) const;
+ UFUNCTION(BlueprintPure, Category="Perception") bool IsSensorSamplingSuppressed() const;
+ bool GetPerceivedActorBounds(const AActor* Actor,FBox& Bounds) const;
 
  UFUNCTION(BlueprintCallable, Category="Strength") void SetMechanicalFailure();
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Strength") bool bMechanicalFailure = false;
@@ -104,8 +105,8 @@ public:
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery") bool bOpportunityChargingEnabled=true;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery",meta=(ClampMin="30",ClampMax="100")) float OpportunityChargeBelowPercent=80;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battery",meta=(ClampMin="0")) float OpportunityChargeIdleDelaySeconds=10;
- UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Battery|Docking",meta=(ClampMin=".2",ClampMax="2")) float ChargingCaptureDistanceCm=.5f;
- UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Battery|Docking",meta=(ClampMin=".1",ClampMax="1")) float ChargingCaptureHeadingDegrees=.2f;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Battery|Docking",meta=(ClampMin=".2",ClampMax="20")) float ChargingCaptureDistanceCm=20.f;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Battery|Docking",meta=(ClampMin=".1",ClampMax="10")) float ChargingCaptureHeadingDegrees=3.f;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Battery|Docking",meta=(ClampMin="5",ClampMax="30")) float ChargingDockLateralLimitCm=15;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Battery|Docking",meta=(ClampMin="10",ClampMax="150")) float ChargingLineLookaheadCm=50;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Errors") FName LastErrorCode;
@@ -152,8 +153,27 @@ public:
 private:
  friend class AWarehouseFleetCoordinator;
  friend class AWarehouseLayoutEditor;
+ UPROPERTY(Transient) TObjectPtr<UAgvShadowSensorsComponent> SensorKit;
+ bool bSensorSuppressed=false;
+ bool bRouteSensorForecast=false;
+ float SensorPrecisionDistanceCm=MAX_flt;
+ EWarehouseSensorMode LastSensorMode=EWarehouseSensorMode::Disabled;
+ bool bObservedTargetValid=false;
+ bool bHasRecognizedTargetPose=false;
+ FTransform SensorObservedTarget;
+ TMap<FString,FTransform> WorkOrderSourcePoses;
+ void UpdateSensorSnapshot();
+ void InvalidateSensorSnapshot(const FString& Reason);
+ bool AutonomousSensorsReady() const;
+ bool ConsumeObstacleSnapshot(int32& LastConsumedSnapshot);
+ bool PerceivedBoxClear(const FTransform& Pose,const FBox& LocalBox,const TArray<AActor*>& Ignored,bool PeopleOnly=false) const;
+ bool PerceivedPartClear(UStaticMeshComponent* Part,const FTransform& Pose,const TArray<AActor*>& Ignored,const UPrimitiveComponent* Bearing=nullptr) const;
+ bool PerceivedMotionClear(UStaticMeshComponent* Part,FVector Delta,const TArray<AActor*>& Ignored) const;
+ bool PerceivedFloorSupport(FVector Point,FHitResult* Surface=nullptr) const;
+ FTransform TaskSourcePose() const;
  UPROPERTY(Transient) TObjectPtr<AWarehouseFleetCoordinator> FleetCoordinator;
  bool bPlanningRoute=false,bAvoidTrafficReservations=false,bTrafficEscape=false;
+ bool bObservedPickupEscape=false;
  bool bEndpointDriving=false,bEndpointOrienting=false,bRouteTurning=false;
  int32 EndpointSegment=-1;
  FBox NavigationEnvelope() const;
@@ -178,9 +198,7 @@ private:
  UPROPERTY(Transient) TObjectPtr<AActor> RemoteOperator;
  float RemoteForward=0,RemoteSteering=0,RemoteLift=0;
  double LastRemoteInputTime=0;
- float RemoteCheckSeconds=0;
  bool bReplanAfterRemote=false;
- bool bRemoteLoadFault=false;
  void AdvanceRemote(float Dt);
  bool RemotePoseClear(const FTransform& Pose);
  bool PhysicalPoseClear(const FTransform& Pose,bool CheckTranslation=false) const;
@@ -218,14 +236,6 @@ private:
  FTransform PalletApproach(const FTransform& PalletPose,float Distance) const;
  EWarehouseAIState ResumeAI = EWarehouseAIState::Ready;
  EWarehouseAIState WaitResumeAI = EWarehouseAIState::Ready;
- // A missing route (aisle blocked by a pallet, another vehicle's lease) is usually temporary. Wait and replan every
- // RouteWaitRetrySeconds instead of faulting; only a very long wait ends in an operator fault.
- static bool IsRouteWaitReason(const FString& Reason);
- bool BeginRouteWait(EWarehouseAIState From,const FString& Reason);
- bool bRouteWaiting=false;
- float RouteWaitSeconds=0;
- UPROPERTY(EditAnywhere, Category="Autonomy", meta=(ClampMin="0.5")) float RouteWaitRetrySeconds=3.f;
- UPROPERTY(EditAnywhere, Category="Autonomy", meta=(ClampMin="10")) float RouteWaitTimeoutSeconds=900.f;
  UPROPERTY(Transient) TArray<TObjectPtr<AActor>> CarriedCargo;
  FTransform ObservedPallet;
  FVector RetractLocation = FVector::ZeroVector;
@@ -259,6 +269,8 @@ private:
  float LastDriveDirection = 1, RecoveryDirection = -1, RecoveryDistance = 80;
  float StalledSeconds = 0;
  int32 RecoveryAttempts = 0;
+ int32 ObservedRouteReplans = 0;
+ FVector ObservedRouteProgress = FVector::ZeroVector;
  bool bRetryInsertion = false, bRecoveryNeedsRoute = false;
  FString WaitObstacleReason;
  int32 RouteIndex = 0;
@@ -284,6 +296,10 @@ private:
  bool bMovementObstacleClear=true, bLiftObstacleClear=true;
  bool bRouteObstacleClear=true, bTurnObstacleClear=true;
  FString MovementObstacleReason, LiftObstacleReason;
+ int32 MovementObstacleSnapshot=INDEX_NONE,LiftObstacleSnapshot=INDEX_NONE;
+ int32 RouteObstacleSnapshot=INDEX_NONE,TurnObstacleSnapshot=INDEX_NONE;
+ FVector LastMovementScanDirection=FVector::ZeroVector,LastLiftScanDirection=FVector::ZeroVector;
+ float LastTurnScanDirection=0;
  bool MoveVehicle(FVector Delta);
  bool MoveToLine(FVector Destination, float Speed, float Dt, float ArrivalTolerance=1.f);
  bool BeginChargeTrip();

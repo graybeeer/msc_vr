@@ -320,6 +320,14 @@ void AWarehouseDamageSystem::UpdateLoads()
   };
   Sample(.13f);
   if (Supports[I].IsEmpty()) Sample(.015f);
+  // Intact film is also a real load path when a carton momentarily loses
+  // deck contact. Prefer actual bearings; never count both paths twice.
+  if (Supports[I].IsEmpty()) for (AActor* Actor:Spec.Members)
+   if (auto* Cargo=Cast<AWarehouseCargo>(Actor)) if (auto* Pallet=Cargo->GetWrappedPallet())
+   {
+    const int32 Parent=IndexOf(Pallet);
+    if (Parent!=INDEX_NONE && Parent!=I) Supports[I].AddUnique(Parent);
+   }
   const float Share=(FMath::Max(.1f,Spec.MassKg)+Spec.SupportedKg)/FMath::Max(1,Supports[I].Num());
   for (int32 Parent : Supports[I])
   {
@@ -365,7 +373,7 @@ void AWarehouseDamageSystem::AdvanceStrength(float Seconds)
  for (int32 I=0; I<Objects.Num(); ++I)
  {
   auto& Spec=Objects[I];
-  if (Spec.bFailed) continue;
+  if (Spec.bFailed || Spec.Members.ContainsByPredicate([](AActor* A) { return IsValid(A) && A->ActorHasTag(TEXT("LogisticsInTransit")); })) continue;
   const float Capacity=FMath::Max(1.f,Spec.RatedLoadKg)*(1.f-.5f*Spec.Damage);
   float Ratio=Spec.SupportedKg/Capacity;
   if (Spec.LevelCapacityKg>0) Ratio=FMath::Max(Ratio,Spec.PeakLevelKg/(Spec.LevelCapacityKg*(1.f-.5f*Spec.Damage)));
@@ -379,6 +387,7 @@ void AWarehouseDamageSystem::AdvanceStrength(float Seconds)
 }
 void AWarehouseDamageSystem::ApplyImpact(AActor* Object,float EnergyJ)
 {
+ if (IsValid(Object) && Object->ActorHasTag(TEXT("LogisticsInTransit"))) return;
  if (!FMath::IsFinite(EnergyJ) || EnergyJ<=0) return;
  if (!bInitialized) InitializeStrength();
  const int32 I=IndexOf(Object);
@@ -392,7 +401,7 @@ void AWarehouseDamageSystem::ApplyImpact(AActor* Object,float EnergyJ)
 }
 void AWarehouseDamageSystem::Contact(AActor* A,AActor* B,float EnergyJ,UPrimitiveComponent* PartA,UPrimitiveComponent* PartB)
 {
- if (!A || !B || A==B) return;
+ if (!A || !B || A==B || A->ActorHasTag(TEXT("LogisticsInTransit")) || B->ActorHasTag(TEXT("LogisticsInTransit"))) return;
  // Both hit delegates (and substeps) describe one contact; don't charge the damage twice.
  uint32 X=ContactBodyId(PartA,A),Y=ContactBodyId(PartB,B);
  const uint64 Key=(uint64(FMath::Min(X,Y))<<32)|FMath::Max(X,Y);

@@ -1,4 +1,3 @@
-#include "HAL/IConsoleManager.h"
 #include "WarehouseForklift.h"
 #include "WarehousePhysics.h"
 #include "WarehousePerformance.h"
@@ -6,7 +5,9 @@
 #include "WarehousePallet.h"
 #include "WarehouseDamageSystem.h"
 #include "WarehouseChargingStation.h"
+#include "WarehouseElevator.h"
 #include "WarehouseWaitingBay.h"
+#include "Agv/AgvShadowSensors.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/TextRenderComponent.h"
@@ -18,8 +19,6 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "UObject/ConstructorHelpers.h"
-static TAutoConsoleVariable<int32> CVarOptWheelNormal(TEXT("Warehouse.Opt.WheelNormal"),1,TEXT("1: a rolling tyre contact up to ~25 degrees off the floor normal still counts as rolling; 0: the old 11.5 degrees."));
-static TAutoConsoleVariable<int32> CVarOptInsertGate(TEXT("Warehouse.Opt.InsertGate"),1,TEXT("1: fork insertion start is judged against the pallet axis (7cm) with a wider bearing; 0: 5cm bearing check."));
 
 void AWarehouseForklift::RebuildEditedMesh(UStaticMesh* Mesh)
 {
@@ -254,7 +253,7 @@ void AWarehouseForklift::Tick(float DeltaSeconds)
 {
  CSV_SCOPED_TIMING_STAT(Warehouse,ForkliftTick);
  Super::Tick(DeltaSeconds);
- if (bEmergencyBlocked && IsRemoteControlled() && FVector::Dist2D(GetActorLocation(),EmergencyLocation)>50.f && CheckSystems().IsEmpty())
+ if (bEmergencyBlocked && IsRemoteControlled() && FVector::Dist2D(GetActorLocation(),EmergencyLocation)>50.f && CheckSystems(false).IsEmpty())
  { bEmergencyBlocked=false; EmergencyReason.Reset(); }
  if (bPhysicsReady)
  {
@@ -262,11 +261,13 @@ void AWarehouseForklift::Tick(float DeltaSeconds)
   LiftOffset=GetActorTransform().InverseTransformPosition(Carriage->GetComponentLocation()).Z;
  }
  BrakeDrive();
+ UpdateSensorSnapshot();
  AdvanceSimulation(DeltaSeconds);
  UpdatePhysicalRig(FMath::Clamp(DeltaSeconds,0.f,.133333f));
 }
 bool AWarehouseForklift::RefreshObstacleChecks()
 {
+ if (IsRemoteControlled()) return false;
  if (!GetWorld()->IsGameWorld()) return true;
  if (ObstacleCheckFrame==GFrameCounter) return true;
  const double Now=GetWorld()->GetTimeSeconds();
@@ -278,9 +279,23 @@ bool AWarehouseForklift::RefreshObstacleChecks()
 }
 bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
 {
+ // Manual operation commands the real actuators; Chaos resolves contact.
+ // Do not reuse the autonomous scanner's cached prediction as a manual brake.
+ if (IsRemoteControlled()) return true;
+ if (SensorMode==EWarehouseSensorMode::Autonomous && !AutonomousSensorsReady())
+ { BrakeDrive();SetStatus(TEXT("SENSOR WAIT - FRESH SCAN REQUIRED"));return false; }
  bool& CachedClear=LiftOnly ? bLiftObstacleClear : bMovementObstacleClear;
  FString& CachedReason=LiftOnly ? LiftObstacleReason : MovementObstacleReason;
- if (!RefreshObstacleChecks())
+ int32& ConsumedSnapshot=LiftOnly ? LiftObstacleSnapshot : MovementObstacleSnapshot;
+ if (SensorMode==EWarehouseSensorMode::Autonomous)
+ {
+  FVector& LastDirection=LiftOnly ? LastLiftScanDirection : LastMovementScanDirection;
+  const FVector Direction=Delta.GetSafeNormal();
+  if (Direction.IsNearlyZero()!=LastDirection.IsNearlyZero() || FVector::DotProduct(Direction,LastDirection)<0)
+   ConsumedSnapshot=INDEX_NONE;
+  LastDirection=Direction;
+ }
+ if (!ConsumeObstacleSnapshot(ConsumedSnapshot))
  {
   if (!CachedClear) StopFor(CachedReason);
   return CachedClear;
@@ -295,13 +310,21 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
  FCollisionObjectQueryParams People(ECC_Pawn); People.AddObjectTypesToQuery(ECC_PhysicsBody);
  FCollisionQueryParams SafetyParams(SCENE_QUERY_STAT(PersonSafety),false,this);
  const FVector SafetyCenter=GetActorLocation()+GetActorForwardVector()*30+FVector(0,0,110);
- const float LookAhead=FMath::Max(100.f,CurrentSpeedCm*CurrentSpeedCm/100.f+FMath::Abs(CurrentSpeedCm)*.2f+20.f);
+ const float ReactionSeconds=SensorMode==EWarehouseSensorMode::Autonomous ? 1.1f : .2f;
+ const float LookAhead=FMath::Max(100.f,CurrentSpeedCm*CurrentSpeedCm/100.f+FMath::Abs(CurrentSpeedCm)*ReactionSeconds+20.f);
  const FVector SafetyEnd=SafetyCenter+(LiftOnly ? FVector::ZeroVector : Delta+Delta.GetSafeNormal()*LookAhead);
  TArray<FHitResult> PeopleHits;
- if (!bUseAgvSafety) GetWorld()->SweepMultiByObjectType(PeopleHits,SafetyCenter,SafetyEnd,GetActorQuat(),People,FCollisionShape::MakeBox(FVector(110,75,110)),SafetyParams);
- // With the AGV module's safety fields (agv.safety) the LiDAR fields detect people; this engine query knows a Pawn is a
- // person, which a real scanner cannot. The contact sweeps below stay (bumper / fork-tip contact).
- if (!bUseAgvSafety && PeopleHits.ContainsByPredicate([](const FHitResult& Hit) { return WarehousePhysics::IsPhysicalContact(Hit.GetComponent()) && Hit.GetActor() && (Hit.GetActor()->ActorHasTag(TEXT("WarehousePhysicalHuman")) || Hit.GetComponent()->GetCollisionObjectType()==ECC_Pawn); }))
+ const bool SensorDriven=SensorMode==EWarehouseSensorMode::Autonomous;
+ if (!SensorDriven) GetWorld()->SweepMultiByObjectType(PeopleHits,SafetyCenter,SafetyEnd,GetActorQuat(),People,FCollisionShape::MakeBox(FVector(110,75,110)),SafetyParams);
+ if (SensorDriven)
+ {
+  const FBox SafetyBox(FVector(-110,-75,-110),FVector(110,75,110));
+  const int32 Samples=FMath::Max(1,FMath::CeilToInt(FVector::Dist(SafetyCenter,SafetyEnd)/20.f));
+  for (int32 I=0;I<=Samples;++I)
+   if (!PerceivedBoxClear(FTransform(GetActorQuat(),FMath::Lerp(SafetyCenter,SafetyEnd,float(I)/Samples)),SafetyBox,GetPhysicalLoads(),true))
+    return Blocked(TEXT("PERSON IN SAFETY ZONE"));
+ }
+ else if (PeopleHits.ContainsByPredicate([](const FHitResult& Hit) { return WarehousePhysics::IsPhysicalContact(Hit.GetComponent()) && Hit.GetActor() && (Hit.GetActor()->ActorHasTag(TEXT("WarehousePhysicalHuman")) || Hit.GetComponent()->GetCollisionObjectType()==ECC_Pawn); }))
  {
   return Blocked(TEXT("PERSON IN SAFETY ZONE"));
  }
@@ -325,34 +348,51 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
  for (auto* Part : Parts)
  {
   if (!WarehousePhysics::IsPhysicalContact(Part)) continue;
-  // A welded member shares its parent's complete Chaos shape set. Sweeping
-  // that set again from the child's origin invents an offset obstacle.
-  if (Part->BodyInstance.WeldParent) continue;
   FVector PartDelta=Delta;
   if (LiftOnly && Part->GetOwner()==this)
   {
    if (Part==LiftStage || Part->IsAttachedTo(LiftStage)) PartDelta*=.5f;
    else if (Part!=CarriageBody && !Part->IsAttachedTo(CarriageBody)) continue;
   }
+  const bool TargetContact=IsValid(TargetPallet) && Part->GetOwner()==this &&
+   (Part==CarriageBody || Part->GetName().StartsWith(TEXT("Fork"))) && (AIState==EWarehouseAIState::InsertFork ||
+   AIState==EWarehouseAIState::CorrectFork || AIState==EWarehouseAIState::VerifyInsertion ||
+   AIState==EWarehouseAIState::WithdrawFork ||
+   AIState==EWarehouseAIState::RecoverLower || AIState==EWarehouseAIState::RecoverWithdraw);
+  if (SensorDriven)
+  {
+   TArray<AActor*> Ignored=GetPhysicalLoads();
+   if (TargetContact) Ignored.Add(TargetPallet);
+   FVector ForecastDelta=PartDelta;
+   if (!LiftOnly && !bRouteSensorForecast && !PartDelta.IsNearlyZero())
+   {
+    // Direct precision travel has no route polyline. Keep the same one-second
+    // reaction/braking allowance along this short commanded line.
+    const float Speed=FMath::Max(FMath::Abs(CurrentSpeedCm),float(PartDelta.Size()/FMath::Max(.008f,GetWorld()->GetDeltaSeconds())));
+    const float Ahead=FMath::Min(Speed*1.1f+Speed*Speed/100.f+2.f,SensorPrecisionDistanceCm);
+    ForecastDelta=PartDelta.GetSafeNormal()*FMath::Max(float(PartDelta.Size()),Ahead);
+   }
+   if (!PerceivedMotionClear(Part,ForecastDelta,Ignored)) return Blocked(TEXT("OBSTACLE / SENSOR OBSERVATION"));
+  }
+  // A welded child still contributes its own known geometry to point-cloud
+  // prediction. Its parent's native Chaos sweep already contains the child;
+  // repeating that combined shape from the child origin invents an obstacle.
+  if (Part->BodyInstance.WeldParent) continue;
   TArray<FHitResult> Hits;
   GetWorld()->ComponentSweepMulti(Hits,Part,Part->GetComponentLocation(),Part->GetComponentLocation()+PartDelta,Part->GetComponentQuat(),Params);
-  if (!LiftOnly && IsRemoteControlled() && !PartDelta.IsNearlyZero())
-  {
-   // A one-second scanner cannot predict a stationary wall using only one
-   // frame of travel. Scan the existing safety horizon, retaining the short
-   // native sweep for dynamic pallets/loads and their insertion contacts.
-   TArray<FHitResult> Ahead;
-   GetWorld()->ComponentSweepMulti(Ahead,Part,Part->GetComponentLocation(),
-    Part->GetComponentLocation()+PartDelta+PartDelta.GetSafeNormal()*LookAhead,Part->GetComponentQuat(),Params);
-   for (const auto& Hit : Ahead)
-    if (Hit.GetComponent() && !Hit.GetComponent()->IsSimulatingPhysics()) Hits.Add(Hit);
-  }
   for (const FHitResult& Hit : Hits)
   {
-   // A rolling tyre's convex sweep can return a tilted wheel normal (observed 0.957,
-   // about 17 degrees) against a flat floor. Confirm its actual bearing surface instead of
+   // Autonomous prediction uses only the published building map and saved
+   // sensor surfaces. Only already-touching fork/target contact (2mm native
+   // contact tolerance), not an unseen future target pose, is mechanical data.
+   const bool MechanicalTargetContact=TargetContact && Hit.GetActor()==TargetPallet &&
+    (Hit.bStartPenetrating || Hit.Distance<=.2f);
+   if (SensorDriven && !SensorKit->IsKnownComponent(Hit.GetComponent()) &&
+       !MechanicalTargetContact) continue;
+   // A rolling tyre's convex sweep can return a slightly tilted wheel normal
+   // against a flat floor. Confirm its actual bearing surface instead of
    // treating that ordinary rolling contact as an inward obstacle.
-   if (!LiftOnly && Wheels.Contains(Part) && Hit.Normal.Z>(CVarOptWheelNormal.GetValueOnGameThread()!=0 ? .9f : .98f) &&
+   if (!LiftOnly && Wheels.Contains(Part) && Hit.Normal.Z>.98f &&
        Hit.PenetrationDepth<.5f && PartDelta.Z>=-.001f)
    {
     FCollisionQueryParams Bearing(SCENE_QUERY_STAT(RollingTyreSupport),false,this);
@@ -430,26 +470,13 @@ bool AWarehouseForklift::MoveLift(float Height)
 bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt,float ArrivalTolerance)
 {
  const FVector Offset=Destination-GetActorLocation();
- // Tines clear the pallet holes by about 9.75cm per side; the steering law keeps closing the lateral error while creeping,
- // so insertion may start with up to 8cm instead of aborting (ROUTE MISALIGNED) and withdrawing for a 5cm fit.
- const bool OptInsertGate=CVarOptInsertGate.GetValueOnGameThread()!=0;
- float LateralLimit=AIState==EWarehouseAIState::DockCharge ? ChargingDockLateralLimitCm : AIState==EWarehouseAIState::AlignUnload ? 15.f : (OptInsertGate && AIState==EWarehouseAIState::InsertFork) ? 8.f : (OptInsertGate && AIState==EWarehouseAIState::AlignVehicle) ? 7.f : 5.f;
- // Fork insertion: the destination bearing alone mixes the heading error into the lateral check (a 3.65 degree heading error
- // looks like 7.7cm at 121cm range) although the steering law removes it while creeping. Judge the vehicle's lateral
- // offset from the pallet axis directly (tines clear the holes by ~9.75cm per side) and allow a wider bearing.
- float PalletAxisError=0.f;
- if (OptInsertGate && AIState==EWarehouseAIState::InsertFork && bAutonomousMode)
- {
-  const FVector PalletRight=FRotator(0,ObservedPallet.Rotator().Yaw,0).RotateVector(FVector::RightVector);
-  PalletAxisError=FVector::DotProduct(GetActorLocation()-ObservedPallet.GetLocation(),PalletRight);
-  LateralLimit=12.f;
- }
- if (FMath::Abs(FVector::DotProduct(Offset,GetActorRightVector()))>LateralLimit || FMath::Abs(PalletAxisError)>7.f || FMath::Abs(Offset.Z)>3)
- {
-  UE_LOG(LogTemp,Log,TEXT("AGV_ROUTE_MISALIGNED %s state=%d lateral=%.1f limit=%.1f axis=%.1f z=%.1f along=%.1f yaw=%.2f speed=%.1f"),*VehicleName,int32(AIState),
-   FVector::DotProduct(Offset,GetActorRightVector()),LateralLimit,PalletAxisError,Offset.Z,FVector::DotProduct(Offset,GetActorForwardVector()),GetActorRotation().Yaw,CurrentSpeedCm);
-  StopFor(TEXT("ROUTE MISALIGNED")); return false;
- }
+ const bool ElevatorLine=IsValid(Elevator) && (AIState==EWarehouseAIState::ElevatorBoard || AIState==EWarehouseAIState::ElevatorExit);
+ const float LateralLimit=AIState==EWarehouseAIState::DockCharge ? ChargingDockLateralLimitCm : AIState==EWarehouseAIState::AlignUnload ? 15.f : 5.f;
+ // A long straight boarding line magnifies a small heading error. Measure
+ // corridor departure against the shaft, then steer onto that same line.
+ const FVector LateralAxis=ElevatorLine ? Elevator->GetActorRightVector() : GetActorRightVector();
+ if (FMath::Abs(FVector::DotProduct(Offset,LateralAxis))>LateralLimit || FMath::Abs(Offset.Z)>3)
+ { StopFor(TEXT("ROUTE MISALIGNED")); return false; }
  const float Distance=FVector::DotProduct(Offset,GetActorForwardVector());
  if (FMath::Abs(Distance)<ArrivalTolerance) { BrakeDrive(); return FMath::Abs(CurrentSpeedCm)<1.f; }
  if (bAutonomousMode && FleetCoordinator && !bTrafficEscape)
@@ -458,27 +485,22 @@ bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt,flo
   if (!FleetCoordinator->Permit(this,&Goal)) return false;
  }
  Speed=FMath::Min(Speed,bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(180.f,EmptyTravelSpeedCm));
- // AGV module safety fields / localization health (off unless bUseAgvSafety / bUseAgvLocalization).
- {
-  FString AgvReason;
-  const float AgvLimit=AgvTravelSpeedLimit(AgvReason);
-  if (AgvLimit<=0.f) { StopFor(AgvReason); return false; }
-  Speed=FMath::Min(Speed,AgvLimit);
- }
  const float TargetSpeed=FMath::Sign(Distance)*FMath::Min(Speed,FMath::Sqrt(240.f*FMath::Abs(Distance)));
  const float Lateral=FVector::DotProduct(Offset,GetActorRightVector());
  float Curvature=FMath::Clamp(2.f*Lateral/FMath::Max(1600.f,Offset.SizeSquared2D()),-1.f/117.3f,1.f/117.3f);
- if (AIState==EWarehouseAIState::DockCharge && IsValid(ChargingStation) && Wheels[1] && Wheels[2])
+ const AActor* LineGuide=ElevatorLine ? static_cast<AActor*>(Elevator.Get()) :
+  AIState==EWarehouseAIState::DockCharge && IsValid(ChargingStation) ? static_cast<AActor*>(ChargingStation.Get()) : nullptr;
+ if (LineGuide && Wheels[1] && Wheels[2])
  {
   // Follow the dock's straight axle line, rather than chasing a point at the
   // actor origin. A shrinking point lookahead turned the vehicle as it reached
   // the contact, then the final pivot displaced that same contact sideways.
   const FVector Axle=(Wheels[1]->GetComponentLocation()+Wheels[2]->GetComponentLocation())*.5f;
   const FVector LocalAxle=GetActorTransform().InverseTransformPosition(Axle);
-  const FVector TargetAxle=FTransform(ChargingStation->GetActorQuat(),Destination).TransformPosition(LocalAxle);
-  const float Cross=FVector::DotProduct(TargetAxle-Axle,ChargingStation->GetActorRightVector());
-  const float LookAhead=FMath::Max(10.f,ChargingLineLookaheadCm);
-  const float Heading=ChargingStation->GetActorRotation().Yaw+FMath::RadiansToDegrees(FMath::Atan(FMath::Sign(Distance)*Cross/LookAhead));
+  const FVector TargetAxle=FTransform(LineGuide->GetActorQuat(),Destination).TransformPosition(LocalAxle);
+  const float Cross=FVector::DotProduct(TargetAxle-Axle,LineGuide->GetActorRightVector());
+  const float LookAhead=ElevatorLine ? 30.f : FMath::Max(10.f,ChargingLineLookaheadCm);
+  const float Heading=LineGuide->GetActorRotation().Yaw+FMath::RadiansToDegrees(FMath::Atan(FMath::Sign(Distance)*Cross/LookAhead));
   const float Error=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,Heading));
   Curvature=FMath::Sign(Distance)*FMath::Clamp(Error/LookAhead,-1.f/117.3f,1.f/117.3f);
  }
@@ -489,6 +511,7 @@ bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt,flo
   // lateral point error at the end otherwise turns the fork out of alignment.
   Curvature=FMath::Sign(Distance)*FMath::Clamp(HeadingError/25.f,-1.f/117.3f,1.f/117.3f);
  }
+ TGuardValue<float> PrecisionStop(SensorPrecisionDistanceCm,FMath::Abs(Distance));
  CommandDrive(FMath::Sign(Distance)*FMath::Min(FMath::Abs(TargetSpeed),FMath::Abs(Distance)*2.f),Curvature,Dt);
  return false;
 }

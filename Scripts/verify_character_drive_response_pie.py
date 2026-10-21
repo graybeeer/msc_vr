@@ -4,6 +4,8 @@ Uses the real player Blueprint and its existing animation assets. Measures bone
 poses, not rendered pixels. A collider-free TargetPoint sends remote commands;
 this checks the vehicle actuator path, not OS key injection or smartphone UI.
 Never saves. -DriveChecksOnly skips the separate human fixture.
+-SampleAnimationChecksOnly checks sample locomotion and stops before AGV driving.
+-SampleAnimationCapture also renders the gait/carry/crouch/jump poses.
 """
 import os
 import sys
@@ -15,6 +17,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from apply_real_world_scale import fit
 
 DRIVE_ONLY = '-drivechecksonly' in unreal.SystemLibrary.get_command_line().lower()
+SAMPLE_ONLY = '-sampleanimationchecksonly' in unreal.SystemLibrary.get_command_line().lower()
+SAMPLE_CAPTURE = '-sampleanimationcapture' in unreal.SystemLibrary.get_command_line().lower()
 RENDER_CAPTURE = '-responsecapture' in unreal.SystemLibrary.get_command_line().lower()
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
@@ -33,8 +37,12 @@ floor = actors.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector(0, 0
 floor.static_mesh_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Cube'))
 floor.static_mesh_component.set_collision_profile_name('BlockAll')
 floor.set_actor_scale3d(unreal.Vector(80, 80, .2))
-if RENDER_CAPTURE:
+if RENDER_CAPTURE or SAMPLE_CAPTURE:
     actors.spawn_actor_from_class(unreal.DirectionalLight, unreal.Vector(0, 0, 500), unreal.Rotator(pitch=-45, yaw=30))
+if SAMPLE_CAPTURE:
+    actors.spawn_actor_from_class(unreal.SkyAtmosphere,unreal.Vector())
+    preview=actors.spawn_actor_from_class(unreal.CameraActor,unreal.Vector(2000,1000,200))
+    preview.set_actor_label('SampleAnimationCamera')
 actors.spawn_actor_from_class(unreal.PlayerStart, unreal.Vector(0, -250, 125))
 vehicle = actors.spawn_actor_from_class(unreal.WarehouseForklift, unreal.Vector())
 vehicle.set_actor_label('ResponseAGV')
@@ -68,6 +76,9 @@ stop_time = reach_time = None
 pivot_start = yaw_start = None
 jump_samples = []
 jump_return_time = None
+captured=set()
+sample_air=False
+sample_landing=False
 
 def finish():
     if rig and dummy:
@@ -85,7 +96,7 @@ def enter(next_phase):
     stop_time = reach_time = None
 
 def sample_gait():
-    feet.append(source.get_socket_transform('foot_l', unreal.RelativeTransformSpace.RTS_COMPONENT).translation.x)
+    feet.append(source.get_socket_transform('foot_l', unreal.RelativeTransformSpace.RTS_COMPONENT).translation.length())
     # The first-person copy must also refresh while its world source is hidden.
     a = source.get_socket_transform('foot_l', unreal.RelativeTransformSpace.RTS_COMPONENT).translation
     b = first_person.get_socket_transform('foot_l', unreal.RelativeTransformSpace.RTS_COMPONENT).translation
@@ -96,6 +107,8 @@ def check_gait(marker, minimum_speed):
     assert anim.get_editor_property('ShouldMove'), 'Walking animation transition is false while moving'
     assert max(feet) - min(feet) > 10, ('Foot pose did not cycle', min(feet), max(feet))
     assert capsule.is_simulating_physics() and abs(capsule.get_mass() - 80) < .05
+    if SAMPLE_ONLY:
+        assert isinstance(anim, unreal.WarehouseLocomotionAnimInstance), 'Player still uses the old locomotion class'
     print(marker, 'speed_cm_s', max(samples), 'foot_stride_cm', max(feet) - min(feet))
 
 def check_stop(marker, limit_time, limit_distance):
@@ -142,7 +155,7 @@ def begin_response_checks():
 def tick(dt):
     global now, phase, game, person, rig, dummy, box, source, first_person, anim, capsule, chassis
     global stop_time, reach_time, pivot_start, yaw_start
-    global jump_samples, jump_return_time
+    global jump_samples, jump_return_time, sample_air, sample_landing
     try:
         assert time.monotonic() - began < 210, ('Response PIE timeout', phase)
         if phase == 'start':
@@ -167,6 +180,20 @@ def tick(dt):
             enter('settle')
             return
         age = now - at
+        if SAMPLE_ONLY and anim and phase=='jump':
+            sample_air |= anim.get_editor_property('InAir')
+            sample_landing |= anim.get_editor_property('Landing')
+        if SAMPLE_CAPTURE and person and phase in ('walk','carry_walk','sprint','crouch','jump'):
+            preview=next(a for a in unreal.GameplayStatics.get_all_actors_of_class(game,unreal.CameraActor) if a.get_actor_label()=='SampleAnimationCamera')
+            target=person.get_actor_location()+unreal.Vector(0,0,-10)
+            eye=target+unreal.Vector(280,-340,120)
+            preview.set_actor_location(eye,False,True)
+            preview.set_actor_rotation(unreal.MathLibrary.find_look_at_rotation(eye,target),True)
+            unreal.GameplayStatics.get_player_controller(game,0).set_view_target_with_blend(preview,0)
+            if phase not in captured and age>(.2 if phase=='jump' else .7):
+                captured.add(phase)
+                path=os.path.join(unreal.Paths.project_dir(),'Saved/Testing/SampleAnimation_'+phase+'.png').replace('\\','/')
+                unreal.SystemLibrary.execute_console_command(game,'HighResShot 1600x900 filename='+path)
         if person:
             assert not person.is_physical_ragdoll(), ('Normal movement ragdolled', phase)
         if phase == 'settle':
@@ -216,7 +243,8 @@ def tick(dt):
             sample_gait()
             if age < 1.4:
                 return
-            check_gait('CHARACTER_WALK_ANIMATION_PASSED', 185)
+            check_gait('CHARACTER_WALK_ANIMATION_PASSED', 330)
+            assert max(samples)<375, ('Walk target exceeds 3.5m/s',max(samples))
             enter('walk_stop')
             return
         if phase in ('walk_stop', 'sprint_stop'):
@@ -224,7 +252,8 @@ def tick(dt):
                 stop_time = age
             if age < 1:
                 return
-            check_stop('CHARACTER_' + phase.upper() + '_PASSED', .6 if phase == 'walk_stop' else .95, 50 if phase == 'walk_stop' else 125)
+            # Higher 3.5/5m/s targets keep the same finite physical braking force.
+            check_stop('CHARACTER_' + phase.upper() + '_PASSED', .8 if phase == 'walk_stop' else 1.1, 110 if phase == 'walk_stop' else 200)
             if phase == 'walk_stop':
                 assert person.try_pickup_cargo(box), 'Pickup fixture out of reach'
                 enter('carry_settle')
@@ -256,6 +285,9 @@ def tick(dt):
             carry = next(mesh for mesh in person.get_components_by_class(unreal.SkeletalMeshComponent) if mesh.get_name() == 'TwoHandCarryMesh')
             for i, bone in enumerate(('hand_l', 'hand_r')):
                 assert (carry.get_socket_location(bone) - person.get_carry_hand_location(i)).length() < 6, ('Carry hand contact', bone)
+                world_carry=next(mesh for mesh in person.get_components_by_class(unreal.SkeletalMeshComponent) if mesh.get_name()=='RemoteOperatorWorldMesh')
+                assert world_carry.is_visible(), 'External carry pose is hidden'
+                assert (world_carry.get_socket_location(bone)-person.get_carry_hand_location(i)).length()<6, ('External carry hand contact',bone)
             body = box.get_component_by_class(unreal.StaticMeshComponent)
             before = body.get_physics_linear_velocity()
             person.drop_cargo()
@@ -269,7 +301,8 @@ def tick(dt):
             sample_gait()
             if age < 2:
                 return
-            check_gait('CHARACTER_SPRINT_GAIT_PASSED', 330)
+            check_gait('CHARACTER_SPRINT_GAIT_PASSED', 475)
+            assert max(samples)<530, ('Sprint target exceeds 5m/s',max(samples))
             before = capsule.get_physics_linear_velocity()
             person.set_locomotion_input(False, False)
             assert (capsule.get_physics_linear_velocity() - before).length() < .001, 'Input reset momentum'
@@ -305,6 +338,10 @@ def tick(dt):
             if age < 1:
                 return
             assert capsule.get_unscaled_capsule_half_height() < 59 and person.get_actor_location().z < origin.z - 25
+            if SAMPLE_ONLY:
+                assert anim.get_editor_property('Crouching'), 'Crouch pose not selected'
+                for bone in ('foot_l','foot_r'):
+                    assert source.get_socket_location(bone).z>-4, ('Crouch feet sank below the floor',bone,source.get_socket_location(bone))
             person.set_locomotion_input(False, False)
             enter('stand')
             return
@@ -313,6 +350,10 @@ def tick(dt):
                 assert age < 4, 'Cannot stand back up'
                 return
             print('CHARACTER_PHYSICAL_LOCOMOTION_PASSED', 'walk/carry/run gait, stopping, jump, crouch; actual 80kg body')
+            if SAMPLE_ONLY:
+                assert sample_air and sample_landing,'Airborne or landing animation was never selected'
+                print('GAME_ANIMATION_SAMPLE_PIE_PASSED','Saved player class, 3.5/5m/s motion, first-person pose copy, carry hands, phone fade, jump and crouch; no OS input claim')
+                finish();return
             assert rig.begin_remote_control(dummy)
             enter('remote_check')
             return

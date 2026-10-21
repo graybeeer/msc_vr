@@ -24,16 +24,39 @@ AWarehouseChargingStation::AWarehouseChargingStation()
   Mesh->SetRelativeScale3D(Size/100.f);
   Mesh->SetMaterial(0,Material);
   Mesh->SetCollisionProfileName(TEXT("BlockAllDynamic"));
+  return Mesh;
  };
- Part(TEXT("Cabinet"),FVector(-76,0,62),FVector(36,65,124),Steel.Object);
- Part(TEXT("ContactPlate"),FVector(-55,0,28),FVector(6,26,14),Chrome.Object);
- Part(TEXT("StatusLight"),FVector(-57,0,106),FVector(3,36,6),Green.Object);
+ auto* Cabinet=Part(TEXT("Cabinet"),FVector(-76,0,62),FVector(36,65,124),Steel.Object);
+ auto* Contact=Part(TEXT("ContactPlate"),FVector(-55,0,28),FVector(6,26,14),Chrome.Object);
+ auto* Status=Part(TEXT("StatusLight"),FVector(-57,0,106),FVector(3,36,6),Green.Object);
+ static ConstructorHelpers::FObjectFinder<UStaticMesh> CabinetModel(TEXT("/Game/Warehouse/ChargingStation/Meshes/SM_Charger_GameCabinet_Final"));
+ static ConstructorHelpers::FObjectFinder<UStaticMesh> ContactModel(TEXT("/Game/Warehouse/ChargingStation/Meshes/SM_Charger_GameContact_Final"));
+ static ConstructorHelpers::FObjectFinder<UStaticMesh> StatusModel(TEXT("/Game/Warehouse/ChargingStation/Meshes/SM_Charger_GameStatus_Final"));
+ const bool bUseAuthoredModel=CabinetModel.Succeeded() && ContactModel.Succeeded() && StatusModel.Succeeded();
+ if (bUseAuthoredModel)
+ {
+  auto ApplyModel=[&](UStaticMeshComponent* Component,UStaticMesh* Model,bool bSolid)
+  {
+   Component->SetStaticMesh(Model);
+   Component->EmptyOverrideMaterials();
+   // The imported cabinet's bumper ends protrude 2.5cm past the pad plane.
+   // Recess that fixed body 5cm; preserve the electrical contact/dock pose.
+   Component->SetRelativeLocation(FVector(-52.-RearExtension-(bSolid ? 5. : 0.),0,0));
+   Component->SetRelativeScale3D(FVector::OneVector);
+   Component->SetCollisionProfileName(bSolid ? TEXT("BlockAllDynamic") : TEXT("NoCollision"));
+  };
+  ApplyModel(Cabinet,CabinetModel.Object,true);
+  ApplyModel(Contact,ContactModel.Object,false);
+  ApplyModel(Status,StatusModel.Object,false);
+ }
  Display=CreateDefaultSubobject<UTextRenderComponent>(TEXT("ChargeDisplay"));
  Display->SetupAttachment(RootComponent);
  Display->SetRelativeLocation(FVector(-57-RearExtension,0,88));
  Display->SetHorizontalAlignment(EHTA_Center);
  Display->SetWorldSize(7);
  Display->SetText(FText::FromString(TEXT("24V LiFePO4\nE: REQUEST FULL CHARGE")));
+ Display->SetVisibility(!bUseAuthoredModel);
+ Display->SetHiddenInGame(bUseAuthoredModel);
 }
 
 bool AWarehouseChargingStation::IsDocked(const AWarehouseForklift* Vehicle) const

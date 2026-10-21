@@ -12,6 +12,7 @@ unreal.get_default_object(unreal.load_class(None,'/Script/UnrealEd.EditorPerform
 assert level.load_level('/Game/FirstPerson/Lvl_FirstPerson')
 saved={a.get_actor_label():a for a in actors.get_all_level_actors()}
 source=saved['WH_AutonomousForklift']
+print('SHARED_SAVED_CAPTURE_SETTINGS',[(name,saved[name].get_editor_property('charging_capture_distance_cm'),saved[name].get_editor_property('charging_capture_heading_degrees')) for name in ('WH_AutonomousForklift','WH_AutonomousForklift_02')])
 rig={c.get_name():(c.static_mesh,list(c.get_editor_property('override_materials'))) for c in source.get_components_by_class(unreal.StaticMeshComponent)}
 poses={c.get_name():unreal.MathLibrary.make_relative_transform(c.get_world_transform(),source.get_actor_transform())
        for c in source.get_components_by_class(unreal.SceneComponent) if c!=source.root_component}
@@ -27,6 +28,7 @@ def spawn(cls,name,p):
 floor=spawn(unreal.StaticMeshActor,'SharedFloor',(200,1300,-10))
 floor.static_mesh_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Cube'))
 floor.static_mesh_component.set_collision_profile_name('BlockAll');floor.set_actor_scale3d(unreal.Vector(50,55,.2))
+floor.tags=['WarehouseMapStructure']
 spawn(unreal.PlayerStart,'SharedPlayer',(-1500,-1000,96.5))
 vehicles=[]
 for i,battery in enumerate((100,100,100,100) if IDLE_ONLY else (20,25,28,60)):
@@ -49,6 +51,8 @@ for i,battery in enumerate((100,100,100,100) if IDLE_ONLY else (20,25,28,60)):
     vehicles.append(v)
 for i in range(2):
     charger=spawn(unreal.WarehouseChargingStation,'SharedCharger%d'%i,(650,i*900,0))
+    if '-DriveDiagnostics' in unreal.SystemLibrary.get_command_line():
+        print('SHARED_CHARGER_AUTHORED_BOUNDS',i,str(charger.get_actor_bounds(False)),[(c.get_name(),str(c.get_local_bounds()),str(c.get_world_transform())) for c in charger.get_components_by_class(unreal.StaticMeshComponent)])
     if IDLE_ONLY:
         vehicles[i].set_editor_property('charging_station',charger);charger.set_editor_property('assigned_vehicle',vehicles[i])
 for i in range(2):
@@ -68,7 +72,8 @@ started=time.monotonic();phase='start';game=live=None;at=0;last=-1;records=[];ch
 def finish(ok,detail):
     (output/('IdleReport.json' if IDLE_ONLY else 'Report.json')).write_text(json.dumps(dict(ok=ok,detail=detail,charged=sorted(charged),saw_busy=saw_busy,saw_parking=saw_parking,opportunity_submitted=opportunity_submitted,opportunity_left=opportunity_left,samples=records,wall_seconds=time.monotonic()-started),ensure_ascii=False,indent=2),encoding='utf-8')
     print('SHARED_CHARGING_PASSED' if ok else 'SHARED_CHARGING_FAILED',detail)
-    unreal.unregister_slate_post_tick_callback(handle);level.editor_request_end_play();unreal.SystemLibrary.quit_editor()
+    unreal.unregister_slate_post_tick_callback(handle);level.editor_request_end_play()
+    if '-KeepTestEditorOpen' not in unreal.SystemLibrary.get_command_line(): unreal.SystemLibrary.quit_editor()
 
 def tick(dt):
     global phase,game,live,at,last,saw_busy,saw_parking,opportunity_submitted,opportunity_left
@@ -88,11 +93,20 @@ def tick(dt):
         stations=[live['SharedCharger%d'%i] for i in range(2)]
         occupied=[s.get_editor_property('occupant') for s in stations if s.get_editor_property('occupant')]
         assert len(set(occupied))==len(occupied) and len(occupied)<=2
+        bays=[live['SharedWaiting%d'%i] for i in range(2)]
+        bay_owners=[b.get_editor_property('occupant') for b in bays if b.get_editor_property('occupant')]
+        assert len(set(bay_owners))==len(bay_owners),'One vehicle owns multiple ordinary parking reservations'
+        for bay in bays:
+            owner=bay.get_editor_property('occupant')
+            if owner:assert owner.get_editor_property('waiting_bay')==bay,'Parking owner/reference exchange is inconsistent'
         for i,v in enumerate(current):
             assert v.root_component.is_simulating_physics() and abs(v.get_physical_mass_kg()-1000)<.5
             assert not v.get_editor_property('mechanical_failure'),v.get_editor_property('status')
             assert v.get_editor_property('ai_state')!=unreal.WarehouseAIState.FAULT,v.get_editor_property('status')
             state=v.get_editor_property('ai_state')
+            if state==unreal.WarehouseAIState.CHARGING:
+                station=v.get_editor_property('charging_station')
+                assert station and station.get_editor_property('occupant')==v and station.is_docked(v),'Charging without strict physical docking or ownership'
             if i<3:
                 v.set_editor_property('battery_time_scale',3600 if state==unreal.WarehouseAIState.CHARGING else 1)
                 if v.get_editor_property('battery_percent')>=79.9:charged.add(i)
@@ -120,6 +134,8 @@ def tick(dt):
             last=now
             row=dict(time=round(now,2),vehicles=[dict(id=i,state=str(v.get_editor_property('ai_state')),battery=round(v.get_editor_property('battery_percent'),3),status=v.get_editor_property('status'),position=str(v.get_actor_location()),yaw=v.get_actor_rotation().yaw,speed=v.get_editor_property('current_speed_cm')) for i,v in enumerate(current)],occupants=[s.get_editor_property('occupant').get_actor_label() if s.get_editor_property('occupant') else None for s in stations])
             records.append(row);print('SHARED_CHARGING_SAMPLE',json.dumps(row,ensure_ascii=False))
+            if '-DriveDiagnostics' in unreal.SystemLibrary.get_command_line() and int(now)%10<2:
+                print('SHARED_CHARGING_ROUTE',[(i,[(str(p.pose),p.reverse,p.pivot) for p in v.get_editor_property('planned_route')[-6:]]) for i,v in enumerate(current)])
         if len(charged)==3 and opportunity_submitted and opportunity_left and 'OPPORTUNITY-PREEMPT' in fourth.get_editor_property('completed_job_ids'):
             assert saw_busy and saw_parking
             assert live['SharedWorkCargo'] in live['SharedStrength'].get_supported_actors(live['SharedWorkPallet'])

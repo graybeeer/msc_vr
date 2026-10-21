@@ -42,7 +42,7 @@ if parked:
     p=named['WH_Drop_Pallet'];delta=unreal.Vector(-800,-1570,.1)-p.get_actor_location();p.set_actor_location(p.get_actor_location()+delta,False,False)
     box=named['WH_Drop_Box'];box.set_actor_location(box.get_actor_location()+delta,False,False)
 else:
-    cube('TrafficFloor',(0,0,-10),(8000,8000,20))
+    cube('TrafficFloor',(0,0,-10),(8000,8000,20)).tags=['WarehouseMapStructure']
     spawn(unreal.PlayerStart,'TrafficPlayer',(0,1000,100))
 for label,point,yaw in ([] if parked else [('TrafficA',(-500 if blocked else -120,0,0),0),('TrafficB',(500 if blocked else 400,0,0),180)]):
     v=spawn(unreal.WarehouseForklift,label,point,yaw);v.set_editor_property('vehicle_name',label);v.set_editor_property('auto_start',False)
@@ -56,7 +56,9 @@ if not parked:
     for label,point,yaw in [('TrafficPalletA',(700 if blocked else 150,0,.1),0),('TrafficPalletB',(-1400,0,.1),180)]:
         spawn(unreal.WarehousePallet,label,point,yaw).get_component_by_class(unreal.StaticMeshComponent).set_static_mesh(pallet_mesh)
 if blocked:
-    cube('TrafficWallN',(0,120,125),(1800,20,250));cube('TrafficWallS',(0,-120,125),(1800,20,250));cube('TrafficWallBack',(800,0,125),(30,260,250))
+    cube('TrafficWallN',(0,120,125),(1800,20,250)).tags=['WarehouseMapStructure']
+    cube('TrafficWallS',(0,-120,125),(1800,20,250)).tags=['WarehouseMapStructure']
+    cube('TrafficWallBack',(800,0,125),(30,260,250)).tags=['WarehouseMapStructure']
 if not parked:
     # Destination/support validation uses the real strength system, including
     # in empty-pallet traffic fixtures. Without it the job faults before routing.
@@ -72,7 +74,8 @@ started=time.monotonic();live=None;game=None;issued=False;second=False;last=-10;
 
 def finish(ok,detail):
     print('FLEET_TRAFFIC_PASSED' if ok else 'FLEET_TRAFFIC_FAILED',detail)
-    unreal.unregister_slate_post_tick_callback(handle);level.editor_request_end_play();unreal.SystemLibrary.quit_editor()
+    unreal.unregister_slate_post_tick_callback(handle);level.editor_request_end_play()
+    if '-keeptesteditoropen' not in command:unreal.SystemLibrary.quit_editor()
 
 def tick(dt):
     global live,game,issued,second,last,baseline,initial_b,fault_at,yield_recorded

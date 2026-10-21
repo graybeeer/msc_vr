@@ -48,6 +48,8 @@ public:
  UFUNCTION(BlueprintPure, Category="Elevator") FString CheckInterlocks() const;
  UFUNCTION(BlueprintPure, Category="Elevator") bool CanEnter(AWarehouseForklift* Vehicle) const;
  UFUNCTION(BlueprintPure, Category="Elevator") bool CanExit(AWarehouseForklift* Vehicle) const;
+ // PLC-authorized deck support only; never a world/unknown-ground query.
+ bool TraceCertifiedPlatformSupport(AWarehouseForklift* Vehicle,FVector Point,FHitResult& Support) const;
  UFUNCTION(BlueprintCallable, Category="Elevator") bool RequestTransfer(AWarehouseForklift* Vehicle,int32 FromFloor,int32 ToFloor);
  UFUNCTION(BlueprintCallable, Category="Elevator") bool ConfirmBoarded(AWarehouseForklift* Vehicle);
  UFUNCTION(BlueprintCallable, Category="Elevator") bool ConfirmExited(AWarehouseForklift* Vehicle);

@@ -4,11 +4,6 @@
 #include "WarehouseFleetCoordinator.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
-#include "HAL/IConsoleManager.h"
-
-// Default 0 (operator fault), the project owner's decision of 2026-10-21: a route that cannot be found ends in a fault so the
-// training scenario can show the cause. 1 turns on waiting and replanning every few seconds for unattended runs.
-static TAutoConsoleVariable<int32> CVarOptRouteWait(TEXT("Warehouse.Opt.RouteWait"),0,TEXT("1: no route -> wait and replan every few seconds instead of an operator fault; 0 (default): fault."));
 
 bool AWarehouseForklift::IsRecovering() const
 {
@@ -22,50 +17,68 @@ void AWarehouseForklift::RecoveryFault(const TCHAR* Reason,const TCHAR* PlayerMe
  FaultAI(Reason);
 }
 
-bool AWarehouseForklift::IsRouteWaitReason(const FString& Reason)
-{
- return Reason.Contains(TEXT("NO PICKUP ROUTE")) || Reason.Contains(TEXT("NO DELIVERY ROUTE")) || Reason.Contains(TEXT("NO CLEAR ROUTE"));
-}
-
-bool AWarehouseForklift::BeginRouteWait(EWarehouseAIState From,const FString& Reason)
-{
- // Only a vehicle that is itself clear waits; reversing cannot open a blocked lane or goal, and the next plan runs from here.
- if (CVarOptRouteWait.GetValueOnGameThread()==0 || RouteWaitSeconds>=RouteWaitTimeoutSeconds) return false;
- BrakeDrive();
- bRouteWaiting=true;
- WaitResumeAI=From; WaitObstacleReason=Reason; WaitSeconds=0;
- if (!bRouteWaiting || RouteWaitSeconds<=0.f)
-  UE_LOG(LogTemp,Log,TEXT("AGV_ROUTE_WAIT %s: %s, waiting and replanning every %.1f s"),*VehicleName,*Reason,RouteWaitRetrySeconds);
- TransitionAI(EWarehouseAIState::WaitingObstacle,FString::Printf(TEXT("%s · 통로가 열릴 때까지 대기 후 재계획 (WAITING FOR ROUTE)"),*Reason));
- return true;
-}
-
 bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Reason)
 {
  BrakeDrive();
  if (IsRemoteControlled() || IsRecovering()) return false;
+ bObservedPickupEscape=false;
  if (bFloorTransfer || (bSupportingPallet && LiftOffset>20.f))
  { RecoveryFault(TEXT("RECOVERY REQUIRES SAFE FLOOR / LOW LOAD - OPERATOR REQUIRED"),TEXT("승강기 또는 높은 적재 상태에서 자동 탈출할 수 없습니다.")); return false; }
  bool AlignmentRetry=false;
  if (From==EWarehouseAIState::AlignVehicle && IsValid(TargetPallet))
  {
-  const FVector Offset=TargetPallet->GetActorLocation()-GetActorLocation();
+  const FTransform Reference=SensorMode==EWarehouseSensorMode::Autonomous ? ObservedPallet : TargetPallet->GetActorTransform();
+  const FVector Offset=Reference.GetLocation()-GetActorLocation();
   const float Ahead=FVector::DotProduct(Offset,GetActorForwardVector());
   AlignmentRetry=Ahead>0 && Ahead<=PalletDetectionRangeCm &&
    FMath::Abs(FVector::DotProduct(Offset,GetActorRightVector()))<=50.f &&
-   FMath::Abs(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,TargetPallet->GetActorRotation().Yaw))<=15.f &&
-   FMath::Abs(FloorBase(TargetPallet->GetActorLocation().Z)-FloorBase(GetActorLocation().Z))<1.f;
+   FMath::Abs(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,Reference.Rotator().Yaw))<=15.f &&
+   FMath::Abs(FloorBase(Reference.GetLocation().Z)-FloorBase(GetActorLocation().Z))<1.f;
  }
  bRetryInsertion=!bSupportingPallet && !bPalletReleased && IsValid(TargetPallet) &&
   (From==EWarehouseAIState::CorrectFork ||
    From==EWarehouseAIState::InsertFork || From==EWarehouseAIState::VerifyInsertion || AlignmentRetry);
- if (RecoveryAttempts>=3 || (bRetryInsertion && ForkInsertionRetries>=3))
- { RecoveryFault(TEXT("RECOVERY LIMIT - CHECK PALLET / CLEAR SPACE"),TEXT("복구를 3회 시도했지만 이동·포크 삽입에 실패했습니다.")); return false; }
  const bool FailedDeliveryRoute=From==EWarehouseAIState::PlanDelivery && Reason==TEXT("OBSTACLE / NO DELIVERY ROUTE");
  const bool FailedPickupRoute=From==EWarehouseAIState::PlanPickup && Reason==TEXT("OBSTACLE / NO PICKUP ROUTE");
  const bool FloorAlignmentRetry=From==EWarehouseAIState::AlignUnload && Reason==TEXT("FLOOR LOAD ALIGNMENT OUTSIDE SLOT");
- if ((FailedDeliveryRoute || (FailedPickupRoute && IsValid(TargetPallet))) &&
-     PlanRecoveryDetour(PalletApproach(FailedPickupRoute ? TargetPallet->GetActorTransform() : ActiveJob.Destination,220)))
+ const bool ObservedPickupBlocked=SensorMode==EWarehouseSensorMode::Autonomous && !bSupportingPallet && IsValid(TargetPallet) &&
+  ((From==EWarehouseAIState::NavigatePickup && (Reason==TEXT("OBSTACLE ON ROUTE") ||
+    Reason==TEXT("OBSTACLE / NO CLEAR ROUTE TO OBSERVED PALLET"))) || FailedPickupRoute);
+ if (ObservedPickupBlocked)
+ {
+  // Sensor route updates have their own bounded budget. They must not spend
+  // the retries reserved for actual contact and fork insertion recovery.
+  if (ObservedRouteReplans==0 || FVector::Dist2D(GetActorLocation(),ObservedRouteProgress)>=100.f)
+  { ObservedRouteReplans=0;ObservedRouteProgress=GetActorLocation(); }
+  if (ObservedRouteReplans>=3)
+  {
+   UE_LOG(LogTemp,Warning,TEXT("AGV_OBSERVED_REPLAN_LIMIT %s observed=%d mechanical=%d progress_cm=%.2f"),
+    *VehicleName,ObservedRouteReplans,RecoveryAttempts,FVector::Dist2D(GetActorLocation(),ObservedRouteProgress));
+   RecoveryFault(TEXT("OBSERVED PICKUP REPLAN LIMIT - NO PHYSICAL PROGRESS"),TEXT("관측한 장애물로 경로를 3회 다시 계획했지만 충분히 이동하지 못했습니다. 접근 공간을 확인해 주세요."));
+   return false;
+  }
+  // A newly observed future obstacle is not proof that the current truck is
+  // physically jammed. Reuse the existing bounded planner before reversing
+  // blindly towards the source. A catalog/envelope-only start overlap gets at
+  // most 60cm of exact own-part checks from this fixed starting position.
+  RecoveryStart=GetActorLocation();
+  bObservedPickupEscape=bHasRecognizedTargetPose && FVector::Dist2D(RecoveryStart,TaskSourcePose().GetLocation())<=260.f;
+  if (PlanRecoveryDetour(PalletApproach(TaskSourcePose(),220)))
+  {
+   ++RecoveryCount;++ObservedRouteReplans;
+   UE_LOG(LogTemp,Log,TEXT("AGV_OBSERVED_REPLAN %s observed=%d/3 mechanical=%d/3 insertion=%d/3 progress_cm=%.2f"),
+    *VehicleName,ObservedRouteReplans,RecoveryAttempts,ForkInsertionRetries,FVector::Dist2D(GetActorLocation(),ObservedRouteProgress));
+   ProgressLocation=GetActorLocation();StalledSeconds=0;WaitSeconds=0;
+   TransitionAI(EWarehouseAIState::NavigatePickup,TEXT("OBSERVED PICKUP OBSTACLE - REPLAN BEFORE WITHDRAWAL"));
+   bRouteStarted=true;
+   return true;
+  }
+  bObservedPickupEscape=false;
+ }
+ if (RecoveryAttempts>=3 || (bRetryInsertion && ForkInsertionRetries>=3))
+ { RecoveryFault(TEXT("RECOVERY LIMIT - CHECK PALLET / CLEAR SPACE"),TEXT("복구를 3회 시도했지만 이동·포크 삽입에 실패했습니다.")); return false; }
+ if ((FailedDeliveryRoute || (FailedPickupRoute && IsValid(TargetPallet) && !ObservedPickupBlocked)) &&
+     PlanRecoveryDetour(PalletApproach(FailedPickupRoute ? TaskSourcePose() : ActiveJob.Destination,220)))
  {
   ++RecoveryCount; ++RecoveryAttempts;
   ProgressLocation=GetActorLocation();StalledSeconds=0;WaitSeconds=0;
@@ -88,7 +101,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  case EWarehouseAIState::NavigatePickup:
  case EWarehouseAIState::AlignVehicle:
   if (!IsValid(TargetPallet)) { FaultAI(TEXT("TARGET LOST")); return false; }
-  RecoveryGoal=PalletApproach(TargetPallet->GetActorTransform(),220);
+  RecoveryGoal=PalletApproach(TaskSourcePose(),220);
   RecoveryResume=EWarehouseAIState::NavigatePickup; break;
  case EWarehouseAIState::PlanDelivery:
  case EWarehouseAIState::NavigateDelivery:
@@ -124,12 +137,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
    if (!ConnectPoses(GetActorTransform(),Forward,Path,Cost) || Path.IsEmpty() ||
        Path.ContainsByPredicate([](const FWarehouseRoutePoint& P){return P.bReverse || P.bPivot;}) ||
        (FleetCoordinator && !FleetCoordinator->Permit(this,&Forward)))
-   {
-    // No route and no free way out right now: another vehicle's lease or a blocked lane usually clears by itself.
-    // Wait and replan like any other missing route; only a long wait ends in the operator fault.
-    if (BeginRouteWait(From,Reason)) return true;
-    RecoveryFault(TEXT("NO SAFE CHARGER DEPARTURE - OPERATOR REQUIRED"),TEXT("충전기 앞에서 안전한 출차 경로를 확보하지 못했습니다."));return false;
-   }
+   { RecoveryFault(TEXT("NO SAFE CHARGER DEPARTURE - OPERATOR REQUIRED"),TEXT("충전기 앞에서 안전한 출차 경로를 확보하지 못했습니다."));return false; }
    ChargerForwardRecovery=true;
    UE_LOG(LogTemp,Log,TEXT("AGV_CHARGER_DEPARTURE_RECOVERY %s from=%s to=%s"),*VehicleName,*GetActorLocation().ToString(),*Forward.GetLocation().ToString());
   }
@@ -139,9 +147,8 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  if ((FailedPickupRoute || FailedDeliveryRoute) && !ChargerForwardRecovery && NavigationClear(GetActorTransform()))
  {
   TGuardValue<bool> Planning(bPlanningRoute,true);
-  const FTransform Goal=PalletApproach(FailedPickupRoute ? TargetPallet->GetActorTransform() : ActiveJob.Destination,220);
+  const FTransform Goal=PalletApproach(FailedPickupRoute ? TaskSourcePose() : ActiveJob.Destination,220);
   const bool GoalClear=NavigationClear(Goal);
-  if (BeginRouteWait(From,Reason)) return true;
   RecoveryFault(GoalClear ? TEXT("NO CONNECTED ROUTE AFTER LAYOUT CHANGE") : TEXT("PALLET APPROACH SPACE BLOCKED"),
    GoalClear ? TEXT("현재 배치에서 연결 가능한 경로를 찾지 못했습니다. 통로 폭과 랙 배치를 확인한 뒤 E로 재시도하세요.") :
     TEXT("팔레트 접근 공간이 막혀 있습니다. 랙 앞 작업 공간과 팔레트 방향을 확인한 뒤 E로 재시도하세요."));
@@ -158,10 +165,10 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  if (bRetryInsertion)
  {
   // Leave enough steering distance for a new alignment after real contact drift.
-  const FVector ClearPose=PalletApproach(TargetPallet->GetActorTransform(),320).GetLocation();
+  const FVector ClearPose=PalletApproach(SensorMode==EWarehouseSensorMode::Autonomous ? ObservedPallet : TargetPallet->GetActorTransform(),320).GetLocation();
   RecoveryDistance=FMath::Clamp(FVector::DotProduct(GetActorLocation()-ClearPose,GetActorForwardVector())+10.f,0.f,300.f);
   // Do not back an already-clear pallet out of its configured sensor range.
-  const FVector Offset=TargetPallet->GetActorLocation()-GetActorLocation();
+  const FVector Offset=(SensorMode==EWarehouseSensorMode::Autonomous ? ObservedPallet.GetLocation() : TargetPallet->GetActorLocation())-GetActorLocation();
   const float Along=FVector::DotProduct(Offset,GetActorForwardVector().GetSafeNormal2D());
   const float SideSquared=FMath::Max(0.f,float(Offset.SizeSquared())-Along*Along);
   const float SensorRadius=FMath::Max(0.f,PalletDetectionRangeCm-20.f);
@@ -185,7 +192,7 @@ bool AWarehouseForklift::PlanRecoveryDetour(const FTransform& Goal)
  const FVector Across=FVector::CrossProduct(FVector::UpVector,Delta.GetSafeNormal2D());
  const float Distance=Delta.Size2D();
  TArray<FTransform> Candidates;
- if (bTrafficEscape)
+ if (bTrafficEscape || bObservedPickupEscape)
   for (float DistanceCm : {-120.f,-60.f,60.f,120.f})
    Candidates.Add(FTransform(From.GetRotation(),From.GetLocation()+From.GetUnitAxis(EAxis::X)*DistanceCm));
  // ponytail: two local side lanes; this is bounded recovery, not a global free-space planner.
@@ -222,7 +229,9 @@ void AWarehouseForklift::AdvanceRecovery(float Dt)
 {
  if (AIState==EWarehouseAIState::RecoverLower)
  {
-  const float Height=FMath::Max(0.f,float(TargetPallet->GetActorLocation().Z-GetActorLocation().Z));
+  // Retry the last actual model observation; a hidden pallet may have moved.
+  const float SourceZ=SensorMode==EWarehouseSensorMode::Autonomous ? ObservedPallet.GetLocation().Z : TargetPallet->GetActorLocation().Z;
+  const float Height=FMath::Max(0.f,float(SourceZ-GetActorLocation().Z));
   if (MoveLift(Height) && FMath::Abs(LiftOffset-Height)<.5f &&
       FMath::Abs(CarriageBody->GetPhysicsLinearVelocity().Z)<1.f)
   {
@@ -244,7 +253,9 @@ void AWarehouseForklift::AdvanceRecovery(float Dt)
    FHitResult Ground;
    const FVector Preview=GetActorLocation()+Forward*RecoveryDirection*35.f*Dt;
    FCollisionQueryParams Params(SCENE_QUERY_STAT(RecoveryFloor),false,this);
-   if (!GetWorld()->LineTraceSingleByChannel(Ground,Preview+FVector(0,0,3),Preview-FVector(0,0,5),ECC_Visibility,Params) || Ground.ImpactNormal.Z<.98f)
+   const bool Supported=SensorMode==EWarehouseSensorMode::Autonomous ? PerceivedFloorSupport(Preview) :
+    GetWorld()->LineTraceSingleByChannel(Ground,Preview+FVector(0,0,3),Preview-FVector(0,0,5),ECC_Visibility,Params) && Ground.ImpactNormal.Z>.98f;
+   if (!Supported)
    { RecoveryFault(TEXT("RECOVERY FLOOR UNSUPPORTED"),TEXT("탈출 방향에 안전한 바닥이 없습니다.")); return; }
    if (CommandDrive(RecoveryDirection*FMath::Min(35.f,Remaining*2.f),0,Dt) && Status.StartsWith(TEXT("RECOVERY BLOCKED:")))
     SetStatus(TEXT("RECOVERY - LOW SPEED WITHDRAWAL"));
@@ -271,14 +282,15 @@ void AWarehouseForklift::AdvanceRecovery(float Dt)
    TransitionAI(RecoveryResume,TEXT("DETOUR FOUND - RESUME WORK ORDER"));
    bRouteStarted=true;
   }
-  else if (!BeginRouteWait(RecoveryResume,TEXT("OBSTACLE / NO CLEAR ROUTE")))
-   RecoveryFault(TEXT("NO SAFE DETOUR - CLEAR SPACE / OPERATOR REQUIRED"),TEXT("안전하게 이동할 우회 경로를 찾지 못했습니다."));
+  else RecoveryFault(TEXT("NO SAFE DETOUR - CLEAR SPACE / OPERATOR REQUIRED"),TEXT("안전하게 이동할 우회 경로를 찾지 못했습니다."));
   ProgressLocation=GetActorLocation(); StalledSeconds=0;
  }
 }
 
 void AWarehouseForklift::CheckDriveProgress(float Dt)
 {
+ if (ObservedRouteReplans>0 && FVector::Dist2D(GetActorLocation(),ObservedRouteProgress)>=100.f)
+ { ObservedRouteReplans=0;ObservedRouteProgress=GetActorLocation(); }
  if (IsRecovering() || AIState==EWarehouseAIState::WaitingObstacle || FMath::Abs(DesiredDriveSpeed)<.5f)
  { StalledSeconds=0; ProgressLocation=GetActorLocation(); return; }
  if (FVector::Dist2D(GetActorLocation(),ProgressLocation)>=1.f)

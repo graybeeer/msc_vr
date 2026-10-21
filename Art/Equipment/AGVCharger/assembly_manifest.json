@@ -1,0 +1,279 @@
+{
+  "date": "2026-10-14",
+  "axes": "X front / Y right / Z up",
+  "units": "centimeters",
+  "root_definition": "ground beneath contact pad surface X=0",
+  "suggested_location_relative_to_existing_DockPose_cm": [
+    -98.39869049725712,
+    0,
+    0
+  ],
+  "contact_row_heights_cm": [
+    20,
+    28,
+    36,
+    44,
+    52
+  ],
+  "parts": [
+    {
+      "name": "SM_Charger_Cabinet",
+      "location_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "triangles": 11700,
+      "fbx": "UnrealParts/SM_Charger_Cabinet.fbx"
+    },
+    {
+      "name": "SM_Charger_Door",
+      "location_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "triangles": 5248,
+      "fbx": "UnrealParts/SM_Charger_Door.fbx"
+    },
+    {
+      "name": "SM_Charger_StatusLight",
+      "location_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "triangles": 2172,
+      "fbx": "UnrealParts/SM_Charger_StatusLight.fbx"
+    },
+    {
+      "name": "SM_Charger_ContactModule",
+      "location_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "triangles": 10188,
+      "fbx": "UnrealParts/SM_Charger_ContactModule.fbx"
+    },
+    {
+      "name": "SM_Charger_Contacts",
+      "location_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "triangles": 21720,
+      "fbx": "UnrealParts/SM_Charger_Contacts.fbx"
+    },
+    {
+      "name": "SM_Charger_DockBumper",
+      "location_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "triangles": 1500,
+      "fbx": "UnrealParts/SM_Charger_DockBumper.fbx"
+    },
+    {
+      "name": "SM_Charger_Sensors",
+      "location_cm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "triangles": 3408,
+      "fbx": "UnrealParts/SM_Charger_Sensors.fbx"
+    },
+    {
+      "name": "SM_Charger_EStop",
+      "location_cm": [
+        -8.60000029206276,
+        25.0,
+        89.99999761581421
+      ],
+      "triangles": 636,
+      "fbx": "UnrealParts/SM_Charger_EStop.fbx"
+    }
+  ],
+  "materials": {
+    "Charger powder coat": {
+      "Base Color": [
+        0.041999999433755875,
+        0.052000001072883606,
+        0.04899999871850014,
+        1.0
+      ],
+      "Metallic": 0.550000011920929,
+      "Roughness": 0.36000001430511475,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "Charger recess rubber": {
+      "Base Color": [
+        0.00800000037997961,
+        0.014000000432133675,
+        0.013000000268220901,
+        1.0
+      ],
+      "Metallic": 0.05000000074505806,
+      "Roughness": 0.550000011920929,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "Charger gunmetal frame": {
+      "Base Color": [
+        0.07500000298023224,
+        0.09000000357627869,
+        0.08699999749660492,
+        1.0
+      ],
+      "Metallic": 0.7200000286102295,
+      "Roughness": 0.30000001192092896,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "Charger bolt steel": {
+      "Base Color": [
+        0.33000001311302185,
+        0.3799999952316284,
+        0.36000001430511475,
+        1.0
+      ],
+      "Metallic": 0.8999999761581421,
+      "Roughness": 0.2800000011920929,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "Charger printed ivory": {
+      "Base Color": [
+        0.7200000286102295,
+        0.7699999809265137,
+        0.7300000190734863,
+        1.0
+      ],
+      "Metallic": 0.0,
+      "Roughness": 0.4699999988079071,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "Charger safety amber": {
+      "Base Color": [
+        0.949999988079071,
+        0.49000000953674316,
+        0.02500000037252903,
+        1.0
+      ],
+      "Metallic": 0.25,
+      "Roughness": 0.33000001311302185,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "Charger status mint": {
+      "Base Color": [
+        0.019999999552965164,
+        0.800000011920929,
+        0.4300000071525574,
+        1.0
+      ],
+      "Metallic": 0.10000000149011612,
+      "Roughness": 0.20000000298023224,
+      "Emission": [
+        0.019999999552965164,
+        0.800000011920929,
+        0.4300000071525574,
+        1.0
+      ],
+      "Emission Strength": 4.0
+    },
+    "Charger brass contact": {
+      "Base Color": [
+        0.6000000238418579,
+        0.3199999928474426,
+        0.10499999672174454,
+        1.0
+      ],
+      "Metallic": 0.8299999833106995,
+      "Roughness": 0.27000001072883606,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "Charger sensor glass": {
+      "Base Color": [
+        0.03500000014901161,
+        0.12999999523162842,
+        0.10999999940395355,
+        1.0
+      ],
+      "Metallic": 0.4000000059604645,
+      "Roughness": 0.15000000596046448,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "Charger emergency stop": {
+      "Base Color": [
+        0.6800000071525574,
+        0.017999999225139618,
+        0.008999999612569809,
+        1.0
+      ],
+      "Metallic": 0.11999999731779099,
+      "Roughness": 0.28999999165534973,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    }
+  },
+  "unreal_import_tested": false,
+  "validation": {
+    "date": "2026-10-14",
+    "scope": "Blender renders and FBX reimport: eight meshes and matching dimensions; Unreal source contact height comparison only",
+    "fbx_roundtrip_mesh_count": 8,
+    "passed": true
+  }
+}

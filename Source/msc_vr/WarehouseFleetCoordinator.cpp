@@ -116,6 +116,7 @@ bool AWarehouseFleetCoordinator::Retreat(AWarehouseForklift* V,AWarehouseForklif
   if (Blocked) continue;
   FYield Ticket;Ticket.Leader=Leader;Ticket.Escape=Path;Ticket.Clearance=Footprint(V,Start);Ticket.Goal=Goal;Ticket.Started=GetWorld()->GetTimeSeconds();
   Ticket.Resume=V->AIState==EWarehouseAIState::WaitingObstacle ? V->WaitResumeAI : V->AIState;
+  if (!Saved.IsEmpty()) Ticket.ResumeGoal=Saved.Last().Pose;
   Yields.Add(V,Ticket);Requests.Remove(V);++YieldCount;
   V->bTrafficYielding=true;V->bTrafficWaiting=false;V->TrafficStatus=Back>0 ? TEXT("관제: 퇴로 확보 · 안전 대기 위치로 후퇴") : TEXT("관제: 이동 공간 확보 · 앞쪽 안전 대기 위치로 이동");
   UE_LOG(LogTemp,Log,TEXT("FLEET_YIELD %s for %s goal=%s loaded=%d"),*V->VehicleName,*Leader->VehicleName,*P.ToString(),V->bSupportingPallet);
@@ -181,9 +182,17 @@ bool AWarehouseFleetCoordinator::Permit(AWarehouseForklift* V,const FTransform* 
   }
   Waiting(V,FString::Printf(TEXT("관제: %s 통과 우선 · 통로 진입 대기"),*Pair.Key->VehicleName));return false;
  }
- for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) if (*It!=V &&
-     Intersects(Request.Corridor,{Footprint(*It,It->GetActorTransform())}))
+ for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) if (*It!=V)
  {
+  // Reservations above are reported intent. Discovering a parked/unknown
+  // vehicle is perception: never ask the world for its hidden live pose.
+  FBox VehicleBounds(ForceInit);
+  if (V->SensorMode==EWarehouseSensorMode::Autonomous)
+  {
+   if (!V->GetPerceivedActorBounds(*It,VehicleBounds)) continue;
+  }
+  else VehicleBounds=Footprint(*It,It->GetActorTransform());
+  if (!Intersects(Request.Corridor,{VehicleBounds})) continue;
   if (Yields.Contains(*It)) { Waiting(V,TEXT("관제: 앞 차량 후퇴 완료 대기"));return false; }
   if (auto* Other=Requests.Find(*It);Other && Other->Granted)
   { Waiting(V,TEXT("관제: 진입 차량 통과 대기"));return false; }
@@ -201,8 +210,8 @@ bool AWarehouseFleetCoordinator::Permit(AWarehouseForklift* V,const FTransform* 
    Request.LastDetour=Now;const auto Saved=V->PlannedRoute;const int32 Index=V->RouteIndex;
    TGuardValue<bool> PhysicalTraffic(V->bTrafficEscape,true);
    TGuardValue<bool> Avoid(V->bAvoidTrafficReservations,true);
-   TGuardValue<FBox> Blocker(PlanningObstacle,Footprint(*It,It->GetActorTransform()));
-   if (V->PlanRecoveryDetour(Saved.Last().Pose) && !Intersects(Corridor(V),{Footprint(*It,It->GetActorTransform())}))
+   TGuardValue<FBox> Blocker(PlanningObstacle,VehicleBounds);
+   if (V->PlanRecoveryDetour(Saved.Last().Pose) && !Intersects(Corridor(V),{VehicleBounds}))
    {
     ++DetourCount;Request.Corridor=Corridor(V);
     UE_LOG(LogTemp,Log,TEXT("FLEET_PARKED_VEHICLE_DETOUR %s around %s"),*V->VehicleName,*It->VehicleName);
@@ -300,7 +309,13 @@ bool AWarehouseFleetCoordinator::AdvanceYield(AWarehouseForklift* V,float Dt)
      V->RecoveryFault(TEXT("TRAFFIC ESCAPE REPLAN FAILED"),TEXT("접촉 위치를 벗어났지만 안전한 퇴로가 없습니다. 정지 유지 · 작업자 복구를 요청합니다."));
     }
    }
-   else { Ticket->Arrived=true;Ticket->Escape={Footprint(V,V->GetActorTransform())};V->TrafficStatus=TEXT("관제: 대기 위치 도착 · 우선 차량 통과 대기"); }
+   else
+   {
+    Ticket->Arrived=true;Ticket->Escape={Footprint(V,V->GetActorTransform())};
+    // The bounded retry counter now belongs to the arrived waiting phase.
+    Ticket->Replans=0;Ticket->LastReplan=GetWorld()->GetTimeSeconds();
+    V->TrafficStatus=TEXT("관제: 대기 위치 도착 · 우선 차량 통과 대기");
+   }
   }
   else if (Now-Ticket->Started>(Ticket->Replans ? 90 : 45))
   {
@@ -311,9 +326,54 @@ bool AWarehouseFleetCoordinator::AdvanceYield(AWarehouseForklift* V,float Dt)
  }
  auto* Leader=Ticket->Leader.Get();
  Ticket->Escape={Footprint(V,V->GetActorTransform())};
- bool Occupied=Leader && Footprint(Leader,Leader->GetActorTransform()).Intersect(Ticket->Clearance);
+ bool Occupied=false;
+ FBox ObservedLeader(ForceInit);
+ const bool HasObservedLeader=Leader && V->SensorMode==EWarehouseSensorMode::Autonomous && V->GetPerceivedActorBounds(Leader,ObservedLeader);
+ if (Leader)
+ {
+  Occupied=V->SensorMode==EWarehouseSensorMode::Autonomous ?
+   HasObservedLeader && ObservedLeader.Intersect(Ticket->Clearance) :
+   Footprint(Leader,Leader->GetActorTransform()).Intersect(Ticket->Clearance);
+ }
  if (const auto* Lease=Requests.Find(Leader)) Occupied|=Intersects(Lease->Corridor,{Ticket->Clearance});
- if (Occupied) { V->SetStatus(V->TrafficStatus);return true; }
+ if (Occupied)
+ {
+  // A leader may finish parking in the old passage instead of travelling
+  // through it. Its reported idle state ends the passage lease, but does not
+  // erase the measured vehicle. Resume only on a newly validated detour.
+  const double Now=GetWorld()->GetTimeSeconds();
+  if (HasObservedLeader && Ticket->ResumeGoal.IsSet() && Leader->AIState==EWarehouseAIState::Ready &&
+      Leader->IsIdleForLayout() && !Leader->bTrafficYielding && !Requests.Contains(Leader) &&
+      Now-Ticket->LastReplan>=5.f)
+  {
+   Ticket->LastReplan=Now;++Ticket->Replans;
+   const auto Saved=V->PlannedRoute;const int32 SavedIndex=V->RouteIndex,SavedEndpoint=V->EndpointSegment;
+   const bool SavedDriving=V->bEndpointDriving,SavedOrienting=V->bEndpointOrienting,SavedTurning=V->bRouteTurning;
+   TGuardValue<bool> PhysicalTraffic(V->bTrafficEscape,true);
+   TGuardValue<bool> Avoid(V->bAvoidTrafficReservations,true);
+   TGuardValue<FBox> Blocker(PlanningObstacle,ObservedLeader);
+   const bool Found=V->PlanRecoveryDetour(Ticket->ResumeGoal.GetValue()) && !Intersects(Corridor(V),{ObservedLeader});
+   if (Found)
+   {
+    const auto Resume=Ticket->Resume;
+    Yields.Remove(V);V->bTrafficYielding=false;
+    V->TransitionAI(Resume,TEXT("관제: 관측된 대기 차량 우회 · 기존 작업 재개"));V->bRouteStarted=true;
+    V->bTrafficWaiting=false;V->TrafficStatus=TEXT("관제: 관측된 대기 차량 우회 · 기존 작업 재개");
+    UE_LOG(LogTemp,Log,TEXT("FLEET_IDLE_LEADER_DETOUR %s around %s"),*V->VehicleName,*Leader->VehicleName);
+    return true;
+   }
+   V->PlannedRoute=Saved;V->RouteIndex=SavedIndex;V->EndpointSegment=SavedEndpoint;
+   V->bEndpointDriving=SavedDriving;V->bEndpointOrienting=SavedOrienting;V->bRouteTurning=SavedTurning;
+   UE_LOG(LogTemp,Log,TEXT("FLEET_IDLE_LEADER_REPLAN_FAILED %s around %s attempt=%d/3"),*V->VehicleName,*Leader->VehicleName,Ticket->Replans);
+   if (Ticket->Replans>=3)
+   {
+    Yields.Remove(V);V->bTrafficYielding=false;
+    V->RecoveryFault(TEXT("TRAFFIC IDLE LEADER - NO SAFE DETOUR"),TEXT("대기 차량을 우회할 안전한 경로를 3회 찾지 못했습니다. 작업자 복구가 필요합니다."));
+    return true;
+   }
+  }
+  V->SetStatus(V->TrafficStatus);return true;
+ }
  const auto Resume=Ticket->Resume;
  Yields.Remove(V);V->bTrafficYielding=false;V->PlannedRoute.Reset();V->RouteIndex=0;
  V->TransitionAI(Resume,TEXT("관제: 통과 확인 · 기존 작업 재개"));

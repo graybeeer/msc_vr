@@ -1,0 +1,704 @@
+{
+  "date": "2026-10-14",
+  "axes": "X along straight routing / Z up; cabinet front -Y; conduit saddle axial Y",
+  "blender_units": "meters",
+  "unreal_units": "centimeters",
+  "unreal_applied": false,
+  "preview_walls_floors_excluded": true,
+  "modules": [
+    {
+      "name": "SM_WS_IBeam_4m",
+      "label": "I-BEAM / 4 m",
+      "dimensions_cm": [
+        400.0,
+        20.000000298023224,
+        39.99999761581421
+      ],
+      "snap_ports_cm": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          400,
+          0,
+          0
+        ]
+      ],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 324,
+      "fbx": "FBX/SM_WS_IBeam_4m.fbx"
+    },
+    {
+      "name": "SM_WS_BeamConnection",
+      "label": "BOLTED CONNECTION",
+      "dimensions_cm": [
+        3.449999913573265,
+        28.00000011920929,
+        46.00000083446503
+      ],
+      "snap_ports_cm": [],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 1420,
+      "fbx": "FBX/SM_WS_BeamConnection.fbx"
+    },
+    {
+      "name": "SM_WS_Brace_2m",
+      "label": "BRACE / 2 m",
+      "dimensions_cm": [
+        202.99999713897705,
+        8.500000834465027,
+        3.2500043511390686
+      ],
+      "snap_ports_cm": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          200,
+          0,
+          0
+        ]
+      ],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 828,
+      "fbx": "FBX/SM_WS_Brace_2m.fbx"
+    },
+    {
+      "name": "SM_WS_TrayStraight_2m",
+      "label": "LADDER TRAY / 2 m",
+      "dimensions_cm": [
+        202.50000953674316,
+        42.000001668930054,
+        9.000000357627869
+      ],
+      "snap_ports_cm": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          200,
+          0,
+          0
+        ]
+      ],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 1044,
+      "fbx": "FBX/SM_WS_TrayStraight_2m.fbx"
+    },
+    {
+      "name": "SM_WS_TrayElbow90",
+      "label": "TRAY ELBOW / 90 deg",
+      "dimensions_cm": [
+        83.20946097373962,
+        83.20947885513306,
+        9.000000357627869
+      ],
+      "snap_ports_cm": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          60.0,
+          60.0,
+          0
+        ]
+      ],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 1332,
+      "fbx": "FBX/SM_WS_TrayElbow90.fbx"
+    },
+    {
+      "name": "SM_WS_TrayTee",
+      "label": "TRAY T-JUNCTION",
+      "dimensions_cm": [
+        172.50001430511475,
+        107.24999904632568,
+        9.000000357627869
+      ],
+      "snap_ports_cm": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          170.0,
+          0,
+          0
+        ],
+        [
+          85.0,
+          85.0,
+          0
+        ]
+      ],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 1632,
+      "fbx": "FBX/SM_WS_TrayTee.fbx"
+    },
+    {
+      "name": "SM_WS_TrayReducer",
+      "label": "TRAY REDUCER / 400-200",
+      "dimensions_cm": [
+        62.500011920928955,
+        40.29591679573059,
+        9.000000357627869
+      ],
+      "snap_ports_cm": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          60.0,
+          0,
+          0
+        ]
+      ],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 456,
+      "fbx": "FBX/SM_WS_TrayReducer.fbx"
+    },
+    {
+      "name": "SM_WS_TrayEndCap",
+      "label": "TRAY END CAP",
+      "dimensions_cm": [
+        0.4000000189989805,
+        40.00000059604645,
+        9.000000357627869
+      ],
+      "snap_ports_cm": [],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 108,
+      "fbx": "FBX/SM_WS_TrayEndCap.fbx"
+    },
+    {
+      "name": "SM_WS_CableBundle_2m",
+      "label": "CABLE BUNDLE / 2 m",
+      "dimensions_cm": [
+        200.0,
+        31.999999284744263,
+        3.100000135600567
+      ],
+      "snap_ports_cm": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          200,
+          0,
+          0
+        ]
+      ],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 1440,
+      "fbx": "FBX/SM_WS_CableBundle_2m.fbx"
+    },
+    {
+      "name": "SM_WS_TrayHanger",
+      "label": "TRAPEZE HANGER / 550 mm",
+      "dimensions_cm": [
+        7.999999821186066,
+        56.99999928474426,
+        61.400002241134644
+      ],
+      "snap_ports_cm": [],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 1876,
+      "fbx": "FBX/SM_WS_TrayHanger.fbx"
+    },
+    {
+      "name": "SM_WS_WallBracket",
+      "label": "WALL SUPPORT / 470 mm",
+      "dimensions_cm": [
+        49.000000953674316,
+        7.999999821186066,
+        28.24999988079071
+      ],
+      "snap_ports_cm": [],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 828,
+      "fbx": "FBX/SM_WS_WallBracket.fbx"
+    },
+    {
+      "name": "SM_WS_ConduitStraight_1m",
+      "label": "CONDUIT / 1 m",
+      "dimensions_cm": [
+        100.0,
+        3.200000151991844,
+        3.200000151991844
+      ],
+      "snap_ports_cm": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          100,
+          0,
+          0
+        ]
+      ],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 576,
+      "fbx": "FBX/SM_WS_ConduitStraight_1m.fbx"
+    },
+    {
+      "name": "SM_WS_ConduitElbow90",
+      "label": "CONDUIT ELBOW / 90 deg",
+      "dimensions_cm": [
+        16.36222153902054,
+        16.362223029136658,
+        2.6000000536441803
+      ],
+      "snap_ports_cm": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          15.0,
+          15.0,
+          0
+        ]
+      ],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 1632,
+      "fbx": "FBX/SM_WS_ConduitElbow90.fbx"
+    },
+    {
+      "name": "SM_WS_JunctionBox",
+      "label": "JUNCTION BOX / 170 mm",
+      "dimensions_cm": [
+        17.70000010728836,
+        9.000000357627869,
+        17.000000178813934
+      ],
+      "snap_ports_cm": [],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 1440,
+      "fbx": "FBX/SM_WS_JunctionBox.fbx"
+    },
+    {
+      "name": "SM_WS_ConduitClamp",
+      "label": "CONDUIT SADDLE",
+      "dimensions_cm": [
+        7.000000029802322,
+        3.500000014901161,
+        4.195678234100342
+      ],
+      "snap_ports_cm": [],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 3844,
+      "fbx": "FBX/SM_WS_ConduitClamp.fbx"
+    },
+    {
+      "name": "SM_WS_DistributionCabinet",
+      "label": "DISTRIBUTION CABINET / 900 mm",
+      "dimensions_cm": [
+        60.00000238418579,
+        21.250000596046448,
+        91.99999570846558
+      ],
+      "snap_ports_cm": [],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 1676,
+      "fbx": "FBX/SM_WS_DistributionCabinet.fbx"
+    },
+    {
+      "name": "SM_WS_DistributionDoor",
+      "label": "CABINET DOOR / HINGE PIVOT",
+      "dimensions_cm": [
+        56.00000023841858,
+        3.550000488758087,
+        86.00000143051147
+      ],
+      "snap_ports_cm": [],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 541,
+      "fbx": "FBX/SM_WS_DistributionDoor.fbx"
+    },
+    {
+      "name": "SM_WS_FirePipeStraight_2m",
+      "label": "FIRE PIPE / 2 m",
+      "dimensions_cm": [
+        200.0,
+        10.599999874830246,
+        10.599999874830246
+      ],
+      "snap_ports_cm": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          200,
+          0,
+          0
+        ]
+      ],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 576,
+      "fbx": "FBX/SM_WS_FirePipeStraight_2m.fbx"
+    },
+    {
+      "name": "SM_WS_FirePipeElbow90",
+      "label": "FIRE PIPE ELBOW / 90 deg",
+      "dimensions_cm": [
+        24.401025474071503,
+        24.401026964187622,
+        8.399999886751175
+      ],
+      "snap_ports_cm": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          20.0,
+          20.0,
+          0
+        ]
+      ],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 1632,
+      "fbx": "FBX/SM_WS_FirePipeElbow90.fbx"
+    },
+    {
+      "name": "SM_WS_FirePipeTee",
+      "label": "FIRE PIPE TEE",
+      "dimensions_cm": [
+        100.0,
+        40.299999713897705,
+        10.599999874830246
+      ],
+      "snap_ports_cm": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          100,
+          0,
+          0
+        ],
+        [
+          50.0,
+          35.0,
+          0
+        ]
+      ],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 768,
+      "fbx": "FBX/SM_WS_FirePipeTee.fbx"
+    },
+    {
+      "name": "SM_WS_SprinklerHead",
+      "label": "SPRINKLER / PENDENT",
+      "dimensions_cm": [
+        6.400000303983688,
+        6.400000303983688,
+        14.049999415874481
+      ],
+      "snap_ports_cm": [],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 4900,
+      "fbx": "FBX/SM_WS_SprinklerHead.fbx"
+    },
+    {
+      "name": "SM_WS_PipeHanger",
+      "label": "PIPE RING HANGER",
+      "dimensions_cm": [
+        7.000000029802322,
+        9.600000083446503,
+        60.19999980926514
+      ],
+      "snap_ports_cm": [],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 584,
+      "fbx": "FBX/SM_WS_PipeHanger.fbx"
+    },
+    {
+      "name": "SM_WS_LEDLinear_1200",
+      "label": "LED LUMINAIRE / 1.2 m",
+      "dimensions_cm": [
+        120.00000476837158,
+        10.000000149011612,
+        8.400000631809235
+      ],
+      "snap_ports_cm": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          120.0,
+          0,
+          0
+        ]
+      ],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 540,
+      "fbx": "FBX/SM_WS_LEDLinear_1200.fbx"
+    },
+    {
+      "name": "SM_WS_DuctStraight_1500",
+      "label": "VENT DUCT / 1.5 m",
+      "dimensions_cm": [
+        150.79998970031738,
+        38.80000114440918,
+        28.800001740455627
+      ],
+      "snap_ports_cm": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          150.0,
+          0,
+          0
+        ]
+      ],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 2640,
+      "fbx": "FBX/SM_WS_DuctStraight_1500.fbx"
+    },
+    {
+      "name": "SM_WS_DuctElbow90",
+      "label": "DUCT ELBOW / 90 deg",
+      "dimensions_cm": [
+        63.35868239402771,
+        69.74999904632568,
+        28.800001740455627
+      ],
+      "snap_ports_cm": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          45.0,
+          45.0,
+          0
+        ]
+      ],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 1684,
+      "fbx": "FBX/SM_WS_DuctElbow90.fbx"
+    },
+    {
+      "name": "SM_WS_DuctGrille",
+      "label": "VENT GRILLE / 350 x 250",
+      "dimensions_cm": [
+        3.3900633454322815,
+        39.20000195503235,
+        29.200002551078796
+      ],
+      "snap_ports_cm": [],
+      "pivot": "local origin at routing inlet / connection; cabinet door at left hinge",
+      "triangles": 1296,
+      "fbx": "FBX/SM_WS_DuctGrille.fbx"
+    }
+  ],
+  "materials": {
+    "WS Structural graphite": {
+      "Base Color": [
+        0.054999999701976776,
+        0.07500000298023224,
+        0.0820000022649765,
+        1.0
+      ],
+      "Metallic": 0.6499999761581421,
+      "Roughness": 0.38999998569488525,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "WS Fasteners": {
+      "Base Color": [
+        0.5699999928474426,
+        0.6200000047683716,
+        0.6399999856948853,
+        1.0
+      ],
+      "Metallic": 0.8799999952316284,
+      "Roughness": 0.27000001072883606,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "WS Galvanized steel": {
+      "Base Color": [
+        0.3799999952316284,
+        0.4399999976158142,
+        0.46000000834465027,
+        1.0
+      ],
+      "Metallic": 0.7799999713897705,
+      "Roughness": 0.3400000035762787,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "WS Cable black": {
+      "Base Color": [
+        0.012000000104308128,
+        0.017999999225139618,
+        0.02199999988079071,
+        1.0
+      ],
+      "Metallic": 0.05000000074505806,
+      "Roughness": 0.5400000214576721,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "WS Data cable blue": {
+      "Base Color": [
+        0.02500000037252903,
+        0.10000000149011612,
+        0.27000001072883606,
+        1.0
+      ],
+      "Metallic": 0.10000000149011612,
+      "Roughness": 0.47999998927116394,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "WS Electrical enclosure": {
+      "Base Color": [
+        0.23000000417232513,
+        0.2800000011920929,
+        0.30000001192092896,
+        1.0
+      ],
+      "Metallic": 0.44999998807907104,
+      "Roughness": 0.4000000059604645,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "WS Warning yellow": {
+      "Base Color": [
+        0.949999988079071,
+        0.5899999737739563,
+        0.02500000037252903,
+        1.0
+      ],
+      "Metallic": 0.10000000149011612,
+      "Roughness": 0.44999998807907104,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "WS Fire pipe red": {
+      "Base Color": [
+        0.5,
+        0.017999999225139618,
+        0.012000000104308128,
+        1.0
+      ],
+      "Metallic": 0.44999998807907104,
+      "Roughness": 0.3100000023841858,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "WS Sprinkler brass": {
+      "Base Color": [
+        0.5799999833106995,
+        0.30000001192092896,
+        0.06499999761581421,
+        1.0
+      ],
+      "Metallic": 0.800000011920929,
+      "Roughness": 0.2800000011920929,
+      "Emission": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "Emission Strength": 1.0
+    },
+    "WS LED diffuser": {
+      "Base Color": [
+        0.8299999833106995,
+        0.8999999761581421,
+        1.0,
+        1.0
+      ],
+      "Metallic": 0.10000000149011612,
+      "Roughness": 0.30000001192092896,
+      "Emission": [
+        0.8299999833106995,
+        0.8999999761581421,
+        1.0,
+        1.0
+      ],
+      "Emission Strength": 2.0
+    }
+  },
+  "validation": {
+    "date": "2026-10-14",
+    "fbx_roundtrip_files": 26,
+    "maximum_bounds_error_m": 0,
+    "origin_and_unit_scale_checked": true,
+    "uv_created": true,
+    "unreal_import_tested": false,
+    "passed": true
+  }
+}

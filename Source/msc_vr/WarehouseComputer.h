@@ -18,6 +18,7 @@ struct FWarehouseInventoryItem
  UPROPERTY(BlueprintReadOnly) FString Location;
  UPROPERTY(BlueprintReadOnly) float MassKg=0;
  UPROPERTY(BlueprintReadOnly) bool bReserved=false;
+ UPROPERTY(BlueprintReadOnly) FString ReceiptStatus;
 };
 USTRUCT(BlueprintType)
 struct FWarehouseComputerTask
@@ -62,6 +63,8 @@ public:
  UFUNCTION(BlueprintPure,Category="Console") double GetTaskElapsedSeconds(const FString& JobId) const;
  // Selecting one parcel always transports its entire supporting pallet, never a partial picking order.
  UFUNCTION(BlueprintCallable,Category="Console") bool IssueOutbound(AWarehouseCargo* Cargo,AWarehouseForklift* Vehicle,int32 DestinationIndex);
+ // Same validated AGV dispatch path, with the owning manifest's reservation.
+ bool IssueShipmentOutbound(AWarehouseCargo* Cargo,AWarehouseForklift* Vehicle,int32 DestinationIndex,const FString& ShipmentId);
  UFUNCTION(BlueprintCallable,Category="Console") bool SetVehicleRunning(AWarehouseForklift* Vehicle,bool Running);
  UFUNCTION(BlueprintCallable,Category="Console") bool CancelQueuedJob(const FString& JobId);
  UFUNCTION(BlueprintCallable,Category="Console") bool CreateHeldCargo(FName Id,FText Product,float MassKg,FVector SizeCm);

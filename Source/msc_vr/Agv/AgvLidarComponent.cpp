@@ -5,6 +5,7 @@
 #include "GameFramework/Actor.h"
 #include "HAL/PlatformTime.h"
 #include "Async/ParallelFor.h"
+#include "WarehousePhysics.h"
 
 namespace
 {
@@ -14,14 +15,7 @@ namespace
 	 */
 	bool IsSolid(const UPrimitiveComponent* Component)
 	{
-		for (const ECollisionChannel Channel : { ECC_WorldStatic, ECC_WorldDynamic, ECC_Pawn, ECC_PhysicsBody })
-		{
-			if (Component->GetCollisionResponseToChannel(Channel) == ECR_Block)
-			{
-				return true;
-			}
-		}
-		return false;
+		return WarehousePhysics::IsPhysicalContact(Component);
 	}
 }
 
@@ -34,6 +28,25 @@ void UAgvLidarComponent::TakePoints(TArray<FVector>& Out)
 {
 	Out.Append(Points);
 	Points.Reset();
+}
+
+void UAgvLidarComponent::DiscardSnapshot()
+{
+	Points.Reset();
+	LastReturns.Reset();
+	Column = 0.0;
+	ScanBeams = ScanPoints = ScanSelfBlocked = 0;
+}
+
+void UAgvLidarComponent::CaptureSnapshot()
+{
+	DiscardSnapshot();
+	// Preserve the standalone test vehicle's hardware-frequency setting. Warehouse sampling does not replay
+	// the revolutions that would have happened between observations or create an independent sensor tick.
+	const float SavedHz = RotationHz;
+	RotationHz = 1.f;
+	Step(1.f);
+	RotationHz = SavedHz;
 }
 
 void UAgvLidarComponent::Step(float Dt)
@@ -49,6 +62,7 @@ void UAgvLidarComponent::Step(float Dt)
 		bNoiseSeeded = true;
 	}
 	const double StartTime = FPlatformTime::Seconds();
+	LastReturns.Reset();
 	const int32 Columns = FMath::Max(1, FMath::RoundToInt32(HorizontalFovDeg / HorizontalResolutionDeg));
 	const double Target = Column + Columns * RotationHz * Dt;
 
@@ -60,8 +74,10 @@ void UAgvLidarComponent::Step(float Dt)
 		int32 Column;
 		double Distance = 0.0;
 		uint8 Result = 0; // 0 nothing, 1 own body, 2 return
+		TWeakObjectPtr<UPrimitiveComponent> Component;
 	};
 	TArray<FBeam> Beams;
+	Beams.Reserve(FMath::Max(0,FMath::FloorToInt32(Target)-FMath::FloorToInt32(Column))*FMath::Max(0,Channels));
 	const double FirstAzimuth = HorizontalFovDeg >= 360.f ? 0.0 : -HorizontalFovDeg * 0.5;
 	for (int32 Index = FMath::FloorToInt32(Column); Index < FMath::FloorToInt32(Target); ++Index)
 	{
@@ -77,7 +93,11 @@ void UAgvLidarComponent::Step(float Dt)
 	// Trace in parallel (read-only scene queries; each beam writes only its own slot). Traced by object type, not the
 	// Visibility channel: people (Pawn capsules) ignore Visibility but reflect light. The owner is not ignored: its own
 	// body blocks beams (a sensor behind the mast does not see through it).
-	const FCollisionObjectQueryParams Objects(FCollisionObjectQueryParams::AllObjects);
+	FCollisionObjectQueryParams Objects(FCollisionObjectQueryParams::AllObjects);
+	// Selection surfaces never have physical contact; excluding their object type avoids retracing through them.
+	Objects.RemoveObjectTypesToQuery(WarehousePhysics::QueryMarkerObject);
+	Points.Reserve(Points.Num()+Beams.Num());
+	LastReturns.Reserve(Beams.Num());
 	const FTransform Sensor = GetComponentTransform();
 	const FVector Origin = Sensor.GetLocation();
 	const AActor* Owner = GetOwner();
@@ -90,13 +110,16 @@ void UAgvLidarComponent::Step(float Dt)
 		FHitResult Hit;
 		double Skip = 0.0;
 		bool bHit = World->LineTraceSingleByObjectType(Hit, Origin, End, Objects, Query);
-		for (int32 Retry = 0; bHit && Hit.GetComponent() && Retry < 4; ++Retry)
+		UPrimitiveComponent* HitComponent = bHit ? Hit.GetComponent() : nullptr;
+		bool bSolid = HitComponent && IsSolid(HitComponent);
+		AActor* HitActor = bSolid ? Hit.GetActor() : nullptr;
+		for (int32 Retry = 0; bHit && HitComponent && Retry < 4; ++Retry)
 		{
-			if (!IsSolid(Hit.GetComponent()))
+			if (!bSolid)
 			{
-				Query.AddIgnoredComponent(Hit.GetComponent()); // look through the trigger volume
+				Query.AddIgnoredComponent(HitComponent); // look through the trigger volume
 			}
-			else if (Hit.GetActor() != Owner || Skip + Hit.Distance > HousingRadiusCm)
+			else if (HitActor != Owner || Skip + Hit.Distance > HousingRadiusCm)
 			{
 				break;
 			}
@@ -105,11 +128,15 @@ void UAgvLidarComponent::Step(float Dt)
 				Skip += Hit.Distance + 0.5; // the sensor's own housing / window: continue just past it
 			}
 			bHit = World->LineTraceSingleByObjectType(Hit, Origin + Direction * Skip, End, Objects, Query);
+			HitComponent = bHit ? Hit.GetComponent() : nullptr;
+			bSolid = HitComponent && IsSolid(HitComponent);
+			HitActor = bSolid ? Hit.GetActor() : nullptr;
 		}
-		if (bHit && Hit.GetComponent() && IsSolid(Hit.GetComponent()))
+		if (bHit && bSolid)
 		{
-			Beam.Result = Hit.GetActor() == Owner ? 1 : 2;
+			Beam.Result = HitActor == Owner ? 1 : 2;
 			Beam.Distance = Skip + Hit.Distance;
+			Beam.Component = HitComponent;
 		}
 	});
 
@@ -128,6 +155,7 @@ void UAgvLidarComponent::Step(float Dt)
 			if (Range >= MinRangeCm && Range <= MaxRangeCm)
 			{
 				Points.Add(Beam.Local * Range);
+				LastReturns.Add({Beam.Component, Beam.Local * Range});
 				++ScanPoints;
 				if (bDrawPoints)
 				{

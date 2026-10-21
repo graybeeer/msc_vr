@@ -63,7 +63,15 @@ def configure_inbound_area():
     floor=clone('WH_InboundFloor',named['Floor']);fit(floor,(800,4000,50),(2400,0,-25))
     floor.tags=[unreal.Name('ObserverArea')];additions.append(floor)
     for y in (-1500,-500,500,1500):
-        beam=clone(f'WH_InboundRoofBeam_{y}',named[f'WH_RoofBeam_{y}']);fit(beam,(800,20,30),(2340,y,1170))
+        template=named[f'WH_RoofBeam_{y}']
+        tc,te=template.get_actor_bounds(False)
+        wc,we=named['WH_Wall_E'].get_actor_bounds(False)
+        rc,re=named['WH_Roof'].get_actor_bounds(False)
+        start,end,bottom,top=tc.x+te.x,wc.x-we.x,tc.z-te.z,rc.z-re.z
+        assert end>start and top>bottom,'Invalid inbound roof support bounds'
+        beam=clone(f'WH_InboundRoofBeam_{y}',template)
+        # Keep the underside and existing service mounts; close the wall and roof gaps.
+        fit(beam,(end-start,2*te.y,top-bottom),((start+end)/2,y,(bottom+top)/2))
         beam.tags=[unreal.Name('ObserverRoof')];additions.append(beam)
         column=clone(f'WH_InboundColumn_{y}',named[f'WH_Column_1850_{y}']);fit(column,(40,40,1180),(2740,y,590));additions.append(column)
     for y in (-1600,-650,300,1250):

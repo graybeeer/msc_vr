@@ -41,6 +41,7 @@ private:
   TArray<FBox> Escape;
   FBox Clearance;
   FTransform Goal;
+  TOptional<FTransform> ResumeGoal;
   double Started=0,LastReplan=-100;
   int32 Replans=0;
   bool Arrived=false;
