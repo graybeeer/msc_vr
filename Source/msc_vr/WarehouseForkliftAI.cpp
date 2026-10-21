@@ -141,7 +141,7 @@ bool AWarehouseForklift::SubmitJob(const FWarehouseWorkOrder& Job)
  for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) It->RecordJobSubmitted(this,Job);
  return true;
 }
-void AWarehouseForklift::RefreshAfterLayout()
+void AWarehouseForklift::RefreshAfterLayout(bool PublishTaskLocation)
 {
  if (FleetCoordinator) FleetCoordinator->Release(this);
  PlannedRoute.Reset();RouteIndex=0;bRouteStarted=false;
@@ -149,7 +149,7 @@ void AWarehouseForklift::RefreshAfterLayout()
  InvalidateSensorSnapshot(TEXT("LAYOUT MAP REVISION / FRESH SCAN REQUIRED"));
  ObservedRouteReplans=0;ObservedRouteProgress=GetActorLocation();
  ProgressLocation=GetActorLocation();StalledSeconds=0;WaitSeconds=0;
- if (IsValid(TargetPallet))
+ if (PublishTaskLocation && IsValid(TargetPallet))
  {
   // Layout authoring also publishes this explicit task-location update.
   if (!ActiveJob.JobId.IsEmpty()) WorkOrderSourcePoses.Add(ActiveJob.JobId,TargetPallet->GetActorTransform());

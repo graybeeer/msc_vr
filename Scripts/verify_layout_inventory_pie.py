@@ -42,7 +42,7 @@ def tick(dt):
         if phase=='settle':
             if now<3:return
             live={a.get_actor_label():a for a in allof(unreal.Actor)}
-            pc=unreal.GameplayStatics.get_player_controller(game,0);pc.set_observer_floor(0);pc.toggle_layout_editing()
+            pc=unreal.GameplayStatics.get_player_controller(game,0);pc.set_observer_floor(0);pc.set_layout_editing(True)
             layout=next(iter(allof(unreal.WarehouseLayoutEditor)));store=next(iter(allof(unreal.WarehouseLayoutInventory)))
             computer=live['WH_ManagementComputer'];strength=live['WH_DamageSystem']
             assert layout.get_editor_property('editing') and unreal.GameplayStatics.is_game_paused(game)

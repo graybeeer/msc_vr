@@ -259,7 +259,7 @@ void Amsc_vrCharacter::ToggleCarry()
 	}
 	if (auto* Lift=Cast<AWarehousePalletLift>(Target))
 	{
-		const int32 Floor=FMath::Clamp(FMath::FloorToInt((GetActorLocation().Z-Lift->GetActorLocation().Z)/400.f),0,2);
+		const int32 Floor=FMath::Clamp(FMath::FloorToInt((GetActorLocation().Z-Lift->GetActorLocation().Z)/400.f),0,Lift->FloorCount-1);
 		Lift->TryInteract(Floor);
 		return;
 	}

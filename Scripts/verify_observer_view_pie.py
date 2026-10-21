@@ -50,6 +50,7 @@ def tick(dt):
             assert len(unreal.GameplayStatics.get_all_actors_with_tag(game,'ObserverArea'))>=1
             states=[roof_state(a) for a in roofs]
             pc.toggle_observer_view()
+            pc.set_layout_editing(False)
             assert pc.is_observer_view() and pc.is_move_input_ignored()
             assert pc.get_controlled_pawn()==pawn and pc.get_view_target()!=pawn
             assert states==[roof_state(a) for a in roofs],'Materials/collision/global visibility changed'

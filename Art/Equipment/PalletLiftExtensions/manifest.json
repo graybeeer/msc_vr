@@ -1,0 +1,136 @@
+{
+  "date": "2026-10-20",
+  "authoring": "Original procedural model inspired by four-column pallet lifts; no OEM CAD or logo",
+  "frame_cm": [
+    180,
+    180,
+    1520
+  ],
+  "carrier_cm": [
+    125,
+    125
+  ],
+  "carrier_origin": "Roller top Z=0; runtime component top Z=40cm at floor 0",
+  "gate_cm": [
+    3,
+    62.5,
+    230
+  ],
+  "materials": {
+    "Lift_GalvanizedSteel": {
+      "color": [
+        0.48,
+        0.52,
+        0.56
+      ],
+      "metallic": 0.95,
+      "roughness": 0.36
+    },
+    "Lift_RedPowderCoat": {
+      "color": [
+        0.58,
+        0.013,
+        0.018
+      ],
+      "metallic": 0.48,
+      "roughness": 0.34
+    },
+    "Lift_Graphite": {
+      "color": [
+        0.028,
+        0.034,
+        0.041
+      ],
+      "metallic": 0.5,
+      "roughness": 0.48
+    },
+    "Lift_MachinedSteel": {
+      "color": [
+        0.64,
+        0.67,
+        0.7
+      ],
+      "metallic": 0.97,
+      "roughness": 0.24
+    },
+    "Lift_SafetyYellow": {
+      "color": [
+        0.95,
+        0.55,
+        0.012
+      ],
+      "metallic": 0.24,
+      "roughness": 0.39
+    },
+    "Lift_Rubber": {
+      "color": [
+        0.014,
+        0.018,
+        0.021
+      ],
+      "metallic": 0.03,
+      "roughness": 0.72
+    }
+  },
+  "files": {
+    "SM_PalletLift_Frame4": "UnrealParts/SM_PalletLift_Frame4.fbx",
+    "SM_PalletLift_CarrierPoweredFrame": "UnrealParts/SM_PalletLift_CarrierPoweredFrame.fbx",
+    "SM_PalletLift_FramePowered3": "UnrealParts/SM_PalletLift_FramePowered3.fbx",
+    "SM_PalletLift_FramePowered4": "UnrealParts/SM_PalletLift_FramePowered4.fbx"
+  },
+  "collision": {
+    "frame": "static complex mesh",
+    "carrier": "4 separate convex channels; dynamic rollers are separate runtime bodies",
+    "gate": "13 separate convex hulls"
+  },
+  "powered_shafts": {
+    "SM_PalletLift_FramePowered3": {
+      "floors": 3,
+      "size_cm": [
+        180,
+        180,
+        1120
+      ],
+      "landing_sill_bounds_cm": {
+        "x": [
+          -79,
+          -67
+        ],
+        "y": [
+          -77,
+          77
+        ],
+        "z_above_floor": [
+          13,
+          24
+        ]
+      },
+      "rail_clearance_cm": 1,
+      "legacy_assets_changed": false
+    },
+    "SM_PalletLift_FramePowered4": {
+      "floors": 4,
+      "size_cm": [
+        180,
+        180,
+        1520
+      ],
+      "landing_sill_bounds_cm": {
+        "x": [
+          -79,
+          -67
+        ],
+        "y": [
+          -77,
+          77
+        ],
+        "z_above_floor": [
+          13,
+          24
+        ]
+      },
+      "rail_clearance_cm": 1,
+      "legacy_assets_changed": false
+    }
+  }
+}

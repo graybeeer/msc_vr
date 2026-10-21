@@ -58,7 +58,7 @@ FVector WarehouseLayoutSnap::Compute(const AActor* Context,const FBox& Original,
  if (Raw.ContainsNaN()) return FVector::ZeroVector;
  FVector Base(FMath::GridSnap(Raw.X,10.),FMath::GridSnap(Raw.Y,10.),0);
  UWorld* World=IsValid(Context) ? Context->GetWorld() : nullptr;
- if (!World || !Original.IsValid || Original.Min.ContainsNaN() || Original.Max.ContainsNaN() || Floor<0 || Floor>2) return Base;
+ if (!World || !Original.IsValid || Original.Min.ContainsNaN() || Original.Max.ContainsNaN() || Floor<0 || Floor>3) return Base;
  const FVector Size=Original.GetSize();
  if (Size.X<20 || Size.Y<20 || Size.Z<60) return Base;
  TSet<const AActor*> Ignored;for (AActor* Actor:Moving) Ignored.Add(Actor);

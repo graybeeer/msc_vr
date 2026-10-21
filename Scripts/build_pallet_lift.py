@@ -7,7 +7,13 @@ from pathlib import Path
 from mathutils import Vector
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / 'Art/Equipment/PalletLift'
+POWERED_SHAFT = '--powered-shaft-only' in sys.argv
+EXTENSIONS = '--transport-extensions' in sys.argv or POWERED_SHAFT
+FLOORS = next((int(arg.split('=', 1)[1]) for arg in sys.argv if arg.startswith('--floors=')), 3) if POWERED_SHAFT else (4 if EXTENSIONS else 3)
+if POWERED_SHAFT and FLOORS not in (3, 4):
+    raise ValueError('Powered shaft variants support 3 or 4 floors')
+EXTRA_HEIGHT = (FLOORS-3)*4
+OUT = ROOT / ('Art/Equipment/PalletLiftExtensions' if EXTENSIONS else 'Art/Equipment/PalletLift')
 PARTS = OUT / 'UnrealParts'
 PARTS.mkdir(parents=True, exist_ok=True)
 bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -91,52 +97,54 @@ def hull_box(group, pos, size):
     obj.display_type = 'WIRE'
     return obj
 
-frame = 'SM_PalletLift_Frame'
-carrier = 'SM_PalletLift_Carrier'
+frame = f'SM_PalletLift_FramePowered{FLOORS}' if POWERED_SHAFT else ('SM_PalletLift_Frame4' if EXTENSIONS else 'SM_PalletLift_Frame')
+carrier = 'SM_PalletLift_CarrierPoweredFrame' if EXTENSIONS else 'SM_PalletLift_Carrier'
 gate = 'SM_PalletLift_Gate'
 # Local -X is the open loading side. Floor clearances are kept free of braces.
 for x in [-.83, .83]:
     for y in [-.83, .83]:
         box('Column base plate', (x, y, .018), (.14, .14, .036), silver, frame)
-        box('Steel lift column', (x, y, 5.38), (.12, .12, 10.72), silver, frame, .004)
-        box('Column inner rail', (x-.064 if x>0 else x+.064, y, 5.38), (.018, .055, 10.64), dark, frame)
+        box('Steel lift column', (x, y, 5.38+EXTRA_HEIGHT/2), (.12, .12, 10.72+EXTRA_HEIGHT), silver, frame, .004)
+        box('Column inner rail', (x-.064 if x>0 else x+.064, y, 5.38+EXTRA_HEIGHT/2), (.018, .055, 10.64+EXTRA_HEIGHT), dark, frame)
         for dx in [-.047, .047]:
             for dy in [-.047, .047]:
                 cyl('Base anchoring bolt', (x+dx, y+dy, .044), .008, .018, bolt, frame, vertices=6)
 for y in [-.899, .899]:
-    box('Red chain cover', (.76, y, 5.45), (.22, .002, 10.70), red, frame, .0005)
-    box('Cover folded outer edge', (.872, y*.99, 5.45), (.025, .025, 10.70), red, frame)
+    box('Red chain cover', (.76, y, 5.45+EXTRA_HEIGHT/2), (.22, .002, 10.70+EXTRA_HEIGHT), red, frame, .0005)
+    box('Cover folded outer edge', (.872, y*.99, 5.45+EXTRA_HEIGHT/2), (.025, .025, 10.70+EXTRA_HEIGHT), red, frame)
     # Individual dark chain links are visible inside the guards.
-    for index in range(130):
+    for index in range(130+round(EXTRA_HEIGHT/.081)):
         z = .18+index*.081
         box('Roller chain link', (.688, y*.89, z), (.012, .026, .048), dark, frame, .001)
         cyl('Roller chain pin', (.68, y*.89, z), .008, .018, bolt, frame, 'X', 10)
-for z in [.20, 3.4, 4.2, 7.4, 8.2, 10.72]:
+for z in ([.20, 3.4, 4.2, 7.4, 8.2, 11.4, 12.2, 14.72] if FLOORS == 4 else [.20, 3.4, 4.2, 7.4, 8.2, 10.72]):
     for y in [-.83, .83]:
         box('Side horizontal tie', (0, y, z), (1.66, .07, .09), silver, frame)
     box('Rear horizontal tie', (.83, 0, z), (.07, 1.66, .09), silver, frame)
-for lo, hi in [(.3,3.3), (4.3,7.3), (8.3,10.6)]:
+for lo, hi in ([(.3,3.3), (4.3,7.3), (8.3,11.3), (12.3,14.6)] if FLOORS == 4 else [(.3,3.3), (4.3,7.3), (8.3,10.6)]):
     for y in [-.83, .83]:
         beam('Side diagonal brace', (-.76,y,lo), (.76,y,hi), .045,.045,silver,frame)
         beam('Side diagonal brace', (.76,y,lo), (-.76,y,hi), .045,.045,silver,frame)
     beam('Rear X brace', (.83,-.76,lo), (.83,.76,hi), .045,.045,silver,frame)
     beam('Rear X brace', (.83,.76,lo), (.83,-.76,hi), .045,.045,silver,frame)
 for y in [-.83, .83]:
-    box('Top motor beam', (0,y,10.78), (1.78,.12,.12), silver,frame)
-box('Top drive cross tie', (.40,0,10.78), (.12,1.76,.12),silver,frame)
+    box('Top motor beam', (0,y,10.78+EXTRA_HEIGHT), (1.78,.12,.12), silver,frame)
+box('Top drive cross tie', (.40,0,10.78+EXTRA_HEIGHT), (.12,1.76,.12),silver,frame)
 for y in [-.63,.63]:
-    box('Gear reducer housing', (.30,y,10.96), (.25,.21,.25),dark,frame,.018)
-    cyl('Geared motor housing', (.01,y,10.97),.12,.35,silver,frame,'X',32)
+    box('Gear reducer housing', (.30,y,10.96+EXTRA_HEIGHT), (.25,.21,.25),dark,frame,.018)
+    cyl('Geared motor housing', (.01,y,10.97+EXTRA_HEIGHT),.12,.35,silver,frame,'X',32)
     for i in range(9):
-        cyl('Motor cooling rib', (-.14+i*.032,y,10.97),.126,.008,dark,frame,'X',32)
-    cyl('Motor end cap',(-.20,y,10.97),.122,.045,dark,frame,'X',32)
-    cyl('Drive sprocket',(.64,y,10.96),.14,.055,bolt,frame,'Y',32)
-cyl('Linked drive shaft',(.64,0,10.96),.026,1.5,bolt,frame,'Y')
-for level in range(3):
+        cyl('Motor cooling rib', (-.14+i*.032,y,10.97+EXTRA_HEIGHT),.126,.008,dark,frame,'X',32)
+    cyl('Motor end cap',(-.20,y,10.97+EXTRA_HEIGHT),.122,.045,dark,frame,'X',32)
+    cyl('Drive sprocket',(.64,y,10.96+EXTRA_HEIGHT),.14,.055,bolt,frame,'Y',32)
+cyl('Linked drive shaft',(.64,0,10.96+EXTRA_HEIGHT),.026,1.5,bolt,frame,'Y')
+for level in range(FLOORS):
     z=.40+4*level
-    # A structural sill stays below the conveying surface, so worn pallet
-    # runners cannot catch its vertical edge while crossing the roller gap.
-    box('Landing sill',(-.73,0,z-.075),(.12,1.54,.11),silver,frame)
+    # Powered-only sills top out at floor +24cm, below the actual adjoining
+    # conveyor rails (25cm) and roller envelopes (34cm). Legacy shafts retain
+    # their original sill and are never overwritten by this variant export.
+    sill_offset = .215 if POWERED_SHAFT else .075
+    box('Landing sill',(-.73,0,z-sill_offset),(.12,1.54,.11),silver,frame)
     for y in [-.76,.76]:
         box('Landing gate post',(-.77,y,z+1.15),(.06,.06,2.30),silver,frame)
         box('Yellow gate marker',(-.808,y,z+1.6),(.012,.065,.24),yellow,frame)
@@ -150,7 +158,7 @@ for y in [-.595,.595]:
 for x in [-.595,.595]:
     box('Carrier cross channel',(x,0,-.08),(.06,1.13,.12),dark,carrier)
     hull_box(carrier,(x,0,-.08),(.06,1.13,.12))
-for i in range(13):
+for i in range(0 if EXTENSIONS else 13):
     x=-.57+i*.095
     cyl('Conveyor steel roller',(x,0,-.03),.03,1.13,bolt,carrier,'Y',24)
     # Fine facets prevent coarse polygon crowns rocking a supported wooden pallet.
@@ -196,13 +204,34 @@ for name in [frame,carrier,gate]:
     bpy.ops.object.select_all(action='DESELECT');obj.select_set(True)
     for collider in colliders.get(name,[]):collider.select_set(True)
     bpy.context.view_layer.objects.active=obj
-    bpy.ops.export_scene.fbx(filepath=str(PARTS/(name+'.fbx')),use_selection=True,object_types={'MESH'},global_scale=1,apply_unit_scale=True,apply_scale_options='FBX_SCALE_UNITS',axis_forward='-Y',axis_up='Z',mesh_smooth_type='FACE',use_mesh_modifiers=True,bake_anim=False)
+    if (POWERED_SHAFT and name == frame) or (not POWERED_SHAFT and (not EXTENSIONS or name!=gate)):
+        bpy.ops.export_scene.fbx(filepath=str(PARTS/(name+'.fbx')),use_selection=True,object_types={'MESH'},global_scale=1,apply_unit_scale=True,apply_scale_options='FBX_SCALE_UNITS',axis_forward='-Y',axis_up='Z',mesh_smooth_type='FACE',use_mesh_modifiers=True,bake_anim=False)
 manifest={'date':'2026-10-20','authoring':'Original procedural model inspired by four-column pallet lifts; no OEM CAD or logo','frame_cm':[180,180,1120],'carrier_cm':[125,125],'carrier_origin':'Roller top Z=0; runtime component top Z=40cm at floor 0','gate_cm':[3,62.5,230],'materials':values,'files':{name:'UnrealParts/'+name+'.fbx' for name in exported},'collision':{'frame':'static complex mesh','carrier':'17 separate convex hulls','gate':'13 separate convex hulls'}}
+if EXTENSIONS:
+    manifest['frame_cm']=[180,180,1120+EXTRA_HEIGHT*100]
+    manifest['files'].pop(gate)
+    manifest['collision']['carrier']='4 separate convex channels; dynamic rollers are separate runtime bodies'
+    previous = json.loads((OUT/'manifest.json').read_text(encoding='utf-8')) if (OUT/'manifest.json').exists() else {}
+    if POWERED_SHAFT:
+        manifest = previous or manifest
+        manifest.setdefault('files', {})[frame]='UnrealParts/'+frame+'.fbx'
+        manifest.setdefault('powered_shafts', {})[frame] = {
+            'floors': FLOORS, 'size_cm': [180, 180, 1120+EXTRA_HEIGHT*100],
+            'landing_sill_bounds_cm': {'x': [-79, -67], 'y': [-77, 77], 'z_above_floor': [13, 24]},
+            'rail_clearance_cm': 1, 'legacy_assets_changed': False}
+        # A shaft-only run exports no carrier or gate file.
+        if not previous:
+            manifest['files'] = {frame: 'UnrealParts/'+frame+'.fbx'}
+    else:
+        manifest['files'].update({name: filename for name, filename in previous.get('files', {}).items()
+                                  if name.startswith('SM_PalletLift_FramePowered')})
+        if previous.get('powered_shafts'):
+            manifest['powered_shafts'] = previous['powered_shafts']
 (OUT/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
 # Preview assembly only. Exported moving meshes stay at their own origins in FBX.
 exported[carrier].location.z=.40
 exported[gate].hide_render=True
-for floor in range(3):
+for floor in range(FLOORS):
     for side in [-1,1]:
         obj=bpy.data.objects.new('PREVIEW gate',exported[gate].data)
         studio.objects.link(obj);obj.location=(-.77,side*.3125,.40+floor*4+1.15)
@@ -235,5 +264,5 @@ for filename,eye,target,scale,res in [('PalletLift_Tower.png',(-12,-17,11),(0,0,
     scene.render.filepath=str(OUT/filename)
     if '--skip-render' not in sys.argv:
         bpy.ops.render.render(write_still=True)
-bpy.ops.wm.save_as_mainfile(filepath=str(OUT/'pallet_lift.blend'))
+bpy.ops.wm.save_as_mainfile(filepath=str(OUT/(f'pallet_lift_powered_frame{FLOORS}.blend' if POWERED_SHAFT else ('pallet_lift_extensions.blend' if EXTENSIONS else 'pallet_lift.blend'))))
 print('PALLET_LIFT_MODEL_EXPORTED',str(OUT))

@@ -69,7 +69,7 @@ def tick(dt):
             camera_live=live['ShippingStagingPreview']
             initial={label:live[label].get_actor_location() for label in VEHICLE_POSES}
             unreal.SystemLibrary.execute_console_command(game,'DisableAllScreenMessages',pc)
-            pc.toggle_observer_view();pc.set_observer_floor(0);pc.set_view_target_with_blend(camera_live,0.)
+            pc.toggle_observer_view();pc.set_observer_floor(0);pc.set_layout_editing(False);pc.set_view_target_with_blend(camera_live,0.)
         dispatch=live['WH_InboundDispatch'];fleet=[live[k] for k in VEHICLE_POSES]
         if now-last_log>10:
             last_log=now

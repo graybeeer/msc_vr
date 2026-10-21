@@ -22,12 +22,15 @@ class MSC_VR_API AWarehouseElevator : public AActor
  GENERATED_BODY()
 public:
  AWarehouseElevator();
+ virtual void OnConstruction(const FTransform& Transform) override;
  virtual void BeginPlay() override;
  virtual void Tick(float DeltaSeconds) override;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator") bool bPowerAvailable=true;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator") bool bEStopReleased=true;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator") bool bDoorSensorsHealthy=true;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator") bool bLevelSensorHealthy=true;
+ UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Elevator", meta=(ClampMin="1",ClampMax="4")) int32 FloorCount=3;
+ UFUNCTION(BlueprintCallable, Category="Elevator") bool SetFloorCount(int32 Count);
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator", meta=(ClampMin="1",ClampMax="2000")) float RatedMassKg=2000;
  // Project assumption; actual manufacturer speed depends on the supplied configuration.
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator", meta=(ClampMin="1",ClampMax="50")) float TravelSpeedCm=35;
@@ -66,6 +69,8 @@ private:
  float DoorOpening=0;
  int32 EntryFloor=0;
  bool bBoarded=false;
+ void ConfigureFloors();
+ float StrokeHalfHeight() const { return (FloorCount-1)*200.f; }
  bool PortalClear() const;
  bool CabinClear() const;
  bool FitsInside(AWarehouseForklift* Vehicle) const;

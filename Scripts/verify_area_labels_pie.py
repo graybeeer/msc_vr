@@ -52,6 +52,7 @@ def visible():
 
 def frame(floor):
     pc.set_observer_floor(floor)
+    pc.set_layout_editing(False)
     z=floor*400
     eye=unreal.Vector(400,-2900,8500+z)
     camera.set_actor_location(eye,False,True)

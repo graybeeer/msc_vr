@@ -4,6 +4,7 @@
 #include "WarehouseChargingStation.h"
 #include "WarehouseElevator.h"
 #include "WarehousePalletLift.h"
+#include "WarehouseConveyor.h"
 #include "WarehouseElevatorLayout.h"
 #include "WarehouseLayoutSnap.h"
 #include "WarehousePallet.h"
@@ -48,6 +49,16 @@ namespace
   for (TActorIterator<AWarehousePalletLift> It(Actor->GetWorld());It;++It) if (It->IsHandlingCargo(Actor)) return true;
   return false;
  }
+ bool HandledByConveyorTransfer(AActor* Actor)
+ {
+  if (!IsValid(Actor) || !Actor->GetWorld()) return false;
+  for (TActorIterator<AWarehouseConveyor> It(Actor->GetWorld());It;++It)
+   if ((It->State==EWarehouseConveyorState::LoadingLift || It->State==EWarehouseConveyorState::LiftTravelling ||
+        It->State==EWarehouseConveyorState::ReceivingLift ||
+        (It->Kind==EWarehouseConveyorKind::RotaryTransfer && (It->RotaryPhase==EWarehouseRotaryPhase::Centering ||
+         It->RotaryPhase==EWarehouseRotaryPhase::Rotating || It->RotaryPhase==EWarehouseRotaryPhase::Discharging))) && It->IsHandlingCargo(Actor)) return true;
+  return false;
+ }
 }
 AWarehouseLayoutEditor::AWarehouseLayoutEditor()
 {
@@ -62,9 +73,9 @@ AWarehouseLayoutEditor* AWarehouseLayoutEditor::Find(const AActor* Context)
 void AWarehouseLayoutEditor::SetEditing(bool Enabled,int32 Floor)
 {
  if (bDragging) EndDrag(false);
- if (!Enabled || FloorIndex!=FMath::Clamp(Floor,0,2)) ClearSelection();
- if (Enabled==bEditing) { FloorIndex=FMath::Clamp(Floor,0,2);return; }
- bEditing=Enabled;FloorIndex=FMath::Clamp(Floor,0,2);MouseWasDown=false;
+ if (!Enabled || FloorIndex!=FMath::Clamp(Floor,0,3)) ClearSelection();
+ if (Enabled==bEditing) { FloorIndex=FMath::Clamp(Floor,0,3);return; }
+ bEditing=Enabled;FloorIndex=FMath::Clamp(Floor,0,3);MouseWasDown=false;
  if (Enabled)
  {
   AWarehouseLayoutInventory::Find(this)->CapturePrototypes(this);
@@ -96,13 +107,14 @@ bool AWarehouseLayoutEditor::Eligible(AActor* Actor) const
  if (PC && (Actor==PC->GetPawn() || PC->HiddenActors.Contains(Actor))) return false;
  if (IsShaft(Actor)) return Category==EWarehouseLayoutCategory::Elevator || Category==EWarehouseLayoutCategory::All;
  const FName FloorTag(*FString::Printf(TEXT("WarehouseFloor%d"),FloorIndex));
- const bool TaggedFloor=Actor->ActorHasTag(TEXT("WarehouseFloor0")) || Actor->ActorHasTag(TEXT("WarehouseFloor1")) || Actor->ActorHasTag(TEXT("WarehouseFloor2"));
+ const bool TaggedFloor=Actor->ActorHasTag(TEXT("WarehouseFloor0")) || Actor->ActorHasTag(TEXT("WarehouseFloor1")) || Actor->ActorHasTag(TEXT("WarehouseFloor2")) || Actor->ActorHasTag(TEXT("WarehouseFloor3"));
  const bool Dynamic=Actor->IsA<AWarehouseForklift>() || Actor->IsA<AWarehousePallet>() || Actor->IsA<AWarehouseCargo>() || Actor->IsA<AWarehouseWorker>();
  // Cargo/vehicles can change floors during real elevator transport. Their
  // original authoring tag cannot override their current physical floor.
  if (!Dynamic && TaggedFloor ? !Actor->ActorHasTag(FloorTag) : FMath::FloorToInt((FMath::Max(0.,Actor->GetActorLocation().Z)+1.)/400.)!=FloorIndex) return false;
  switch (Category)
  {
+ case EWarehouseLayoutCategory::Conveyor:return Actor->IsA<AWarehouseConveyor>();
  case EWarehouseLayoutCategory::Rack:return Actor->ActorHasTag(TEXT("LayoutType:Rack"));
  case EWarehouseLayoutCategory::Forklift:return Actor->IsA<AWarehouseForklift>();
  case EWarehouseLayoutCategory::Elevator:return Actor->ActorHasTag(TEXT("LayoutType:Elevator"));
@@ -113,7 +125,7 @@ bool AWarehouseLayoutEditor::Eligible(AActor* Actor) const
  case EWarehouseLayoutCategory::Pallet:return Actor->IsA<AWarehousePallet>();
  case EWarehouseLayoutCategory::All:return ZoneForActor(Actor)!=INDEX_NONE || Actor->ActorHasTag(TEXT("LayoutType:Rack")) || Actor->ActorHasTag(TEXT("LayoutType:Elevator")) ||
   Actor->ActorHasTag(TEXT("LayoutType:Other")) || Actor->IsA<AWarehouseForklift>() || Actor->IsA<AWarehouseChargingStation>() ||
-  Actor->IsA<AWarehouseWaitingBay>() || Actor->IsA<AWarehouseCargo>() || Actor->IsA<AWarehousePallet>() || Actor->IsA<AWarehouseWorker>();
+  Actor->IsA<AWarehouseConveyor>() || Actor->IsA<AWarehouseWaitingBay>() || Actor->IsA<AWarehouseCargo>() || Actor->IsA<AWarehousePallet>() || Actor->IsA<AWarehouseWorker>();
  default:return Actor->ActorHasTag(TEXT("LayoutType:Other")) || Actor->IsA<AWarehouseCargo>() || Actor->IsA<AWarehousePallet>() || Actor->IsA<AWarehouseWorker>();
  }
 }
@@ -346,8 +358,12 @@ bool AWarehouseLayoutEditor::BeginDrag(AActor* HitActor,FVector FloorPoint)
  }
  // Move, rotation and deletion all enter this transaction. Check the expanded
  // group before disabling any collision or physics, including rack/zone contents.
+ for (AActor* Member:Members) if (const auto* Conveyor=Cast<AWarehouseConveyor>(Member);Conveyor && !Conveyor->IsIdleForLayout())
+ { Status=TEXT("물류가 실려 있거나 승강기 인계 중인 컨베이어는 비운 뒤 편집하세요.");return false; }
  for (AActor* Member:Members) if (HandledByPalletLift(Member))
  { Status=TEXT("화물용 엘리베이터가 운반 중인 물류는 하역을 완료한 뒤 편집하세요.");return false; }
+ for (AActor* Member:Members) if (HandledByConveyorTransfer(Member))
+ { Status=TEXT("컨베이어·승강기 인계 또는 회전 이송 중인 물류는 이송을 완료한 뒤 편집하세요.");return false; }
  RotationBounds=FBox(ForceInit);
  for (const FBox& Box:ZoneAreas) RotationBounds+=Box;
  for (AActor* Member:Members) if (IsValid(Member))
@@ -482,10 +498,158 @@ bool AWarehouseLayoutEditor::BeginAdd(FVector FloorPoint)
  }
  return true;
 }
-void AWarehouseLayoutEditor::RefreshAfterEdit()
+void AWarehouseLayoutEditor::RefreshAfterEdit(bool PublishTaskLocation)
 {
- for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) It->RefreshAfterLayout();
+ for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) It->RefreshAfterLayout(PublishTaskLocation);
  for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) It->RefreshState();
+}
+AWarehouseConveyor* AWarehouseLayoutEditor::GetSelectedConveyor() const
+{ return SelectedActors.Num()==1 ? Cast<AWarehouseConveyor>(SelectedActors[0]) : nullptr; }
+bool AWarehouseLayoutEditor::ConveyorPlacementClear(const TArray<AWarehouseConveyor*>& Conveyors)
+{
+ // Reuse the exact component-shape/floor checks used by normal placement.
+ // Rebuilt roller components differ from the old rig, so probe the new rig;
+ // never restore stale component snapshots across a geometry rebuild.
+ TArray<FMember> Previous=MoveTemp(Moving);Moving.Reset();const FBox SavedBounds=OriginalBounds;
+ for (AWarehouseConveyor* Conveyor:Conveyors)
+ {
+  if (!IsValid(Conveyor)) continue;
+  FMember Member;Member.Actor=Conveyor;Member.Collision=Conveyor->GetActorEnableCollision();
+  TArray<USceneComponent*> Parts;Conveyor->GetComponents(Parts);
+  for (auto* Component:Parts) { FPart Part;Part.Component=Component;Member.Parts.Add(Part); }
+  Moving.Add(Member);
+ }
+ OriginalBounds=FBox(ForceInit);for (AWarehouseConveyor* Conveyor:Conveyors) if (IsValid(Conveyor)) OriginalBounds+=Conveyor->GetComponentsBoundingBox(true);
+ const bool Clear=PlacementClear();Moving=MoveTemp(Previous);OriginalBounds=SavedBounds;return Clear;
+}
+bool AWarehouseLayoutEditor::ConfigureSelectedConveyor(float YawDegrees,float InclineDegrees,float BaseHeightCm,float LengthCm,float WidthCm,float SpeedCm)
+{
+ auto* Conveyor=GetSelectedConveyor();
+ if (!bEditing || !HasAuthority() || bDragging || bMarqueeSelecting || !Conveyor || !Conveyor->IsIdleForLayout())
+ { Status=TEXT("비어 있고 승강기 인계 중이 아닌 컨베이어 한 개를 선택하세요.");return false; }
+ const FTransform OldPose=Conveyor->GetActorTransform();
+ const float OldLength=Conveyor->LengthCm,OldWidth=Conveyor->WidthCm,OldHeight=Conveyor->SurfaceHeightCm,OldSpeed=Conveyor->SpeedCm;
+ const bool Applied=Conveyor->ConfigureGeometry(LengthCm,WidthCm,OldHeight,SpeedCm) &&
+  Conveyor->SetConveyorPose(YawDegrees,InclineDegrees,BaseHeightCm);
+ if (!Applied || !ConveyorPlacementClear({Conveyor}))
+ {
+  const FString Failure=Applied ? Status : Conveyor->Status;
+  Conveyor->SetActorTransform(OldPose,false,nullptr,ETeleportType::TeleportPhysics);
+  Conveyor->LengthCm=OldLength;Conveyor->WidthCm=OldWidth;Conveyor->SurfaceHeightCm=OldHeight;Conveyor->SpeedCm=OldSpeed;Conveyor->RebuildConveyor();
+  Status=TEXT("컨베이어 변경 취소 · ")+Failure;return false;
+ }
+ Conveyor->Tags.RemoveAll([](FName Tag) { return Tag.ToString().StartsWith(TEXT("WarehouseFloor")); });
+ Conveyor->Tags.Add(FName(*FString::Printf(TEXT("WarehouseFloor%d"),FMath::Clamp(FMath::FloorToInt((Conveyor->GetActorLocation().Z+1)/400.),0,3))));
+ NotifyStructureChanged();Status=TEXT("컨베이어 각도·경사·높이·크기 적용 · 고정 지도 갱신");return true;
+}
+bool AWarehouseLayoutEditor::CanConnectSelectedConveyors() const
+{
+ return bEditing && HasAuthority() && !bDragging && !bMarqueeSelecting && Action!=EWarehouseLayoutAction::Add && SelectedActors.Num()==2 &&
+  SelectedActors.ContainsByPredicate([](AActor* A) { return A && A->IsA<AWarehouseConveyor>(); }) &&
+  !SelectedActors.ContainsByPredicate([](AActor* A) { const auto* Conveyor=Cast<AWarehouseConveyor>(A);return !Conveyor || !Conveyor->IsIdleForLayout(); });
+}
+bool AWarehouseLayoutEditor::ConnectSelectedConveyors()
+{
+ if (!CanConnectSelectedConveyors()) { Status=TEXT("비어 있는 컨베이어 두 개를 Ctrl로 순서대로 선택하세요. 첫 번째 출구에 두 번째 입구를 연결합니다.");return false; }
+ auto* Previous=Cast<AWarehouseConveyor>(SelectedActors[0]);auto* Next=Cast<AWarehouseConveyor>(SelectedActors[1]);
+ const FTransform OldPose=Next->GetActorTransform();auto* OldConnection=Previous->NextConveyor.Get();
+ if (!Next->SnapEntranceTo(Previous)) { Status=Next->Status;return false; }
+ if (!ConveyorPlacementClear({Next}))
+ {
+  const FString Failure=Status;Previous->NextConveyor=OldConnection;Next->SetActorTransform(OldPose,false,nullptr,ETeleportType::TeleportPhysics);Next->RebuildConveyor();
+  Status=TEXT("컨베이어 연결 취소 · ")+Failure;return false;
+ }
+ Next->Tags.RemoveAll([](FName Tag) { return Tag.ToString().StartsWith(TEXT("WarehouseFloor")); });
+ Next->Tags.Add(FName(*FString::Printf(TEXT("WarehouseFloor%d"),FMath::Clamp(FMath::FloorToInt((Next->GetActorLocation().Z+1)/400.),0,3))));
+ NotifyStructureChanged();Status=TEXT("첫 컨베이어 출구 → 두 번째 입구 연결 · 입출구 높이·물리 충돌 검사 완료");return true;
+}
+bool AWarehouseLayoutEditor::SetSelectedConveyorTurnDirection(bool TurnRight)
+{
+ auto* Conveyor=GetSelectedConveyor();
+ if (!bEditing || !HasAuthority() || bDragging || bMarqueeSelecting || !Conveyor || Conveyor->Kind!=EWarehouseConveyorKind::RotaryTransfer || !Conveyor->IsIdleForLayout())
+ { Status=TEXT("비어 있는 90° 회전 이송대 한 개를 선택하세요.");return false; }
+ const bool Previous=Conveyor->bTurnRight;
+ if (!Conveyor->SetTurnDirection(TurnRight)) { Status=Conveyor->Status;return false; }
+ if (!ConveyorPlacementClear({Conveyor}))
+ { const FString Failure=Status;Conveyor->SetTurnDirection(Previous);Status=TEXT("회전 방향 변경 취소 · ")+Failure;return false; }
+ NotifyStructureChanged();Status=TurnRight ? TEXT("회전 이송대 · 우측 90° 출구로 변경") : TEXT("회전 이송대 · 좌측 90° 출구로 변경");return true;
+}
+bool AWarehouseLayoutEditor::LinkSelectedConveyorToNearestLift(bool Infeed,int32 DestinationFloor)
+{
+ const auto* Conveyor=GetSelectedConveyor();if (!Conveyor) { Status=TEXT("승강기에 연결할 컨베이어 한 개를 선택하세요.");return false; }
+ AWarehousePalletLift* Nearest=nullptr;double Distance=TNumericLimits<double>::Max();
+ for (TActorIterator<AWarehousePalletLift> It(GetWorld());It;++It)
+ {
+  const double Candidate=FVector::DistSquared2D(Conveyor->GetActorLocation(),It->GetActorLocation());
+  if (Candidate<Distance) { Distance=Candidate;Nearest=*It; }
+ }
+ if (!Nearest) { Status=TEXT("화물용 승강기가 없습니다. 추가 메뉴에서 먼저 배치하세요.");return false; }
+ return LinkSelectedConveyorToLift(Nearest,Infeed,DestinationFloor);
+}
+bool AWarehouseLayoutEditor::LinkSelectedConveyorToLift(AWarehousePalletLift* Lift,bool Infeed,int32 DestinationFloor)
+{
+ auto* Conveyor=GetSelectedConveyor();
+ if (!bEditing || !HasAuthority() || bDragging || bMarqueeSelecting || !Conveyor || !Conveyor->IsIdleForLayout())
+ { Status=TEXT("빈 컨베이어 한 개를 선택하고 진행 중인 이송을 끝내세요.");return false; }
+ if (!IsValid(Lift) || Lift->GetWorld()!=GetWorld() || !Lift->IsIdleForLayout())
+ { Status=TEXT("연결할 화물용 승강기가 없거나 운반·예약 중입니다.");return false; }
+ if (Conveyor->Kind!=EWarehouseConveyorKind::PalletRoller)
+ { Status=TEXT("화물용 승강기에는 팔레트 롤러 컨베이어만 연결할 수 있습니다.");return false; }
+ if (FloorIndex>=Lift->FloorCount || DestinationFloor<0 || DestinationFloor>=Lift->FloorCount || DestinationFloor==FloorIndex)
+ { Status=FString::Printf(TEXT("현재 %d층과 다른 목적층(1~%d층)을 선택하세요. 승강기가 두 층을 모두 지원해야 합니다."),FloorIndex+1,Lift->FloorCount);return false; }
+ if (FMath::Abs(Lift->GetActorRotation().Pitch)>.01 || FMath::Abs(Lift->GetActorRotation().Roll)>.01 || !Lift->GetActorScale3D().Equals(FVector::OneVector,.001))
+ { Status=TEXT("승강기 기준축은 수평·배율 1이어야 합니다.");return false; }
+ for (TActorIterator<AWarehouseConveyor> It(GetWorld());It;++It)
+  if (*It!=Conveyor && It->Lift==Lift && It->LiftFloor==FloorIndex)
+  { Status=TEXT("이 층의 승강기 포트에는 이미 다른 컨베이어가 연결되어 있습니다.");return false; }
+ const FTransform OldPose=Conveyor->GetActorTransform();const float OldSurface=Conveyor->SurfaceHeightCm;
+ auto* OldLift=Conveyor->Lift.Get();auto* OldNext=Conveyor->NextConveyor.Get();
+ const int32 OldFloor=Conveyor->LiftFloor,OldDestination=Conveyor->DestinationFloor;const bool OldInfeed=Conveyor->bLiftInfeed;
+ const bool PreviousPowered=Lift->bPoweredConveyor;
+ auto Rollback=[&]()
+ {
+  Conveyor->Lift=OldLift;Conveyor->NextConveyor=OldNext;Conveyor->LiftFloor=OldFloor;Conveyor->DestinationFloor=OldDestination;Conveyor->bLiftInfeed=OldInfeed;
+  Conveyor->SurfaceHeightCm=OldSurface;Conveyor->SetActorTransform(OldPose,false,nullptr,ETeleportType::TeleportPhysics);Conveyor->RebuildConveyor();
+ };
+ // Both ports face the carrier. A receiver runs its real rollers backwards.
+ const FQuat LiftRotation=Lift->GetActorQuat();
+ const FVector Port=Lift->GetActorTransform().TransformPosition(FVector(-65.5,0,FloorIndex*400.f+Lift->ConveyorHeightCm));
+ const FVector Position=Port-LiftRotation.RotateVector(FVector(Conveyor->LengthCm*.5f,0,Lift->ConveyorHeightCm));
+ Conveyor->Lift=Lift;Conveyor->LiftFloor=FloorIndex;Conveyor->DestinationFloor=DestinationFloor;Conveyor->bLiftInfeed=Infeed;
+ const bool Placed=Conveyor->ConfigureGeometry(Conveyor->LengthCm,Conveyor->WidthCm,Lift->ConveyorHeightCm,Conveyor->SpeedCm) &&
+  Conveyor->SetConveyorPose(Lift->GetActorRotation().Yaw,0,Position.Z);
+ if (Placed)
+ {
+  // The public pose API controls height/angle; the port determines its XY.
+  Conveyor->SetActorLocation(Position,false,nullptr,ETeleportType::TeleportPhysics);
+ }
+ const bool Rebuilt=Placed && Conveyor->RebuildConveyor();
+ if (!Rebuilt)
+ { const FString Failure=Conveyor->Status;Rollback();Status=TEXT("승강기 연결 취소 · ")+Failure;return false; }
+ // Validate against the real powered-frame recess, rather than the manual
+ // landing sill. Revert both empty machine rigs if placement is rejected.
+ if (!PreviousPowered && !Lift->SetPoweredConveyor(true))
+ { const FString Failure=Lift->Status;Rollback();Status=TEXT("승강기 구동 롤러를 준비할 수 없습니다 · ")+Failure;return false; }
+ if (!ConveyorPlacementClear({Conveyor}))
+ {
+  const FString Failure=Status;Rollback();
+  const bool ModeRestored=PreviousPowered || Lift->SetPoweredConveyor(false);
+  Status=TEXT("승강기 연결 취소 · ")+Failure;
+  if (!ModeRestored) Status+=TEXT(" · 선로는 복구했지만 승강기 구동 모드 복구를 완료하지 못했습니다: ")+Lift->Status;
+  return false;
+ }
+ Conveyor->NextConveyor=nullptr;
+ Conveyor->Tags.RemoveAll([](FName Tag) { return Tag.ToString().StartsWith(TEXT("WarehouseFloor")); });
+ Conveyor->Tags.Add(FName(*FString::Printf(TEXT("WarehouseFloor%d"),FloorIndex)));
+ NotifyStructureChanged();Status=FString::Printf(TEXT("%s · %d층 %s 포트 연결 · 목적층 %d층"),*Lift->GetActorNameOrLabel(),FloorIndex+1,Infeed ? TEXT("공급") : TEXT("수신"),DestinationFloor+1);return true;
+}
+bool AWarehouseLayoutEditor::DisconnectSelectedConveyorLift()
+{
+ auto* Conveyor=GetSelectedConveyor();
+ if (!bEditing || !HasAuthority() || bDragging || bMarqueeSelecting || !Conveyor || !Conveyor->IsIdleForLayout())
+ { Status=TEXT("물류·승강기 인계를 끝낸 빈 컨베이어만 연결 해제할 수 있습니다.");return false; }
+ Conveyor->Lift=nullptr;Conveyor->bLiftInfeed=true;Conveyor->LiftFloor=FloorIndex;Conveyor->DestinationFloor=FloorIndex==0 ? 1 : 0;
+ NotifyStructureChanged();Status=TEXT("승강기 연결 해제 · 컨베이어 위치와 구동 롤러는 유지");return true;
 }
 bool AWarehouseLayoutEditor::CanRotateSelection() const
 {
@@ -548,8 +712,9 @@ bool AWarehouseLayoutEditor::DeleteSelection()
  if (!Allowed) { Store->HeldCargo.SetNum(HeldBefore);++Store->Revision;return false; }
  if (Members.ContainsByPredicate([](AActor* A) { return IsShaft(A); }) && !WarehouseElevatorLayout::Rebuild(this,false,Members))
  { Store->HeldCargo.SetNum(HeldBefore);++Store->Revision;Status=TEXT("승강기 삭제 후 층별 바닥을 복원할 수 없어 삭제를 취소했습니다.");return false; }
+ const bool ConveyorsOnly=!Members.IsEmpty() && !Members.ContainsByPredicate([](AActor* A) { return !A || !A->IsA<AWarehouseConveyor>(); });
  Store->ForgetActors(Members);for (AActor* A:Members) A->Destroy();
- ClearSelection();RefreshAfterEdit();Status=FString::Printf(TEXT("%d개 요소 삭제 · 상자 %d개를 보류된 물류에 보관"),Members.Num(),Store->HeldCargo.Num()-HeldBefore);return true;
+ ClearSelection();RefreshAfterEdit(!ConveyorsOnly);Status=FString::Printf(TEXT("%d개 요소 삭제 · 상자 %d개를 보류된 물류에 보관"),Members.Num(),Store->HeldCargo.Num()-HeldBefore);return true;
 }
 bool AWarehouseLayoutEditor::PlacementClear()
 {
@@ -719,11 +884,12 @@ void AWarehouseLayoutEditor::UpdateReferences()
  for (const auto& Member:Moving) if (Member.Actor.IsValid() && Member.Actor->IsA<AWarehouseElevator>())
   for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
    for (auto& Pose:It->NavigationAnchors) if (!MovedDockAnchors.Contains(&Pose))
-    for (int32 Floor=0;Floor<3;++Floor)
+    for (int32 Floor=0;Floor<4;++Floor)
      if (FVector::Dist(Pose.GetLocation(),Member.Pose.TransformPosition(FVector(0,0,Floor*400.)))<=5.f ||
          FVector::Dist(Pose.GetLocation(),Member.Pose.TransformPosition(FVector(-500,0,Floor*400.)))<=5.f)
      { Pose=EditedPose(Pose);MovedDockAnchors.Add(&Pose);break; }
  const bool ChargerOnly=ReferenceAreas.IsEmpty() && Moving.ContainsByPredicate([](const FMember& M) { return M.Actor.IsValid() && M.Actor->IsA<AWarehouseChargingStation>(); });
+ bool ConveyorsOnly=!Members.IsEmpty();for (AActor* Member:Members) if (!Member || !Member->IsA<AWarehouseConveyor>()) { ConveyorsOnly=false;break; }
  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
  {
   if (!ChargerOnly)
@@ -740,7 +906,7 @@ void AWarehouseLayoutEditor::UpdateReferences()
    const bool ChargingPhase=It->AIState>=EWarehouseAIState::PlanCharge && It->AIState<=EWarehouseAIState::LeaveCharger;
    if (RelocatedChargerVehicles.Contains(*It) && (ChargingPhase || (It->bChargePending && It->ActiveJob.JobId.IsEmpty()))) It->RefreshAfterLayout();
   }
-  else It->RefreshAfterLayout();
+  else It->RefreshAfterLayout(!ConveyorsOnly);
  }
  for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) It->RefreshState();
 }
@@ -774,7 +940,8 @@ bool AWarehouseLayoutEditor::EndDrag(bool Commit)
     Zones.RemoveAll([&](const auto& Z) { return Z.Name==TEXT("Preview") && !NewActors.IsEmpty() && Z.Members.Contains(NewActors[0]); });
     Store->CommitPrototype(NewActors);
    }
-   RefreshAfterEdit();
+   const bool ConveyorsOnly=!NewActors.IsEmpty() && !NewActors.ContainsByPredicate([](AActor* A) { return !A || !A->IsA<AWarehouseConveyor>(); });
+   RefreshAfterEdit(!ConveyorsOnly);
   }
   else UpdateReferences();
   ++MovedCount;Status=TEXT("배치 적용 · 충돌 복원 · 작업 위치와 경로 갱신");

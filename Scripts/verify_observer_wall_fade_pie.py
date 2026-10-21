@@ -180,6 +180,7 @@ def tick(dt):
             phase = 'enable_observer'
         elif phase == 'enable_observer':
             pc.toggle_observer_view()
+            pc.set_layout_editing(False)
             assert pc.is_observer_view()
             # A separate view target keeps normal observer input smoothing from
             # moving this precisely framed camera. The real PC tick still owns Update.
@@ -206,7 +207,7 @@ def tick(dt):
             phase = 'enable_pause'
         elif phase == 'enable_pause':
             pc.set_observer_floor(0)
-            pc.toggle_layout_editing()
+            pc.set_layout_editing(True)
             assert unreal.GameplayStatics.is_game_paused(game), 'Layout mode did not pause simulation'
             paused_time = unreal.GameplayStatics.get_time_seconds(game)
             pc.set_view_target_with_blend(camera, 0)

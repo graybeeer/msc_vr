@@ -4,7 +4,7 @@
 #include "WarehouseLayoutEditor.generated.h"
 
 UENUM(BlueprintType)
-enum class EWarehouseLayoutCategory:uint8 { Rack, Forklift, Elevator, Zone, Other, Charger, WaitingBay, Cargo, Pallet, All };
+enum class EWarehouseLayoutCategory:uint8 { Rack, Forklift, Elevator, Zone, Other, Charger, WaitingBay, Cargo, Pallet, All, Conveyor };
 UENUM(BlueprintType)
 enum class EWarehouseLayoutAction:uint8 { Move, Delete, Add };
 
@@ -55,6 +55,15 @@ public:
  UFUNCTION(BlueprintPure,Category="Layout") TArray<AActor*> GetSelection() const;
  FBox GetSelectionBounds(AActor* Actor) const { return GroupBounds(Actor); }
  UFUNCTION(BlueprintCallable,Category="Layout") void ClearSelection();
+ UFUNCTION(BlueprintCallable,Category="Layout") void NotifyStructureChanged() { RefreshAfterEdit(false); }
+ UFUNCTION(BlueprintPure,Category="Layout|Conveyor") class AWarehouseConveyor* GetSelectedConveyor() const;
+ UFUNCTION(BlueprintCallable,Category="Layout|Conveyor") bool ConfigureSelectedConveyor(float YawDegrees,float InclineDegrees,float BaseHeightCm,float LengthCm,float WidthCm,float SpeedCm);
+ UFUNCTION(BlueprintPure,Category="Layout|Conveyor") bool CanConnectSelectedConveyors() const;
+ UFUNCTION(BlueprintCallable,Category="Layout|Conveyor") bool ConnectSelectedConveyors();
+ UFUNCTION(BlueprintCallable,Category="Layout|Conveyor") bool SetSelectedConveyorTurnDirection(bool TurnRight);
+ UFUNCTION(BlueprintCallable,Category="Layout|Conveyor") bool LinkSelectedConveyorToLift(class AWarehousePalletLift* Lift,bool Infeed,int32 DestinationFloor);
+ UFUNCTION(BlueprintCallable,Category="Layout|Conveyor") bool LinkSelectedConveyorToNearestLift(bool Infeed,int32 DestinationFloor);
+ UFUNCTION(BlueprintCallable,Category="Layout|Conveyor") bool DisconnectSelectedConveyorLift();
  UFUNCTION(BlueprintCallable,Category="Layout") bool SelectScreenRectangle(FVector2D Start,FVector2D End,bool Additive=false);
  UFUNCTION(BlueprintCallable,Category="Layout") bool BeginDrag(AActor* HitActor,FVector FloorPoint);
  UFUNCTION(BlueprintCallable,Category="Layout") void UpdateDrag(FVector FloorPoint);
@@ -96,7 +105,7 @@ private:
  bool bAdding=false;
  UPROPERTY(Transient) TArray<TObjectPtr<AActor>> AddedActors;
  FName AddedCargoId;
- void RefreshAfterEdit();
+ void RefreshAfterEdit(bool PublishTaskLocation=true);
  bool Eligible(AActor* Actor) const;
  bool ParkedAtCharger(class AWarehouseForklift* Vehicle,class AWarehouseChargingStation* Station) const;
  AActor* SelectionActor(AActor* HitActor) const;
@@ -106,6 +115,7 @@ private:
  bool IsSelected(AActor* Actor) const;
  void ToggleSelection(AActor* Actor);
  bool PlacementClear();
+ bool ConveyorPlacementClear(const TArray<class AWarehouseConveyor*>& Conveyors);
  void Restore(bool Rollback);
  void UpdateReferences();
  FTransform EditedPose(const FTransform& Pose) const;

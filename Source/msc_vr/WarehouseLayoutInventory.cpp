@@ -6,6 +6,7 @@
 #include "WarehouseComputer.h"
 #include "WarehouseElevator.h"
 #include "WarehousePalletLift.h"
+#include "WarehouseConveyor.h"
 #include "WarehouseWorker.h"
 #include "WarehouseElevatorLayout.h"
 #include "msc_vrCharacter.h"
@@ -165,6 +166,7 @@ void AWarehouseLayoutInventory::CapturePrototypes(AWarehouseLayoutEditor* Layout
   AActor* A=*It;EWarehouseLayoutCategory Category=EWarehouseLayoutCategory::Other;
   if (A->IsA<AWarehouseCargo>() || A==this || A==Layout || (A->ActorHasTag(TEXT("LayoutFixed")) && !A->IsA<AWarehouseChargingStation>()) || A->IsA<Amsc_vrCharacter>()) continue;
   if (A->IsA<AWarehouseForklift>()) Category=EWarehouseLayoutCategory::Forklift;
+  else if (A->IsA<AWarehouseConveyor>()) Category=EWarehouseLayoutCategory::Conveyor;
   else if (A->IsA<AWarehouseChargingStation>()) Category=EWarehouseLayoutCategory::Charger;
   else if (A->IsA<AWarehouseWaitingBay>()) Category=EWarehouseLayoutCategory::WaitingBay;
   else if (A->IsA<AWarehousePallet>()) Category=EWarehouseLayoutCategory::Pallet;
@@ -182,11 +184,14 @@ void AWarehouseLayoutInventory::CapturePrototypes(AWarehouseLayoutEditor* Layout
    // Workers can share a class but have different roles; static furniture
    // shares StaticMeshActor but has different meshes. Keep those presets.
    const FString Key=A->GetClass()->GetPathName()+FString::FromInt(int32(Category))+
+    (A->IsA<AWarehouseConveyor>() ? FString::FromInt(int32(Cast<AWarehouseConveyor>(A)->Kind)) : FString())+
     (Category==EWarehouseLayoutCategory::Other ? A->GetActorNameOrLabel() : FString());
    if (Singles.Contains(Key)) continue;Singles.Add(Key);Members.Add(A);
   }
   if (Members.IsEmpty()) continue;
   FVector Origin=A->GetActorLocation();FString Name=A->GetActorNameOrLabel();
+  if (const auto* Conveyor=Cast<AWarehouseConveyor>(A)) Name=Conveyor->Kind==EWarehouseConveyorKind::PalletRoller ? TEXT("팔레트 롤러 컨베이어") :
+   Conveyor->Kind==EWarehouseConveyorKind::RotaryTransfer ? TEXT("90° 회전 이송대") : TEXT("상자 컨베이어");
   if (Category==EWarehouseLayoutCategory::Elevator) for (AActor* Member:Members)
   {
    if (Member->IsA<AWarehouseElevator>()) { Origin=Member->GetActorLocation();Name=TEXT("범용 엘리베이터");break; }
@@ -213,6 +218,17 @@ void AWarehouseLayoutInventory::CapturePrototypes(AWarehouseLayoutEditor* Layout
  AddDefault(AWarehousePallet::StaticClass(),EWarehouseLayoutCategory::Pallet,TEXT("빈 팔레트"));
  AddDefault(AWarehouseElevator::StaticClass(),EWarehouseLayoutCategory::Elevator,TEXT("범용 엘리베이터"));
  AddDefault(AWarehousePalletLift::StaticClass(),EWarehouseLayoutCategory::Elevator,TEXT("화물용 엘리베이터"));
+ for (int32 Kind=0;Kind<3;++Kind)
+ {
+  const FString Name=Kind==0 ? TEXT("팔레트 롤러 컨베이어") : Kind==2 ? TEXT("90° 회전 이송대") : TEXT("상자 컨베이어");
+  if (Prototypes.ContainsByPredicate([&](const auto& P) { return P.Category==EWarehouseLayoutCategory::Conveyor && P.Name==Name; })) continue;
+  FWarehouseLayoutPrototype P;P.Name=Name;P.Category=EWarehouseLayoutCategory::Conveyor;
+  FWarehouseLayoutActorTemplate Item;Item.Class=AWarehouseConveyor::StaticClass();
+  Item.Properties.Add(TEXT("Kind"),Kind==0 ? TEXT("PalletRoller") : Kind==2 ? TEXT("RotaryTransfer") : TEXT("CartonBelt"));
+  if (Kind==1) { Item.Properties.Add(TEXT("WidthCm"),TEXT("80"));Item.Properties.Add(TEXT("RatedMassKg"),TEXT("100")); }
+  if (Kind==2) { Item.Properties.Add(TEXT("LengthCm"),TEXT("200"));Item.Properties.Add(TEXT("WidthCm"),TEXT("200")); }
+  P.Actors.Add(Item);Prototypes.Add(P);
+ }
 }
 TArray<FString> AWarehouseLayoutInventory::Choices(EWarehouseLayoutCategory Category) const
 {
@@ -240,7 +256,7 @@ TArray<AActor*> AWarehouseLayoutInventory::SpawnPrototype(EWarehouseLayoutCatego
    if (auto* Field=Actor->GetClass()->FindPropertyByName(Property.Key)) Field->ImportText_Direct(*Property.Value,Field->ContainerPtrToValuePtr<void>(Actor),Actor,PPF_Copy);
   for (FName Tag:Item.Tags) Actor->Tags.AddUnique(Tag);
   Actor->Tags.RemoveAll([](FName T) { return T.ToString().StartsWith(TEXT("LayoutGroup:")) || T.ToString().StartsWith(TEXT("WarehouseFloor")) || T==TEXT("LayoutFixed"); });
-  Actor->Tags.Add(Group);Actor->Tags.Add(FName(*FString::Printf(TEXT("WarehouseFloor%d"),FMath::Clamp(FMath::FloorToInt((Pose.GetLocation().Z+1)/400.),0,2))));
+  Actor->Tags.Add(Group);Actor->Tags.Add(FName(*FString::Printf(TEXT("WarehouseFloor%d"),FMath::Clamp(FMath::FloorToInt((Pose.GetLocation().Z+1)/400.),0,3))));
   TArray<USceneComponent*> Parts;Actor->GetComponents(Parts);
   for (const auto& Part:Item.Parts)
    if (auto** Found=Parts.FindByPredicate([&](const auto* C) { return C->GetFName()==Part.Name; }))

@@ -18,6 +18,42 @@ bool AtWaitingPose(const AWarehouseForklift* Vehicle,const FTransform& Pose)
  // floor level and a stopped vehicle mandatory. Cabin docking stays 1cm.
  return Offset.SizeSquared2D()<25.f && FMath::Abs(Offset.Z)<1.f && FMath::Abs(Vehicle->CurrentSpeedCm)<1.f;
 }
+void BindGuideFrames(UPhysicsConstraintComponent* Joint,UStaticMeshComponent* Anchor,UStaticMeshComponent* Body,const FTransform& WorldFrame)
+{
+ // SetConstrainedComponents recalculates both frames from the current physics
+ // bodies. Define the shaft's canonical guide explicitly, without inheriting
+ // the physical anchor's mesh scale or an incidental component/COM frame.
+ Joint->SetWorldTransform(WorldFrame);
+ Joint->SetConstrainedComponents(Anchor,NAME_None,Body,NAME_None);
+ FTransform AnchorFrame=Anchor->GetComponentTransform();AnchorFrame.RemoveScaling();
+ Joint->SetConstraintReferenceFrame(EConstraintFrame::Frame1,WorldFrame.GetRelativeTransform(AnchorFrame));
+ Joint->SetConstraintReferenceFrame(EConstraintFrame::Frame2,FTransform::Identity);
+}
+UPhysicsConstraintComponent* CreateGuide(AActor* Owner,UStaticMeshComponent* Anchor,UStaticMeshComponent* Body,const FTransform& Frame)
+{
+ auto* Joint=NewObject<UPhysicsConstraintComponent>(Owner);
+ Owner->AddInstanceComponent(Joint);Joint->RegisterComponent();
+ Joint->SetDisableCollision(true);Joint->SetProjectionEnabled(false);
+ Joint->ConstraintInstance.DisableMassConditioning();Joint->ConstraintInstance.DisableParentDominates();
+ Joint->SetLinearXLimit(LCM_Locked,0);Joint->SetLinearYLimit(LCM_Locked,0);Joint->SetLinearZLimit(LCM_Locked,0);
+ Joint->SetAngularTwistLimit(ACM_Locked,0);Joint->SetAngularSwing1Limit(ACM_Locked,0);Joint->SetAngularSwing2Limit(ACM_Locked,0);
+ BindGuideFrames(Joint,Anchor,Body,Frame);
+ Joint->SetLinearDriveAccelerationMode(false);
+ return Joint;
+}
+UPhysicsConstraintComponent* CreateDoorGuide(AActor* Owner,UStaticMeshComponent* Anchor,UStaticMeshComponent* Gate,int32 Index,float Opening)
+{
+ WarehousePhysics::ConfigureContact(Gate,EWarehouseSurface::Steel,80.f);
+ if (!Gate->IsSimulatingPhysics()) Gate->SetSimulatePhysics(true);
+ const float Side=Index%2 ? 1.f : -1.f;
+ const FVector Middle=Owner->GetActorTransform().TransformPosition(FVector(-205,Side*122.5f,(Index/2)*400.f+135.f));
+ auto* Joint=CreateGuide(Owner,Anchor,Gate,FTransform(Owner->GetActorQuat(),Middle));
+ Joint->SetLinearYLimit(LCM_Limited,62.5f);
+ Joint->SetLinearPositionDrive(false,true,false);Joint->SetLinearVelocityDrive(false,true,false);
+ Joint->SetLinearDriveParams(12000.f,2500.f,60000.f); // finite 600N door drive.
+ Joint->SetLinearPositionTarget(FVector(0,Side*(62.5f-Opening),0));
+ return Joint;
+}
 }
 
 AWarehouseElevator::AWarehouseElevator()
@@ -41,7 +77,7 @@ AWarehouseElevator::AWarehouseElevator()
  Platform=Part(TEXT("LiftPlatform"),FVector(0,0,-5),FVector(350,240,10),Chrome.Object);
  for (int32 X : {-1,1}) for (int32 Y : {-1,1})
   Part(FString::Printf(TEXT("Column_%d_%d"),X,Y),FVector(X*187,Y*132,560),FVector(18,18,1120),Steel.Object);
- for (int32 F=0; F<3; ++F)
+ for (int32 F=0; F<4; ++F)
  {
   for (int32 Side : {-1,1})
   {
@@ -56,61 +92,110 @@ AWarehouseElevator::AWarehouseElevator()
  Display->SetRelativeRotation(FRotator(0,180,0)); Display->SetHorizontalAlignment(EHTA_Center);
  Display->SetWorldSize(12); Display->SetText(FText::FromString(Status));
 }
+void AWarehouseElevator::OnConstruction(const FTransform& Transform)
+{
+ Super::OnConstruction(Transform); ConfigureFloors();
+}
+void AWarehouseElevator::ConfigureFloors()
+{
+ FloorCount=FMath::Clamp(FloorCount,1,4);
+ TArray<UStaticMeshComponent*> Parts; GetComponents(Parts);
+ // Older maps serialized six gate references. The new fourth-floor native
+ // subobjects still exist, so rebuild the ordered list from component names.
+ if (Gates.Num()!=8 || Gates.Contains(nullptr))
+ {
+  Gates.Reset();
+  for (int32 Floor=0;Floor<4;++Floor) for (int32 Side:{-1,1})
+  {
+   const FString Name=FString::Printf(TEXT("Gate_%d_%d"),Floor,Side);
+   if (auto* const* Part=Parts.FindByPredicate([&](const UStaticMeshComponent* P) { return P && P->GetName()==Name; })) Gates.Add(*Part);
+  }
+ }
+ for (auto* Part:Parts)
+ {
+  const FString Name=Part->GetName();
+  if (Name.StartsWith(TEXT("Column_")))
+  {
+   const EComponentMobility::Type Mobility=Part->Mobility;
+   Part->SetMobility(EComponentMobility::Movable);
+   const float Height=1120.f+(FloorCount-3)*400.f;
+   Part->SetRelativeLocation(FVector(Part->GetRelativeLocation().X,Part->GetRelativeLocation().Y,Height*.5f));
+   Part->SetRelativeScale3D(FVector(.18,.18,Height/100.f));
+   Part->SetMobility(Mobility);
+  }
+  for (int32 Floor=0;Floor<4;++Floor)
+   if (Name.StartsWith(FString::Printf(TEXT("Gate_%d_"),Floor)) ||
+       Name.StartsWith(FString::Printf(TEXT("SideFence_%d_"),Floor)) ||
+       Name==FString::Printf(TEXT("BackFence_%d"),Floor) || Name==FString::Printf(TEXT("DoorHeader_%d"),Floor))
+   {
+    const bool Active=Floor<FloorCount;
+    const bool PhysicalGate=HasActorBegunPlay() && Gates.Contains(Part);
+    // Retire a dynamic body before disabling its physical collision.
+    if (PhysicalGate && !Active && Part->IsSimulatingPhysics()) Part->SetSimulatePhysics(false);
+    Part->SetVisibility(Active); Part->SetHiddenInGame(!Active);
+    Part->SetCollisionEnabled(Active ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+    if (PhysicalGate && Active && !Part->IsSimulatingPhysics()) Part->SetSimulatePhysics(true);
+   }
+ }
+}
+bool AWarehouseElevator::SetFloorCount(int32 Count)
+{
+ if (Count<1 || Count>4 || State!=EWarehouseElevatorState::Idle || IsValid(ReservedVehicle) || CurrentFloor>=Count) return false;
+ if (Count==FloorCount && Gates.Num()==8 && !Gates.Contains(nullptr)) return true;
+ const int32 PreviousCount=FloorCount;
+ FloorCount=Count;ConfigureFloors();
+ if (Gates.Num()<FloorCount*2) { FloorCount=PreviousCount;ConfigureFloors();return false; }
+ if (HasActorBegunPlay() && GuideAnchor)
+ {
+  // The always-present ground header is independent of mast height. Existing
+  // platform/door guides keep their native bodies and reference frames intact.
+  DoorJoints.SetNum(Gates.Num());
+  for (int32 I=0;I<Gates.Num();++I)
+  {
+   auto* Previous=DoorJoints[I].Get();
+   if (I>=FloorCount*2) { if (Previous) Previous->BreakConstraint();continue; }
+   if (I<PreviousCount*2 && Previous) continue;
+   // A dormant leaf receives a fresh native joint through the same creation
+   // path as BeginPlay, rather than reusing a broken constraint instance.
+   if (Previous) { Previous->BreakConstraint();Previous->DestroyComponent(); }
+   DoorJoints[I]=CreateDoorGuide(this,GuideAnchor,Gates[I],I,I/2==CurrentFloor ? DoorOpening : 0.f);
+  }
+ }
+ SetDeckLock(true);return true;
+}
 void AWarehouseElevator::BeginPlay()
 {
  InitialShaftPosition=GetActorLocation();
  Super::BeginPlay();
+ ConfigureFloors();
  TArray<UStaticMeshComponent*> Parts; GetComponents(Parts);
  UStaticMeshComponent* Anchor=nullptr;
  for (auto* Part : Parts)
  {
-  if (Part->GetName().StartsWith(TEXT("Column_")) && !Anchor) Anchor=Part;
+  if (Part->GetName()==TEXT("DoorHeader_0")) Anchor=Part;
   if (WarehousePhysics::IsPhysicalContact(Part)) WarehousePhysics::ConfigureContact(Part,EWarehouseSurface::Steel);
  }
  if (!Anchor) return;
  GuideAnchor=Anchor;
- auto Guide=[&](UStaticMeshComponent* Body,const FTransform& Frame)
- {
-  auto* Joint=NewObject<UPhysicsConstraintComponent>(this);
-  AddInstanceComponent(Joint); Joint->RegisterComponent(); Joint->SetWorldTransform(Frame);
-  Joint->SetDisableCollision(true); Joint->SetProjectionEnabled(false);
-  Joint->ConstraintInstance.DisableMassConditioning();
-  Joint->ConstraintInstance.DisableParentDominates();
-  Joint->SetLinearXLimit(LCM_Locked,0); Joint->SetLinearYLimit(LCM_Locked,0); Joint->SetLinearZLimit(LCM_Locked,0);
-  Joint->SetAngularTwistLimit(ACM_Locked,0); Joint->SetAngularSwing1Limit(ACM_Locked,0); Joint->SetAngularSwing2Limit(ACM_Locked,0);
-  Joint->SetConstrainedComponents(Anchor,NAME_None,Body,NAME_None);
-  Joint->SetLinearDriveAccelerationMode(false);
-  return Joint;
- };
  WarehousePhysics::ConfigureContact(Platform,EWarehouseSurface::Steel,500.f);
  Platform->SetSimulatePhysics(true);
- PlatformJoint=Guide(Platform,FTransform(GetActorQuat(),GetActorTransform().TransformPosition(FVector(0,0,395))));
- PlatformJoint->SetConstraintReferencePosition(EConstraintFrame::Frame2,FVector::ZeroVector);
- PlatformJoint->SetLinearZLimit(LCM_Limited,400);
+ PlatformJoint=CreateGuide(this,Anchor,Platform,FTransform(GetActorQuat(),GetActorTransform().TransformPosition(FVector(0,0,StrokeHalfHeight()-5.f))));
+ PlatformJoint->SetLinearZLimit(LCM_Limited,StrokeHalfHeight());
  PlatformJoint->SetLinearPositionDrive(false,false,true); PlatformJoint->SetLinearVelocityDrive(false,false,true);
  PlatformJoint->SetLinearDriveParams(300000.f,50000.f,4000000.f); // 40kN, includes platform and payload weight.
- PlatformJoint->SetLinearPositionTarget(FVector(0,0,400));
+ PlatformJoint->SetLinearPositionTarget(FVector(0,0,StrokeHalfHeight()));
  SetDeckLock(true);
- for (int32 I=0;I<Gates.Num();++I)
+ DoorJoints.SetNum(Gates.Num());
+ for (int32 I=0;I<FloorCount*2;++I)
  {
-  auto* Gate=Gates[I].Get();
-  WarehousePhysics::ConfigureContact(Gate,EWarehouseSurface::Steel,80.f);
-  const float Side=I%2 ? 1.f : -1.f;
-  const FVector Middle=Gate->GetComponentLocation()+GetActorRightVector()*Side*62.5f;
-  Gate->SetSimulatePhysics(true);
-  auto* Joint=Guide(Gate,FTransform(GetActorQuat(),Middle));
-  Joint->SetConstraintReferencePosition(EConstraintFrame::Frame2,FVector::ZeroVector);
-  Joint->SetLinearYLimit(LCM_Limited,62.5f);
-  Joint->SetLinearPositionDrive(false,true,false); Joint->SetLinearVelocityDrive(false,true,false);
-  Joint->SetLinearDriveParams(12000.f,2500.f,60000.f); // finite 600N door drive.
-  Joint->SetLinearPositionTarget(FVector(0,Side*62.5f,0)); DoorJoints.Add(Joint);
+  DoorJoints[I]=CreateDoorGuide(this,Anchor,Gates[I],I,0.f);
  }
 }
 int32 AWarehouseElevator::FloorAtHeight(float WorldZ) const
 {
  const float H=WorldZ-GetActorLocation().Z;
  const int32 Floor=FMath::FloorToInt((H+.5f)/400.f);
- return Floor>=0 && Floor<3 && H-Floor*400<=160.f ? Floor : INDEX_NONE;
+ return Floor>=0 && Floor<FloorCount && H-Floor*400<=160.f ? Floor : INDEX_NONE;
 }
 float AWarehouseElevator::FloorHeight(int32 Floor) const { return GetActorLocation().Z+Floor*400.f; }
 FTransform AWarehouseElevator::BoardingPose(int32 Floor) const
@@ -133,9 +218,9 @@ FString AWarehouseElevator::CheckInterlocks() const
 void AWarehouseElevator::SetDeckLock(bool Locked)
 {
  if (!PlatformJoint || !GuideAnchor) return;
- const FVector AnchorWorld=GetActorTransform().TransformPosition(FVector(0,0,Locked ? CurrentFloor*400.f-5.f : 395.f));
+ const FVector AnchorWorld=GetActorTransform().TransformPosition(FVector(0,0,Locked ? CurrentFloor*400.f-5.f : StrokeHalfHeight()-5.f));
  PlatformJoint->SetConstraintReferencePosition(EConstraintFrame::Frame1,GuideAnchor->GetComponentTransform().InverseTransformPositionNoScale(AnchorWorld));
- PlatformJoint->SetLinearZLimit(Locked ? LCM_Locked : LCM_Limited,Locked ? 0.f : 400.f);
+ PlatformJoint->SetLinearZLimit(Locked ? LCM_Locked : LCM_Limited,Locked ? 0.f : StrokeHalfHeight());
  if (Locked) PlatformJoint->SetLinearPositionTarget(FVector::ZeroVector);
 }
 void AWarehouseElevator::SetState(EWarehouseElevatorState Next,const TCHAR* Message)
@@ -187,7 +272,7 @@ bool AWarehouseElevator::FitsInside(AWarehouseForklift* Vehicle) const
 }
 bool AWarehouseElevator::RequestTransfer(AWarehouseForklift* Vehicle,int32 FromFloor,int32 ToFloor)
 {
- if (!IsValid(Vehicle) || FromFloor<0 || FromFloor>2 || ToFloor<0 || ToFloor>2 || FromFloor==ToFloor ||
+ if (!IsValid(Vehicle) || FromFloor<0 || FromFloor>=FloorCount || ToFloor<0 || ToFloor>=FloorCount || FromFloor==ToFloor ||
      Vehicle->GetTransferMassKg()>FMath::Min(2000.f,RatedMassKg) || !CheckInterlocks().IsEmpty()) return false;
  if (ReservedVehicle==Vehicle) return EntryFloor==FromFloor && DestinationFloor==ToFloor;
  if (IsValid(ReservedVehicle) || State!=EWarehouseElevatorState::Idle ||
@@ -256,7 +341,7 @@ bool AWarehouseElevator::SetDoors(bool Open,float Dt)
   { Status=TEXT("DOOR MOTION OBSTRUCTED"); return false; }
  }
  DoorOpening=Next;
- for (int32 I=0; I<Gates.Num(); ++I)
+ for (int32 I=0; I<FloorCount*2; ++I)
  {
   const int32 Floor=I/2; const float Side=I%2 ? 1.f : -1.f;
   const float Opening=Floor==CurrentFloor ? DoorOpening : 0.f;
@@ -265,8 +350,17 @@ bool AWarehouseElevator::SetDoors(bool Open,float Dt)
   const float ActualY=GetActorTransform().InverseTransformPosition(Gates[I]->GetComponentLocation()).Y;
   if (FMath::Abs(ActualY-Side*(60.f+Opening))>.1f) Gates[I]->WakeAllRigidBodies();
  }
- const float Actual=ActualDoorOpening();
- return Open ? Actual>=124.f : FMath::Abs(Actual)<.5f;
+ if (Open) return ActualDoorOpening()>=124.f;
+ // A door can briefly cross the closed sensor while its finite motor still
+ // has an open target. Keep commanding zero until both leaves have settled.
+ if (DoorOpening>.01f) return false;
+ for (int32 I=CurrentFloor*2;I<CurrentFloor*2+2;++I)
+ {
+  const float Side=I%2 ? 1.f : -1.f;
+  const float ActualY=GetActorTransform().InverseTransformPosition(Gates[I]->GetComponentLocation()).Y;
+  if (FMath::Abs(ActualY-Side*60.f)>=.5f || Gates[I]->GetPhysicsLinearVelocity().Size()>=2.f) return false;
+ }
+ return true;
 }
 bool AWarehouseElevator::MovePlatform(int32 Floor,float Dt)
 {
@@ -287,7 +381,7 @@ bool AWarehouseElevator::MovePlatform(int32 Floor,float Dt)
  SetDeckLock(false);
  PlatformTarget=FMath::FInterpConstantTo(PlatformTarget,Floor*400.f,Dt,FMath::Clamp(TravelSpeedCm,1.f,50.f));
  const float Mass=500.f+(bBoarded && IsValid(ReservedVehicle) ? ReservedVehicle->GetTransferMassKg() : 0.f);
- if (PlatformJoint) PlatformJoint->SetLinearPositionTarget(FVector(0,0,400-PlatformTarget-Mass*980.f/300000.f));
+ if (PlatformJoint) PlatformJoint->SetLinearPositionTarget(FVector(0,0,StrokeHalfHeight()-PlatformTarget-Mass*980.f/300000.f));
  Platform->WakeAllRigidBodies(); // Powered stroke; resting floor locks may sleep.
  // Passengers ride deck contact. No actor translation or velocity reset.
  if (FMath::Abs(PlatformHeight-Floor*400.f)>1.f || FMath::Abs(Platform->GetPhysicsLinearVelocity().Z)>2.f) return false;

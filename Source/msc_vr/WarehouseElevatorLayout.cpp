@@ -19,6 +19,7 @@ namespace
   FVector2D GroundSize,UpperSize,UpperOffset;
   FBox2D Landing;
   FVector StrokeCentre,StrokeHalf;
+  int32 FloorCount;
  };
  TArray<FShaft> Shafts(UWorld* World,const TArray<AActor*>& Removed)
  {
@@ -30,12 +31,12 @@ namespace
    const FQuat Rotation(FVector::UpVector,FMath::DegreesToRadians(It->GetActorRotation().Yaw-90.));
    Result.Add({*It,It->InitialShaftPosition,Rotation,It->GroundOpeningSizeCm,It->UpperOpeningSizeCm,
     It->UpperOpeningOffsetCm,FBox2D(FVector2D(-175,-625),FVector2D(175,-190)),
-    FVector(0,0,395),FVector(It->GroundOpeningSizeCm.X*.5-21.5,It->GroundOpeningSizeCm.Y*.5-1.5,404.9)});
+    FVector(0,0,(It->FloorCount-1)*200.f-5.f),FVector(It->GroundOpeningSizeCm.X*.5-21.5,It->GroundOpeningSizeCm.Y*.5-1.5,(It->FloorCount-1)*200.f+4.9f),It->FloorCount});
   }
   for (TActorIterator<AWarehousePalletLift> It(World);It;++It) if (!Removed.Contains(*It))
    Result.Add({*It,It->InitialShaftPosition,FQuat(FVector::UpVector,FMath::DegreesToRadians(It->GetActorRotation().Yaw)),
     It->OpeningSizeCm,It->OpeningSizeCm,FVector2D::ZeroVector,FBox2D(It->LandingLocalMin,It->LandingLocalMax),
-    It->ShaftClearanceCenter,It->ShaftClearanceHalf});
+    It->ShaftClearanceCenter,It->ShaftClearanceHalf,It->FloorCount});
   return Result;
  }
  FBox2D LayoutRectangle(const FShaft& Lift,const FBox2D& Rect,bool Initial=false)
@@ -91,7 +92,7 @@ namespace
  {
   if (Name==TEXT("Floor") || Name==TEXT("WH_InboundFloor") || Name==TEXT("MZ_GroundRearWest") ||
       Name==TEXT("MZ_GroundRearEast") || Name==TEXT("MZ_GroundRear")) { Floor=0;return true; }
-  for (int32 Level=2;Level<=3;++Level)
+  for (int32 Level=2;Level<=4;++Level)
    for (const TCHAR* Side:{TEXT("Left"),TEXT("Right"),TEXT("RearWest"),TEXT("RearEast"),TEXT("North"),TEXT("South")})
     if (Name==FString::Printf(TEXT("MZ_L%d_Deck_%s"),Level,Side)) { Floor=Level-1;return true; }
   return false;
@@ -133,10 +134,12 @@ namespace
    const bool Tagged=It->ActorHasTag(TEXT("ElevatorLayoutFloor"));
    if (!Tagged && !SourceFloor(SourceName(*It),Floor)) continue;
    auto* Mesh=It->GetStaticMeshComponent();
+   // Retained legacy geometry is inactive after a runtime building edit.
+   if (!It->GetActorEnableCollision() || !Mesh || Mesh->GetCollisionEnabled()==ECollisionEnabled::NoCollision) continue;
    if (!Mesh || !Mesh->GetStaticMesh() || !Mesh->GetUpVector().Equals(FVector::UpVector,.001)) return false;
    const FBox Bounds=Mesh->Bounds.GetBox();
    if (Tagged) Floor=FMath::RoundToInt(Bounds.Max.Z/400.);
-   if (Floor<0 || Floor>2) return false;
+   if (Floor<0 || Floor>3) return false;
    if (FMath::Abs(Bounds.Max.Z-Floor*400.)>.1 || Bounds.GetSize().Z<=0) return false;
    FSource Source;Source.Actor=*It;Source.Mesh=Mesh;Source.Bounds=Bounds;Source.Floor=Floor;
    Source.Visible=Mesh->IsVisible();Source.Hidden=It->IsHidden();Source.Collision=It->GetActorEnableCollision();Source.Mode=Mesh->GetCollisionEnabled();
@@ -144,10 +147,12 @@ namespace
    State.Base.Add({FBox2D(FVector2D(Bounds.Min),FVector2D(Bounds.Max)),Bounds.Min.Z,Bounds.Max.Z,Index,Floor});
   }
   if (State.Sources.IsEmpty()) return false;
-  for (const FShaft& Lift:Shafts(World,{})) for (int32 Floor=0;Floor<3;++Floor)
+  for (const FShaft& Lift:Shafts(World,{})) for (int32 Floor=0;Floor<Lift.FloorCount;++Floor)
   {
    const int32 Source=State.Sources.IndexOfByPredicate([Floor](const FSource& S){return S.Floor==Floor;});
-   if (Source==INDEX_NONE) return false;
+   if (Source==INDEX_NONE) continue;
+   // Generated slabs are uncut; they do not contain an old shaft aperture.
+   if (State.Sources[Source].Actor->ActorHasTag(TEXT("WarehouseBuildingGenerated"))) continue;
    const FBox& Bounds=State.Sources[Source].Bounds;
    TArray<FBox2D> Missing={Opening(Lift,Floor,true)};
    for (const auto& Existing:State.Base) if (Existing.Floor==Floor)
@@ -192,8 +197,9 @@ bool WarehouseElevatorLayout::Rebuild(AActor* Context,bool ValidatePlacement,con
  // each device. A pallet-only lift does not need a vehicle-sized landing.
  if (ValidatePlacement)
  {
-  for (const FShaft& Lift:Lifts) for (int32 Floor=0;Floor<3;++Floor)
+  for (const FShaft& Lift:Lifts) for (int32 Floor=0;Floor<Lift.FloorCount;++Floor)
   {
+   if (!State->Sources.ContainsByPredicate([Floor](const FSource& S){return S.Floor==Floor;})) continue;
    const FBox2D Landing=LayoutRectangle(Lift,Lift.Landing);
    const FBox2D Hole=Opening(Lift,Floor);
    if (!Covered(*State,Floor,Hole) || !Covered(*State,Floor,Landing)) return false;
@@ -234,7 +240,7 @@ bool WarehouseElevatorLayout::Rebuild(AActor* Context,bool ValidatePlacement,con
   auto* Original=Source.Mesh.Get();
   if (!Original) { Destroy(Next);return false; }
   TArray<FBox2D> Pieces={Region.Rect};
-  for (const FShaft& Lift:Lifts)
+  for (const FShaft& Lift:Lifts) if (Region.Floor<Lift.FloorCount)
   { TArray<FBox2D> Remaining;for (const auto& Piece:Pieces) Remaining.Append(Subtract(Piece,Opening(Lift,Region.Floor)));Pieces=MoveTemp(Remaining); }
   // The fixed shaft posts pass through upper slabs outside the moving deck's
   // opening. Cut their actual footprints too; retain the door landing between

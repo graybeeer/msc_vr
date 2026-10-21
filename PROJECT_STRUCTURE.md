@@ -14,6 +14,10 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 충돌/비충돌 공통 기준·선택 전용 판·모든 판정의 대상 분류 | `COLLISION_POLICY.md`, `WarehousePhysics.h/.cpp`, `Scripts/verify_collision_policy_pie.py` | `WarehouseWaitingBay`, `WarehouseDamageSystem`, `WarehouseLayoutEditor`, `WarehouseForklift*`, `WarehouseElevator`, `Config/DefaultEngine.ini` |
 | 배치 모드 재배치·추가·삭제·다중 선택·스냅 적재·시설 누락 | `WarehouseLayoutEditor.h/.cpp`, `WarehouseLayoutInventory.h/.cpp`, `WarehouseLayoutSnap.h/.cpp`, `Scripts/verify_layout_inventory_pie.py`, `Scripts/verify_layout_editor_pie.py` | 하단 Slate 도구·렌더링 검사는 `msc_vrPlayerController`, `Scripts/verify_layout_editing_ui_pie.py`, 승강기 개구부는 `WarehouseElevatorLayout`, 슬롯은 `WarehouseInboundZone`, 사용 기준은 `WAREHOUSE.md` |
 | 배치 모두 범주·혼합 선택·우클릭 좌우90도·공통 축 회전·삭제 | `WarehouseLayoutEditor::RotateSelection`/`CanRotateSelection`, `msc_vrPlayerController::OpenLayoutRotationMenu`/`RotateLayoutSelection`/`DeleteLayoutSelection` | 실제 부품·참조·물리 복원은 `WarehouseLayoutEditor`, 층별 개구부는 `WarehouseElevatorLayout`, 검사는 위 배치 native/UI 스크립트 |
+| 전지적 진입 시 기본 재배치·깨끗한 관찰·하단 층 선택·컨베이어 도구 | `msc_vrPlayerController::ToggleObserverView`/`SetLayoutEditing`/`SetObserverFloor`, `Scripts/verify_layout_editing_ui_pie.py` | 관찰 진입은 이미 편집을 켜므로 검사·외부 호출은 `SetLayoutEditing(bool)`로 의도를 명시한다. 도구 표시와 입력은 같은 컨트롤러, 일시정지·취소 복원은 `WarehouseLayoutEditor::SetEditing`, 사용법은 `WAREHOUSE.md` |
+| 전지적1m 타일 건물·복층·계단 편집·최대4층·위험한 축소 차단 | `WarehouseBuildingLayout.h/.cpp`, `WarehouseConstructionEditor.h/.cpp`, `Scripts/verify_construction_editor_pie.py` | 하단 도구와 격자 표시 `msc_vrPlayerController`, 기존 구조 캡처·실패 복원은 `WarehouseBuildingLayout`, 현재 세션 사용법은 `WAREHOUSE.md`, 승강기 층수·개구부는 `WarehouseElevator`·`WarehousePalletLift`·`WarehouseElevatorLayout`, 실제4층 회귀는 `verify_building_lift_four_floors_pie.py` |
+| 자동 팔레트/상자 컨베이어·90도 회전·끝단 픽업·화물용 승강기 인계 | `WarehouseConveyor.h/.cpp`, `WarehousePalletLift.h/.cpp`, `Scripts/verify_conveyor_transport_pie.py`, `Scripts/verify_conveyor_turntable_pie.py` | 장비별 고정 지도 태그·충돌은 `WarehousePhysics`·`AgvShadowSensors`, 자유 각도·직결·승강기 공급/수신 포트 UI·물리 복원은 `WarehouseLayoutEditor`·`msc_vrPlayerController`와 `verify_conveyor_layout_pie.py`, 원본·FBX·미리보기는 `Art/Equipment/Conveyor/`와 `build_conveyor_model.py`, 전용 샤프트는 `build_pallet_lift.py`의 powered 변형. 설치는 `install_warehouse_transport_lab.py`, 사용·설치·물리 계수는 각각 `WAREHOUSE.md`·`TEAM_ASSETS.md`·`PHYSICS.md` |
+| 건물 변경 후 승강기 재배치·삭제·개구부 복원과 기본 맵 보존 | `Scripts/verify_building_shaft_layout_pie.py`, `Scripts/verify_building_saved_map_pie.py`, `WarehouseBuildingLayout`·`WarehouseElevatorLayout` | 최초 구조와 기존 화물 유지 검사는 `verify_construction_editor_pie.py`, 실제4층 왕복과 문 가이드 검사는 `verify_building_lift_four_floors_pie.py`; 검사는 원본 맵을 저장하지 않음 |
 | 보류된 물류 FIFO·품목/질량/크기/재질 보존·컴퓨터 데이터 입력/삭제 | `WarehouseLayoutInventory.h/.cpp`, `WarehouseComputer.h/.cpp`, `WarehouseComputerUI.cpp`, `Scripts/verify_layout_inventory_pie.py` | 접촉/손상 참조는 `WarehouseDamageSystem`, 상품 생성 규칙은 `CARGO_RULES.md`, 사용자 조작은 `WAREHOUSE.md` |
 | 공유 충전소·일반 대기 자리·낮은 배터리 우선·기회 충전·작업 선점 | `WarehouseForkliftParking.cpp`, `WarehouseWaitingBay.h/.cpp`, `WarehouseChargingStation.h/.cpp`, `WarehouseFleetCoordinator`, `Scripts/verify_shared_charging_pie.py`, `Scripts/configure_warehouse_waiting_bays.py` | 작업 상태 전환은 `WarehouseForkliftAI`, 운영 정책은 `AUTONOMY.md`, 배터리 수치는 `VNSL14_SPEC.md` |
 | 충전기 상상 이미지 외형·Blender/Unreal 캡처·맵 적용·FBX 전달 | `CHARGER_MODEL.md`, `Art/Equipment/AGVCharger/agv_charger.blend`, 같은 폴더의 `Delivery/AGV_ChargingStation.fbx`, `Content/Warehouse/ChargingStation/` | `Scripts/build_agv_charger.py`, `Scripts/export_agv_charger.py`, `Scripts/apply_agv_charger.py`, 접점 기준은 `WarehouseChargingStation.cpp` |
@@ -134,6 +138,7 @@ msc_vr/
     build_agv_motion_test.py
     build_cat_accessory.py
     build_column_protectors.py
+    build_conveyor_model.py
     build_first_person_warehouse.py
     build_orange_agv.py
     build_pallet_lift.py
@@ -178,6 +183,7 @@ msc_vr/
     import_boxes_pallets_pack.py
     import_cargo_assets.py
     import_game_animation_sample.py
+    install_warehouse_transport_lab.py
     place_agv_in_warehouse.py
     prepare_carry_material.py
     prepare_intact_cargo_physics.py
@@ -207,6 +213,9 @@ msc_vr/
     verify_agv_warehouse.py
     verify_agv_warehouse_pie.py
     verify_area_labels_pie.py
+    verify_building_lift_four_floors_pie.py
+    verify_building_saved_map_pie.py
+    verify_building_shaft_layout_pie.py
     verify_cargo_pallet_physics_pie.py
     verify_cargo_rules.py
     verify_cargo_variety_pie.py
@@ -214,6 +223,10 @@ msc_vr/
     verify_carry_response_pie.py
     verify_character_drive_response_pie.py
     verify_collision_policy_pie.py
+    verify_construction_editor_pie.py
+    verify_conveyor_layout_pie.py
+    verify_conveyor_transport_pie.py
+    verify_conveyor_turntable_pie.py
     verify_dual_forklifts_remote_pie.py
     verify_dynamic_forklift_transfer_pie.py
     verify_dynamic_warehouse_startup.py
@@ -291,6 +304,8 @@ msc_vr/
       WarehouseAreaLabel.cpp
       WarehouseAreaLabel.h
       WarehouseAutonomyTypes.h
+      WarehouseBuildingLayout.cpp
+      WarehouseBuildingLayout.h
       WarehouseCargo.cpp
       WarehouseCargo.h
       WarehouseCarryAnimInstance.cpp
@@ -300,6 +315,10 @@ msc_vr/
       WarehouseComputer.cpp
       WarehouseComputer.h
       WarehouseComputerUI.cpp
+      WarehouseConstructionEditor.cpp
+      WarehouseConstructionEditor.h
+      WarehouseConveyor.cpp
+      WarehouseConveyor.h
       WarehouseDamageSystem.cpp
       WarehouseDamageSystem.h
       WarehouseElevator.cpp
@@ -416,7 +435,9 @@ msc_vr/
       Cargo/
       ChargingStation/
       Collision/
+      Conveyor/
       Exterior/
+      Maps/
       Materials/
       PalletLift/
       Physics/

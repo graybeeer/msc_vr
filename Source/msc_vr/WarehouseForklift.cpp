@@ -358,6 +358,12 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
    (Part==CarriageBody || Part->GetName().StartsWith(TEXT("Fork"))) && (AIState==EWarehouseAIState::InsertFork ||
    AIState==EWarehouseAIState::CorrectFork || AIState==EWarehouseAIState::VerifyInsertion ||
    AIState==EWarehouseAIState::WithdrawFork ||
+   // A grounded handoff clears bSupportingPallet before the tines finish
+   // lowering. Their intended target contact is still mechanical; cached
+   // pallet surfaces must not be mistaken for a new obstacle during release.
+   // A servo settled below its release setpoint may correct upwards within
+   // the existing 2mm mechanical contact tolerance. Native contacts remain active.
+   (AIState==EWarehouseAIState::LowerLoad && LiftOnly && bPalletReleased && Delta.Z<=.2f) ||
    AIState==EWarehouseAIState::RecoverLower || AIState==EWarehouseAIState::RecoverWithdraw);
   if (SensorDriven)
   {
