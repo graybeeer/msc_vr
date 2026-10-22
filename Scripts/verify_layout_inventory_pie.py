@@ -46,6 +46,25 @@ def tick(dt):
             layout=next(iter(allof(unreal.WarehouseLayoutEditor)));store=next(iter(allof(unreal.WarehouseLayoutInventory)))
             computer=live['WH_ManagementComputer'];strength=live['WH_DamageSystem']
             assert layout.get_editor_property('editing') and unreal.GameplayStatics.is_game_paused(game)
+            racks=[s for s in strength.get_editor_property('objects') if s.failure==unreal.WarehouseFailure.RACK]
+            assert racks and all(len(s.members)==10 and len(s.physics_meshes)==10 for s in racks)
+            for s in racks:
+                assert (s.mass_kg,s.rated_load_kg,s.level_capacity_kg)==(250,4000,2000),s.name
+                assert len(s.shelf_heights_cm)==2 and abs(s.shelf_heights_cm[1]-s.shelf_heights_cm[0]-120)<.01,s.name
+                assert all(a.actor_has_tag('RackRole:Storage') for a in s.members),s.name
+                for part,reference in zip(s.members[:8],[live['WH_Rack_Left_00_'+p] for p in 'ABCDEFGH']):
+                    assert part.static_mesh_component.static_mesh==reference.static_mesh_component.static_mesh,s.name
+                    assert (part.get_actor_scale3d()-reference.get_actor_scale3d()).length()<.0001,s.name
+            layout.set_category(unreal.WarehouseLayoutCategory.RACK)
+            assert layout.get_add_choice_label()=='팔레트 보관 랙'
+            for _ in range(5):layout.cycle_add_choice();assert layout.get_editor_property('add_choice')==0
+            legacy=[a for a in allof(unreal.WarehouseCargo) if a.actor_has_tag('UnifiedRackCargo')]
+            for cargo in legacy:
+                c,e=cargo.get_actor_bounds(False)
+                assert min(abs(c.z-e.z-z) for z in (20,140))<1,cargo.get_actor_label()
+                assert cargo.root_component.is_simulating_physics(),cargo.get_actor_label()
+                assert cargo.root_component.get_physics_linear_velocity().length()<20,cargo.get_actor_label()
+            check('single_storage_rack_model_capacity_role_and_add_choice',racks=len(racks),migrated_cargo=len(legacy))
             assert pc.set_layout_action(0) is None
             layout.set_category(unreal.WarehouseLayoutCategory.OTHER)
             first=layout.get_add_choice_label();presets={first}
@@ -164,11 +183,19 @@ def tick(dt):
                                  (unreal.WarehouseLayoutCategory.WAITING_BAY,unreal.WarehouseWaitingBay),
                                  (unreal.WarehouseLayoutCategory.PALLET,unreal.WarehousePallet)):
                 layout.set_category(category);before=set(allof(cls))
+                previous_slots=sum(len(z.rack_slots) for z in allof(unreal.WarehouseInboundZone))
                 assert layout.begin_add(p),layout.get_editor_property('status')
                 layout.update_drag(p);assert layout.end_drag(),layout.get_editor_property('status')
                 created=next(a for a in allof(cls) if a not in before)
+                if category==unreal.WarehouseLayoutCategory.RACK:
+                    assert sum(len(z.rack_slots) for z in allof(unreal.WarehouseInboundZone))==previous_slots+4
+                    new_profiles=[s for s in strength.get_editor_property('objects') if created in s.members]
+                    assert len(new_profiles)==1 and len(new_profiles[0].members)==10 and new_profiles[0].mass_kg==250
                 if cls==unreal.WarehousePallet:assert created.root_component.is_simulating_physics()
                 layout.set_selection([created]);assert layout.delete_selection(),layout.get_editor_property('status')
+                if category==unreal.WarehouseLayoutCategory.RACK:
+                    assert sum(len(z.rack_slots) for z in allof(unreal.WarehouseInboundZone))==previous_slots
+                    check('single_rack_add_delete_preserves_common_profile_and_four_live_slots')
                 check('facility_add_delete',category=str(category))
             layout.set_category(unreal.WarehouseLayoutCategory.ZONE)
             for _ in range(30):

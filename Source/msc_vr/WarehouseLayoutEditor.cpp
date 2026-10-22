@@ -19,6 +19,9 @@
 #include "WarehouseWaitingBay.h"
 #include "msc_vrCharacter.h"
 #include "Components/PrimitiveComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "PhysicsEngine/BodySetup.h"
 #include "PhysicsEngine/PhysicsConstraintComponent.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -37,6 +40,25 @@ namespace
  { return Point.X>=Box.Min.X && Point.X<=Box.Max.X && Point.Y>=Box.Min.Y && Point.Y<=Box.Max.Y; }
  bool IsShaft(const AActor* Actor)
  { return Actor && (Actor->IsA<AWarehouseElevator>() || Actor->IsA<AWarehousePalletLift>()); }
+ bool OnlyBoxSurfaceContact(UPrimitiveComponent* Part,UPrimitiveComponent* Surface)
+ {
+  const auto* Mesh=Cast<UStaticMeshComponent>(Part);
+  const auto* Setup=Mesh && Mesh->GetStaticMesh() ? Mesh->GetStaticMesh()->GetBodySetup() : nullptr;
+  auto* Body=Surface->GetBodyInstance();
+  if (!Setup || !Body || !Body->IsValidBodyInstance() || Setup->AggGeom.BoxElems.IsEmpty() ||
+      Setup->AggGeom.BoxElems.Num()!=Setup->AggGeom.GetElementCount()) return false;
+  // A compound landing has a recessed threshold below its jamb bases. Whole
+  // mesh bounds cannot distinguish that from jamb/floor face contact. Query
+  // each solid against the actual surface body and retain any real penetration.
+  for (const FKBoxElem& Box:Setup->AggGeom.BoxElems)
+  {
+   const FTransform Shape=Box.GetTransform()*Part->GetComponentTransform();
+   const FVector Half=FVector(Box.X,Box.Y,Box.Z)*.5f*Shape.GetScale3D().GetAbs();
+   FMTDResult MTD;
+   if (Body->OverlapTest(Shape.GetLocation(),Shape.GetRotation(),FCollisionShape::MakeBox(Half),&MTD) && MTD.Distance>.05f) return false;
+  }
+  return true;
+ }
  bool ShaftBusy(AActor* Actor)
  {
   if (const auto* Lift=Cast<AWarehouseElevator>(Actor)) return Lift->State!=EWarehouseElevatorState::Idle || Lift->ReservedVehicle;
@@ -733,7 +755,9 @@ bool AWarehouseLayoutEditor::PlacementClear()
  for (auto& A:Moving) for (auto& P:A.Parts) if (auto* C=Cast<UPrimitiveComponent>(P.Component.Get());C && WarehousePhysics::IsPhysicalContact(C))
  {
   TArray<FOverlapResult> Overlaps;
-  GetWorld()->ComponentOverlapMultiByChannel(Overlaps,C,C->GetComponentLocation(),C->GetComponentQuat(),ECC_Visibility,Params);
+  // Use this component's body instance: the world wrapper resolves a welded
+  // child to its parent body and can then query it at the child's transform.
+  C->ComponentOverlapMulti(Overlaps,GetWorld(),C->GetComponentLocation(),C->GetComponentQuat(),ECC_Visibility,Params);
   for (const auto& O:Overlaps) if (O.bBlockingHit && O.GetComponent())
   {
    const FBox Other=O.GetComponent()->Bounds.GetBox();const FBox Own=C->Bounds.GetBox();
@@ -743,6 +767,7 @@ bool AWarehouseLayoutEditor::PlacementClear()
    // Native overlap includes face contact. A fitted pit/base may touch the
    // surrounding slab without occupying any of its volume.
    if (Depth.X<=.05 || Depth.Y<=.05 || Depth.Z<=.05) continue;
+   if (IsShaft(A.Actor.Get()) && O.GetActor()->ActorHasTag(TEXT("ElevatorRuntimeFloor")) && OnlyBoxSurfaceContact(C,O.GetComponent())) continue;
    // Contact with the supporting floor is valid; penetration into its side or
    // into an upper deck is not. Other geometry uses native component shapes.
    // A spun tyre's render bounds extend below its actual round tread. Reuse

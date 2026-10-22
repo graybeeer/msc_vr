@@ -120,30 +120,9 @@ def apply_scale():
                                                        RACK_START - 133 + int(index) * 3 * RACK_PITCH, ground + 232), False, False)
                 actor.get_component_by_class(unreal.TextRenderComponent).set_world_size(18)
 
-    # Separate hand-picking racks use the supplier's medium/light dimensions.
-    cube = unreal.load_asset('/Engine/BasicShapes/Cube')
-    steel = unreal.load_asset('/Game/Warehouse/Materials/MI_DarkSteel')
-    for kind, depth, width, height, levels, ys in (
-            ('Medium', 60, 180, 210, (20, 95, 170), (-700, -100)),
-            ('Light', 45, 120, 180, (20, 85, 150), (650, 950))):
-        for index, y in enumerate(ys):
-            x = -1180
-            for part in 'ABCDEFGH':
-                mesh = named[f'WH_Rack_Left_00_{part}'].static_mesh_component.static_mesh
-                actor = ensure(f'WH_{kind}Rack_{index}_{part}', mesh)
-                actor.set_actor_rotation(unreal.Rotator(yaw=90), False)
-                if part in 'GH':
-                    fit(actor, (depth, 4, height), (x, y + (width/2-2)*(1 if part=='G' else -1), ground+height/2))
-                else:
-                    top=levels[{'B':0,'D':0,'C':1,'E':1,'A':2,'F':2}[part]]
-                    fit(actor, (3,width-8,4), (x+(depth*.408)*(1 if part in 'ABC' else -1), y, ground+top-2))
-            for tier, top in enumerate(levels):
-                shelf=ensure(f'WH_{kind}Shelf_{index}_{tier}',cube)
-                shelf.static_mesh_component.set_material(0,steel)
-                fit(shelf,(depth-2,width-8,2),(x,y,ground+top-1))
-                load=ensure(f'WH_{kind}Stock_{index}_{tier}',box_mesh,True)
-                size=(40,30,25) if kind=='Medium' else (30,20,20)
-                fit(load,size,(x,y,ground+top+size[2]/2))
+    # The same storage rack geometry is used for every bay; picking is a future feature.
+    from configure_unified_racks import normalize_rack_geometry
+    normalize_rack_geometry(create_legacy=True)
 
     # Pallets are now in place; centre and stack cargo without relying on mesh pivots.
     for label, actor in named.items():

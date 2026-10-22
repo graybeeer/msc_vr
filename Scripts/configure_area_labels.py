@@ -11,9 +11,10 @@ PREFIX='WH_AreaUI_'
 AREAS=[
     ('Inbound','입고 대기 구역',0,(*INBOUND[:2],270)),
     ('Outbound','출고 대기 구역',0,(*OUTBOUND[:2],270)),
-    ('Putaway','입고품 적재 랙',0,(2620,-300,285)),
+    ('Putaway','팔레트 보관 랙',0,(2620,-300,285)),
     ('Receiving','입고·검수 구역',0,(1530,-1120,270)),
-    ('Picking','피킹 구역',0,(-1040,-710,260)),
+    # Keep the legacy key so saved labels and layout groups retain their identity.
+    ('Picking','보관·보충 구역',0,(-1040,-710,260)),
     ('Packing','포장·출고 준비',0,(-1100,-1120,270)),
     ('Loading','트럭 상하차 구역',0,(0,-2330,310)),
     ('Control','운영·관제 구역',0,(-1450,1870,290)),

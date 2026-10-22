@@ -8,15 +8,17 @@
 #include "CollisionQueryParams.h"
 #include "WarehousePhysics.h"
 #include "PhysicsEngine/PhysicsConstraintComponent.h"
+#include "PhysicsEngine/BodySetup.h"
+#include "Engine/StaticMesh.h"
 
 namespace
 {
 bool AtWaitingPose(const AWarehouseForklift* Vehicle,const FTransform& Pose)
 {
  const FVector Offset=Vehicle->GetActorLocation()-Pose.GetLocation();
- // Match the route follower's 5cm waiting-point tolerance, while keeping
- // floor level and a stopped vehicle mandatory. Cabin docking stays 1cm.
- return Offset.SizeSquared2D()<25.f && FMath::Abs(Offset.Z)<1.f && FMath::Abs(Vehicle->CurrentSpeedCm)<1.f;
+ // The route stops within 5 cm; allow 1 cm for finite-brake settling.
+ // Floor level and a stopped vehicle remain mandatory. Cabin docking is 1 cm.
+ return Offset.SizeSquared2D()<36.f && FMath::Abs(Offset.Z)<1.f && FMath::Abs(Vehicle->CurrentSpeedCm)<1.f;
 }
 void BindGuideFrames(UPhysicsConstraintComponent* Joint,UStaticMeshComponent* Anchor,UStaticMeshComponent* Body,const FTransform& WorldFrame)
 {
@@ -91,10 +93,227 @@ AWarehouseElevator::AWarehouseElevator()
  Display->SetupAttachment(RootComponent); Display->SetRelativeLocation(FVector(-220,0,330));
  Display->SetRelativeRotation(FRotator(0,180,0)); Display->SetHorizontalAlignment(EHTA_Center);
  Display->SetWorldSize(12); Display->SetText(FText::FromString(Status));
+ auto CargoPart=[&](const FString& Name)
+ {
+  auto* Mesh=CreateDefaultSubobject<UStaticMeshComponent>(*FString::Printf(TEXT("Cargo_%s"),*Name));
+  Mesh->SetupAttachment(RootComponent); Mesh->SetCollisionProfileName(TEXT("NoCollision"));
+  CargoParts.Add(Mesh);
+ };
+ for (const TCHAR* Name:{TEXT("ShaftFrame"),TEXT("GuideRails"),TEXT("ShaftEnclosure")}) CargoPart(Name);
+ for (int32 Floor=1;Floor<=4;++Floor)
+  for (const TCHAR* Name:{TEXT("Landing"),TEXT("Bollards"),TEXT("CallStand")})
+   CargoPart(FString::Printf(TEXT("%s_L%d"),Name,Floor));
+ CargoCabin=CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Cargo_CabinShell"));
+ CargoCabin->SetupAttachment(Platform); CargoCabin->SetAbsolute(false,false,true);
+ CargoCabin->SetRelativeLocation(FVector(0,0,50)); CargoCabin->SetCollisionProfileName(TEXT("NoCollision"));
+ CargoDeckVisual=CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Cargo_DeckVisual"));
+ CargoDeckVisual->SetupAttachment(Platform); CargoDeckVisual->SetAbsolute(false,false,true);
+ CargoDeckVisual->SetCollisionProfileName(TEXT("NoCollision"));
+ for (int32 I=0;I<3;++I)
+ {
+  auto* Support=CreateDefaultSubobject<UStaticMeshComponent>(*FString::Printf(TEXT("Cargo_DeckSupport_%d"),I));
+  Support->SetupAttachment(Platform);Support->SetStaticMesh(Cube.Object);Support->SetAbsolute(false,false,true);
+  Support->SetCollisionProfileName(TEXT("NoCollision"));Support->SetVisibility(false);Support->SetHiddenInGame(true);
+  CargoDeckSupports.Add(Support);
+ }
 }
 void AWarehouseElevator::OnConstruction(const FTransform& Transform)
 {
- Super::OnConstruction(Transform); ConfigureFloors();
+ Super::OnConstruction(Transform); ConfigureFloors(); ApplyCargoModel();
+}
+void AWarehouseElevator::ConfigureModelCollision(UStaticMesh* Mesh,FName Part)
+{
+#if WITH_EDITOR
+ if (!Mesh) return;
+ Mesh->Modify();Mesh->CreateBodySetup();auto* Setup=Mesh->GetBodySetup();
+ Setup->AggGeom.EmptyElements();const FString Name=Part.ToString();
+ auto Box=[&](FVector Center,FVector Size)
+ { FKBoxElem B;B.Center=Center;B.X=Size.X;B.Y=Size.Y;B.Z=Size.Z;Setup->AggGeom.BoxElems.Add(B); };
+ auto Cylinder=[&](FVector Center,float Radius,float Height,bool AlongX=false)
+ {
+  FKConvexElem Hull;
+  for (int32 I=0;I<24;++I) for (float End:{-.5f,.5f})
+  {
+   const float Angle=I*2.f*PI/24.f;
+   const float A=Radius*FMath::Cos(Angle),B=Radius*FMath::Sin(Angle);
+   Hull.VertexData.Add(Center+(AlongX ? FVector(End*Height,A,B) : FVector(A,B,End*Height)));
+  }
+  Hull.UpdateElemBox();Setup->AggGeom.ConvexElems.Add(MoveTemp(Hull));
+ };
+ // Match the separate solids in build_cargo_elevator.py / its call-stand
+ // refinement (metres there, centimetres here). A whole-mesh convex hull
+ // would fill the doorway/shaft; triangle-only bodies cannot be the query
+ // shape in native component overlaps. Keep those openings genuinely empty.
+ const float FloorZ=(FMath::Clamp(FCString::Atoi(*Name.Right(1)),1,4)-1)*400.f;
+ if (Name==TEXT("LiftPlatform"))
+ {
+  Box(FVector::ZeroVector,FVector(350,240,10));
+  for (float X:{-110.f,0.f,110.f}) Box(FVector(X,0,-7),FVector(13,234,6));
+ }
+ else if (Name.StartsWith(TEXT("Gate_"))) Box(FVector::ZeroVector,FVector(6,119.6f,268));
+ else if (Name==TEXT("CabinShell"))
+ {
+  for (float Side:{-1.f,1.f})
+  {
+   Box(FVector(5,Side*122.5f,142),FVector(340,4.5f,284));
+   for (float Z:{48.f,103.f}) Box(FVector(5,Side*117.6f,Z),FVector(328,6.5f,10));
+   Box(FVector(0,Side*112,279),FVector(315,10,4.5f));
+  }
+  Box(FVector(176.5f,0,142),FVector(4,249,284));Box(FVector(5,0,286.5f),FVector(340,249,5));
+  for (float Z:{48.f,103.f}) Box(FVector(172,0,Z),FVector(7,232,10));
+ }
+ else if (Name==TEXT("ShaftFrame"))
+ {
+  for (float X:{-187.f,192.f}) for (float Y:{-132.f,132.f})
+  {
+   Box(FVector(X,Y,580),FVector(16,16,1160));
+   Box(FVector(X,Y,-5),FVector(24,22,10));
+  }
+  for (float Z:{0.f,400.f,800.f,1155.f})
+  {
+   for (float Y:{-137.f,137.f}) Box(FVector(0,Y,Z),FVector(380,12,20));
+   Box(FVector(192,0,Z),FVector(16,280,20));
+  }
+ }
+ else if (Name==TEXT("GuideRails"))
+ {
+  for (float Y:{-108.f,108.f})
+  {
+   Box(FVector(188.5f,Y,560),FVector(7,8,1130));
+   for (float Z:{80.f,380.f,680.f,980.f}) Box(FVector(193.5f,Y,Z),FVector(10,19,6.5f));
+  }
+ }
+ else if (Name==TEXT("ShaftEnclosure"))
+ {
+  for (int32 Floor=0;Floor<3;++Floor)
+  {
+   const float Height=Floor<2 ? 395.f : 360.f,Z=Floor*400.f+Height*.5f;
+   for (float Side:{-1.f,1.f}) Box(FVector(0,Side*136,Z),FVector(372,3.5f,Height));
+   Box(FVector(196,0,Z),FVector(3.5f,280,Height));
+  }
+ }
+ else if (Name.StartsWith(TEXT("Landing_L")))
+ {
+  for (float Side:{-1.f,1.f})
+  {
+   for (float Offset:{-2.075f,2.075f}) Box(FVector(-219,Side*127+Offset,FloorZ+135),FVector(17,4.5f,270));
+   Box(FVector(-194,Side*126.5f,FloorZ+135),FVector(6,13,270));
+   Box(FVector(-216,Side*127,FloorZ+135),FVector(4,14,270));
+  }
+  Box(FVector(-213,0,FloorZ+286),FVector(18,276,32));
+  Box(FVector(-223,0,FloorZ+302.5f),FVector(5,278,1.8f));
+  Box(FVector(-204,0,FloorZ+282),FVector(10,512,8.5f));
+  Box(FVector(-203,0,FloorZ-2.5f),FVector(33,248,5));
+  Box(FVector(-223.2f,-79,FloorZ+288),FVector(.8f,34,13));
+ }
+ else if (Name.StartsWith(TEXT("Bollards_L")))
+ {
+  for (float Side:{-1.f,1.f})
+  {
+   Cylinder(FVector(-249,Side*152,FloorZ+48),9,96);
+   for (float Z:{38.f,70.f}) Cylinder(FVector(-249,Side*152,FloorZ+Z),9.2f,12);
+   Cylinder(FVector(-249,Side*152,FloorZ+96.5f),9.2f,3.5f);
+   Box(FVector(-249,Side*152,FloorZ+1.5f),FVector(25,25,3));
+   for (float X:{-8.f,8.f}) for (float Y:{-8.f,8.f})
+    Cylinder(FVector(-249+X,Side*152+Y,FloorZ+3.3f),1.2f,1.4f);
+  }
+ }
+ else if (Name.StartsWith(TEXT("CallStand_L")))
+ {
+  // Unlike landing meshes, the call-stand mesh origin is its own floor base.
+  Box(FVector(0,0,1.8f),FVector(30,28,3.6f));
+  Box(FVector(0,0,5),FVector(13,15,6));
+  Box(FVector(1.2f,0,49),FVector(7.5f,8.5f,84));
+  Box(FVector(0,0,92.5f),FVector(8,10,6));
+  Box(FVector(0,0,119),FVector(14,23,52));
+  Box(FVector(-7.3f,0,119),FVector(.8f,19,47));
+  Box(FVector(-7.9f,0,132),FVector(.6f,15,10.5f));
+  for (float Z:{120.f,109.f})
+  {
+   Cylinder(FVector(-8.4f,0,Z),2.9f,1.5f,true);
+   Cylinder(FVector(-9.4f,0,Z),2.2f,.9f,true);
+  }
+  Box(FVector(-8,0,98.5f),FVector(1.2f,9,7));
+  Cylinder(FVector(-10.3f,0,98.5f),2.3f,3,true);
+  for (float X:{-10.5f,10.5f}) for (float Y:{-9.5f,9.5f}) Cylinder(FVector(X,Y,4.4f),1.1f,1.4f);
+ }
+ Setup->CollisionTraceFlag=Setup->AggGeom.GetElementCount() ? CTF_UseSimpleAndComplex : CTF_UseComplexAsSimple;
+ Setup->InvalidatePhysicsData();Setup->CreatePhysicsMeshes();Mesh->MarkPackageDirty();
+#endif
+}
+void AWarehouseElevator::ApplyCargoModel()
+{
+ // Replacing or un-welding a moving body while its live guide exists is unsafe.
+ // Floor edits use UpdateCargoModelFloors and retain those bodies and joints.
+ if (HasActorBegunPlay()) return;
+ auto Load=[](const FString& Name)
+ { return LoadObject<UStaticMesh>(nullptr,*(TEXT("/Game/Warehouse/Elevator/Meshes/SM_ELV_")+Name+TEXT(".SM_ELV_")+Name)); };
+ TMap<FString,UStaticMesh*> Models;
+ if (bUseCargoModel)
+ {
+  for (const auto& Part:CargoParts) Models.Add(Part->GetName().RightChop(6),Load(Part->GetName().RightChop(6)));
+  for (int32 I=0;I<Gates.Num();++I)
+  {
+   const FString Name=FString::Printf(TEXT("Gate_%d_%d"),I/2,I%2 ? 1 : -1);Models.Add(Name,Load(Name));
+  }
+  Models.Add(TEXT("CabinShell"),Load(TEXT("CabinShell")));Models.Add(TEXT("LiftPlatform"),Load(TEXT("LiftPlatform")));
+ }
+ // A partially installed rig falls back as a whole, with no missing barriers.
+ bCargoModelApplied=bUseCargoModel;
+ for (const auto& Pair:Models) if (!Pair.Value) { bCargoModelApplied=false;break; }
+ auto* Cube=LoadObject<UStaticMesh>(nullptr,TEXT("/Engine/BasicShapes/Cube.Cube"));
+ Platform->SetStaticMesh(Cube);Platform->SetRelativeScale3D(FVector(3.5f,2.4f,.1f));
+ Platform->SetVisibility(!bCargoModelApplied);Platform->SetHiddenInGame(bCargoModelApplied);
+ Platform->SetCollisionProfileName(TEXT("BlockAllDynamic"));
+ auto Assign=[&](UStaticMeshComponent* Part,const FString& Name,bool Physical)
+ {
+  Part->SetStaticMesh(bCargoModelApplied ? Models.FindRef(Name) : nullptr);
+  Part->EmptyOverrideMaterials();Part->SetRelativeScale3D(FVector::OneVector);
+  Part->SetVisibility(bCargoModelApplied);Part->SetHiddenInGame(!bCargoModelApplied);
+  Part->SetCollisionProfileName(bCargoModelApplied && Physical ? TEXT("BlockAllDynamic") : TEXT("NoCollision"));
+ };
+ Assign(CargoDeckVisual,TEXT("LiftPlatform"),false);CargoDeckVisual->SetRelativeLocation(FVector::ZeroVector);
+ Assign(CargoCabin,TEXT("CabinShell"),true);CargoCabin->SetRelativeLocation(FVector(0,0,50));
+ for (int32 I=0;I<CargoDeckSupports.Num();++I)
+ {
+  auto* Support=CargoDeckSupports[I].Get();
+  Support->SetRelativeLocation(FVector((I-1)*110.f/3.5f,0,-70));Support->SetRelativeScale3D(FVector(.13f,2.34f,.06f));
+  Support->SetCollisionProfileName(bCargoModelApplied ? TEXT("BlockAllDynamic") : TEXT("NoCollision"));
+ }
+ auto* Yellow=LoadObject<UMaterialInterface>(nullptr,TEXT("/Game/Warehouse/Materials/MI_SafetyYellow.MI_SafetyYellow"));
+ for (int32 I=0;I<Gates.Num();++I)
+ {
+  auto* Gate=Gates[I].Get();Gate->SetStaticMesh(bCargoModelApplied ? Models.FindRef(FString::Printf(TEXT("Gate_%d_%d"),I/2,I%2 ? 1 : -1)) : Cube);
+  Gate->EmptyOverrideMaterials();Gate->SetRelativeScale3D(bCargoModelApplied ? FVector::OneVector : FVector(.06,1.2,2.7));
+  if (!bCargoModelApplied) Gate->SetMaterial(0,Yellow);
+ }
+ for (const auto& Part:CargoParts) Assign(Part.Get(),Part->GetName().RightChop(6),true);
+ Display->SetVisibility(!bCargoModelApplied);Display->SetHiddenInGame(bCargoModelApplied);
+ ConfigureFloors();
+}
+void AWarehouseElevator::UpdateCargoModelFloors()
+{
+ for (const auto& Part:CargoParts)
+ {
+  const FString Name=Part->GetName();int32 Floor=INDEX_NONE;
+  const int32 Suffix=Name.Find(TEXT("_L"),ESearchCase::CaseSensitive,ESearchDir::FromEnd);
+  if (Suffix!=INDEX_NONE) Floor=FCString::Atoi(*Name.Mid(Suffix+2))-1;
+  const bool Active=bCargoModelApplied && Part->GetStaticMesh() && (Floor==INDEX_NONE || Floor<FloorCount);
+  Part->SetVisibility(Active);Part->SetHiddenInGame(!Active);
+  Part->SetCollisionEnabled(Active ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+  if (!Active) continue;
+  FVector Position=Name.StartsWith(TEXT("Cargo_CallStand_")) ? FVector(-285,-205,Floor*400.f) : FVector::ZeroVector;
+  FVector Scale=FVector::OneVector;
+  if (Floor==INDEX_NONE)
+  {
+   const FBox Bounds=Part->GetStaticMesh()->GetBoundingBox();
+   Scale.Z=(Bounds.GetSize().Z+(FloorCount-3)*400.f)/Bounds.GetSize().Z;
+   Position.Z=Bounds.Min.Z*(1.f-Scale.Z); // Extend the top while retaining its actual foundation.
+  }
+  // Some fixed parts are welded to the stable first-floor landing at runtime.
+  // Author their transform against the shaft, independent of that parent.
+  Part->SetWorldTransform(FTransform(FQuat::Identity,Position,Scale)*GetActorTransform());
+ }
 }
 void AWarehouseElevator::ConfigureFloors()
 {
@@ -132,11 +351,18 @@ void AWarehouseElevator::ConfigureFloors()
     const bool PhysicalGate=HasActorBegunPlay() && Gates.Contains(Part);
     // Retire a dynamic body before disabling its physical collision.
     if (PhysicalGate && !Active && Part->IsSimulatingPhysics()) Part->SetSimulatePhysics(false);
-    Part->SetVisibility(Active); Part->SetHiddenInGame(!Active);
-    Part->SetCollisionEnabled(Active ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+    const bool LegacyFrame=bCargoModelApplied && !Gates.Contains(Part);
+    Part->SetVisibility(Active && !LegacyFrame); Part->SetHiddenInGame(!Active || LegacyFrame);
+    Part->SetCollisionEnabled(Active && !LegacyFrame ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
     if (PhysicalGate && Active && !Part->IsSimulatingPhysics()) Part->SetSimulatePhysics(true);
    }
+  if (Name.StartsWith(TEXT("Column_")))
+  {
+   Part->SetVisibility(!bCargoModelApplied);Part->SetHiddenInGame(bCargoModelApplied);
+   Part->SetCollisionEnabled(bCargoModelApplied ? ECollisionEnabled::NoCollision : ECollisionEnabled::QueryAndPhysics);
+  }
  }
+ UpdateCargoModelFloors();
 }
 bool AWarehouseElevator::SetFloorCount(int32 Count)
 {
@@ -166,6 +392,7 @@ bool AWarehouseElevator::SetFloorCount(int32 Count)
 void AWarehouseElevator::BeginPlay()
 {
  InitialShaftPosition=GetActorLocation();
+ ApplyCargoModel();
  Super::BeginPlay();
  ConfigureFloors();
  TArray<UStaticMeshComponent*> Parts; GetComponents(Parts);
@@ -175,10 +402,33 @@ void AWarehouseElevator::BeginPlay()
   if (Part->GetName()==TEXT("DoorHeader_0")) Anchor=Part;
   if (WarehousePhysics::IsPhysicalContact(Part)) WarehousePhysics::ConfigureContact(Part,EWarehouseSurface::Steel);
  }
+ if (bCargoModelApplied)
+ {
+  // This base landing never scales when the number of floors changes. Keep
+  // the canonical main-branch guide frames on that stable physical anchor.
+  for (const auto& Part:CargoParts) if (Part->GetName()==TEXT("Cargo_Landing_L1")) Anchor=Part.Get();
+  if (Anchor) for (const auto& Part:CargoParts)
+   if (Part->GetName()==TEXT("Cargo_ShaftFrame") || Part->GetName()==TEXT("Cargo_GuideRails") || Part->GetName()==TEXT("Cargo_ShaftEnclosure"))
+   {
+    Part->AttachToComponent(Anchor,FAttachmentTransformRules(EAttachmentRule::KeepWorld,true));Part->WeldTo(Anchor,NAME_None,true);
+   }
+ }
  if (!Anchor) return;
  GuideAnchor=Anchor;
  WarehousePhysics::ConfigureContact(Platform,EWarehouseSurface::Steel,500.f);
+ if (bCargoModelApplied)
+ {
+  CargoCabin->BodyInstance.SetMassOverride(100.f,true);
+  for (const auto& Support:CargoDeckSupports) Support->BodyInstance.SetMassOverride(30.f,true);
+  Platform->BodyInstance.SetMassOverride(310.f,true);
+ }
  Platform->SetSimulatePhysics(true);
+ if (bCargoModelApplied)
+ {
+  CargoCabin->WeldTo(Platform,NAME_None,true);
+  for (const auto& Support:CargoDeckSupports) Support->WeldTo(Platform,NAME_None,true);
+  Platform->BodyInstance.UpdateMassProperties();
+ }
  PlatformJoint=CreateGuide(this,Anchor,Platform,FTransform(GetActorQuat(),GetActorTransform().TransformPosition(FVector(0,0,StrokeHalfHeight()-5.f))));
  PlatformJoint->SetLinearZLimit(LCM_Limited,StrokeHalfHeight());
  PlatformJoint->SetLinearPositionDrive(false,false,true); PlatformJoint->SetLinearVelocityDrive(false,false,true);
@@ -305,6 +555,41 @@ bool AWarehouseElevator::TraceCertifiedPlatformSupport(AWarehouseForklift* Vehic
  Support=Hit;
  return true;
 }
+bool AWarehouseElevator::IsCertifiedLandingSeam(AWarehouseForklift* Vehicle,const UStaticMeshComponent* Wheel,const FHitResult& Contact) const
+{
+ // A tyre spans the 6 cm shaft clearance while its centre ray lies in air.
+ // Require both actual bearings at the PLC-authorized, aligned doorway.
+ auto* Surface=Contact.GetComponent();
+ if (!Wheel || !Wheel->GetStaticMesh() || !Surface || Surface->IsSimulatingPhysics() || !Contact.GetActor() ||
+     !Contact.GetActor()->ActorHasTag(TEXT("WarehouseMapStructure")) ||
+     !Surface->IsQueryCollisionEnabled() || Surface->GetCollisionResponseToChannel(ECC_Visibility)!=ECR_Block ||
+     Contact.PenetrationDepth>.5f || !Platform || !Platform->GetStaticMesh()) return false;
+ const FVector Local=GetActorTransform().InverseTransformPosition(Contact.ImpactPoint);
+ const FBox DeckBounds=Platform->GetStaticMesh()->GetBoundingBox().TransformBy(Platform->GetComponentTransform().GetRelativeTransform(GetActorTransform()));
+ const FBox SlabBounds=Surface->Bounds.GetBox().TransformBy(GetActorTransform().Inverse());
+ const float DeckEdge=DeckBounds.Min.X,SlabEdge=SlabBounds.Max.X,Gap=DeckEdge-SlabEdge;
+ if (Gap<=0 || Gap>6.1f || Local.X<SlabEdge-.5f || Local.X>DeckEdge+.5f || FMath::Abs(Local.Y)>115 ||
+     FMath::Abs(Contact.ImpactPoint.Z-FloorHeight(CurrentFloor))>.5f) return false;
+ const FVector Centre=Wheel->GetComponentLocation();
+ const float Radius=Wheel->GetStaticMesh()->GetBoundingBox().GetExtent().Z*Wheel->GetComponentScale().GetAbs().Z;
+ const float CentreX=GetActorTransform().InverseTransformPosition(Centre).X;
+ if (Gap>Radius || CentreX<SlabEdge-.2f || CentreX>DeckEdge+.2f || FVector::Dist2D(Centre,Contact.ImpactPoint)>Radius) return false;
+ // At the middle of the measured gap a round tyre rests on both top edges,
+ // not on a plane beneath its centre. For an 8cm radius/6cm gap the physical
+ // sag is 0.585cm and the edge normal Z is 0.927. Allow 2mm for the convex
+ // tread/contact skin, while retaining actual coplanar bearings below.
+ const float SupportedHeight=FMath::Sqrt(FMath::Max(0.f,Radius*Radius-Gap*Gap*.25f));
+ const float ContactTolerance=.2f,MaxSag=Radius-SupportedHeight+ContactTolerance;
+ const float BottomOffset=Centre.Z-Radius-FloorHeight(CurrentFloor);
+ if (BottomOffset< -MaxSag || BottomOffset>.5f || Contact.Normal.Z<(SupportedHeight-ContactTolerance)/Radius) return false;
+ FHitResult Deck,Slab;
+ const FVector OnDeck=GetActorTransform().TransformPosition(FVector(DeckEdge+5,Local.Y,CurrentFloor*400));
+ if (!TraceCertifiedPlatformSupport(Vehicle,OnDeck,Deck)) return false;
+ const FVector OnSlab=GetActorTransform().TransformPosition(FVector(SlabEdge-1.5f,Local.Y,CurrentFloor*400));
+ FCollisionQueryParams Params(SCENE_QUERY_STAT(CertifiedLiftSeam),false,Vehicle);
+ return Surface->LineTraceComponent(Slab,OnSlab+FVector(0,0,2),OnSlab-FVector(0,0,2),Params) &&
+     Slab.ImpactNormal.Z>.98f && FMath::Abs(Slab.ImpactPoint.Z-Deck.ImpactPoint.Z)<.5f;
+}
 bool AWarehouseElevator::ConfirmBoarded(AWarehouseForklift* Vehicle)
 {
  if (!CanEnter(Vehicle) || !FitsInside(Vehicle) || !PortalClear() ||
@@ -326,6 +611,19 @@ float AWarehouseElevator::ActualDoorOpening() const
  for (int32 I=CurrentFloor*2;I<CurrentFloor*2+2;++I)
   Opening=FMath::Min(Opening,float(FMath::Abs(GetActorTransform().InverseTransformPosition(Gates[I]->GetComponentLocation()).Y)-60.f));
  return Opening;
+}
+bool AWarehouseElevator::AreLandingDoorsClosed() const
+{
+ // Unused fourth-floor doors do not participate, but every active landing
+ // must be closed and settled, not only the current floor's minimum opening.
+ if (DoorOpening>.01f || Gates.Num()<FloorCount*2) return false;
+ for (int32 I=0;I<FloorCount*2;++I)
+ {
+  if (!IsValid(Gates[I])) return false;
+  const float Y=GetActorTransform().InverseTransformPosition(Gates[I]->GetComponentLocation()).Y;
+  if (FMath::Abs(Y-(I%2 ? 60.f : -60.f))>=.5f || Gates[I]->GetPhysicsLinearVelocity().Size()>=2.f) return false;
+ }
+ return true;
 }
 bool AWarehouseElevator::SetDoors(bool Open,float Dt)
 {
@@ -350,21 +648,11 @@ bool AWarehouseElevator::SetDoors(bool Open,float Dt)
   const float ActualY=GetActorTransform().InverseTransformPosition(Gates[I]->GetComponentLocation()).Y;
   if (FMath::Abs(ActualY-Side*(60.f+Opening))>.1f) Gates[I]->WakeAllRigidBodies();
  }
- if (Open) return ActualDoorOpening()>=124.f;
- // A door can briefly cross the closed sensor while its finite motor still
- // has an open target. Keep commanding zero until both leaves have settled.
- if (DoorOpening>.01f) return false;
- for (int32 I=CurrentFloor*2;I<CurrentFloor*2+2;++I)
- {
-  const float Side=I%2 ? 1.f : -1.f;
-  const float ActualY=GetActorTransform().InverseTransformPosition(Gates[I]->GetComponentLocation()).Y;
-  if (FMath::Abs(ActualY-Side*60.f)>=.5f || Gates[I]->GetPhysicsLinearVelocity().Size()>=2.f) return false;
- }
- return true;
+ return Open ? ActualDoorOpening()>=124.f : AreLandingDoorsClosed();
 }
 bool AWarehouseElevator::MovePlatform(int32 Floor,float Dt)
 {
- if (FMath::Abs(ActualDoorOpening())>.5f || !CabinClear() || (bBoarded && !FitsInside(ReservedVehicle))) return false;
+ if (!AreLandingDoorsClosed() || !CabinClear() || (bBoarded && !FitsInside(ReservedVehicle))) return false;
  const float Next=FMath::FInterpConstantTo(PlatformHeight,Floor*400.f,Dt,FMath::Clamp(TravelSpeedCm,1.f,50.f));
  FCollisionQueryParams Params(SCENE_QUERY_STAT(LiftPlatformSweep),false,this);
  if (IsValid(ReservedVehicle))

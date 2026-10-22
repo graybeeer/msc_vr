@@ -83,15 +83,15 @@ for side in ('Left', 'Right'):
         left=bounds(named[f'WH_Pallet_Left_{row:02}_0'])[1][0]
         right=bounds(named[f'WH_Pallet_Right_{row:02}_0'])[0][0]
         assert abs(right-left-320)<.1
-for kind, size, levels in [('Medium',(60,180,210),(20,95,170)),('Light',(45,120,180),(20,85,150))]:
+for kind in ('Medium','Light'):
     for index in range(2):
         parts=[named[f'WH_{kind}Rack_{index}_{part}'] for part in 'ABCDEFGH']
         low=[min(bounds(a)[0][i] for a in parts) for i in range(3)]
         high=[max(bounds(a)[1][i] for a in parts) for i in range(3)]
-        assert all(abs(high[i]-low[i]-size[i])<.15 for i in range(3))
-        for tier, top in enumerate(levels):
+        assert all(abs(high[i]-low[i]-size)<.15 for i,size in enumerate((100,266,250)))
+        for tier, top in enumerate((20,20,140)):
             cargo=named[f'WH_{kind}Stock_{index}_{tier}']
-            assert abs(bounds(cargo)[0][2]-ground-top)<.1
+            assert abs(bounds(cargo)[0][2]-ground-top-.1)<.15
 
 for label, actor in named.items():
     if label.startswith('WH_DispatchPallet_') or label in ('WH_Pickup_Pallet', 'WH_Drop_Pallet'):

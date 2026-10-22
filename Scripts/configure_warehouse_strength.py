@@ -1,6 +1,5 @@
 """Install editable mass/strength profiles and convex collapse meshes; preserves the existing map."""
 import os
-import re
 import sys
 import unreal
 
@@ -9,6 +8,8 @@ from prepare_warehouse_assets import collision_mesh
 
 
 def configure_strength():
+    from configure_unified_racks import normalize_rack_geometry
+    rack_groups = normalize_rack_geometry()
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
     all_actors = actors.get_all_level_actors()
     named = {a.get_actor_label(): a for a in all_actors}
@@ -29,7 +30,8 @@ def configure_strength():
         spec.set_editor_property('failure', mode)
         for key, value in [('mass_kg', mass), ('rated_load_kg', capacity), ('impact_yield_j', impact_yield),
                            ('impact_failure_j', impact_failure), ('level_capacity_kg', level), ('overload_seconds', 10)]:
-            spec.set_editor_property(key, previous[name].get_editor_property(key) if name in previous else value)
+            spec.set_editor_property(key, previous[name].get_editor_property(key)
+                                     if name in previous and mode != failure.RACK else value)
         spec.set_editor_property('shelf_heights_cm', heights)
         physics = []
         for actor in members:
@@ -64,31 +66,9 @@ def configure_strength():
         # Educational lumped structure: about 2051 m2 of upper decks at 500 kg/m2.
         # It does not calculate individual beam stresses or certify a building design.
         add('WarehouseBuilding',building,failure.STRUCTURE,1100000,1025500,20000,200000)
-    for side in ('Left', 'Right'):
-        for row in range(11):
-            members = [named[f'WH_Rack_{side}_{row:02}_{p}'] for p in 'ABCDEFGH']
-            add(f'PalletRack_{side}_{row:02}', members, failure.RACK, 180, 4000, 250, 1600,
-                2000, (20, 140))
-    for kind, mass, capacity, level, heights in [('Medium', 60, 750, 250, (20,95,170)),
-                                               ('Light', 30, 300, 100, (20,85,150))]:
-        for index in range(2):
-            members = [named[f'WH_{kind}Rack_{index}_{p}'] for p in 'ABCDEFGH']
-            members += [named[f'WH_{kind}Shelf_{index}_{tier}'] for tier in range(3)]
-            add(f'{kind}Rack_{index}', members, failure.RACK, mass, capacity, 80, 600, level, heights)
-    # Upper-floor copies retain the same per-bay limits; support heights are world Z.
-    for floor in (1,2):
-        for side in ('Left','Right'):
-            for row in range(3):
-                prefix=f'MZ_L{floor+1}_Rack_{side}_{row}'
-                members=[named.get(prefix+'_'+p) for p in 'ABCDEFGH']
-                if all(members):add(prefix,members,failure.RACK,180,4000,250,1600,2000,(floor*400+20,floor*400+140))
-    # Added empty bays use the same calibrated model and limits as occupied bays.
-    empty_bays={label.rsplit('_',1)[0] for label in named if re.fullmatch(r'WH_(?:EmptyRack_L[123]_\d+|InboundRack_\d+)_[A-H]',label)}
-    for prefix in sorted(empty_bays):
-        floor=int(prefix.split('_L')[1].split('_')[0])-1 if '_L' in prefix else 0
-        members=[named[prefix+'_'+part] for part in 'ABCDEFGH']
-        decks=[named[prefix+'_Deck_'+str(z)] for z in (20,140) if prefix+'_Deck_'+str(z) in named]
-        add(prefix,members+decks,failure.RACK,250 if decks else 180,4000,250,1600,2000,(floor*400+20,floor*400+140))
+    for rack in rack_groups:
+        add(rack['name'], rack['members'], failure.RACK, 250, 4000, 250, 1600,
+            2000, rack['shelf_heights_cm'])
     for label, actor in named.items():
         if actor.get_path_name() in grouped or not actor.get_actor_enable_collision():
             continue

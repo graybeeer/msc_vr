@@ -429,7 +429,7 @@ void AWarehouseDamageSystem::OnHit(UPrimitiveComponent* Part,AActor* Other,UPrim
  const float Speed=FMath::Abs(FVector::DotProduct(RelativeVelocity,Hit.ImpactNormal))*.01f;
  // Solver depenetration/resting support impulses are not new kinetic energy.
  const float Energy=FMath::Min(J*J/(2.f*Reduced),.5f*Reduced*Speed*Speed);
- UE_LOG(LogTemp,Verbose,TEXT("WAREHOUSE_IMPACT %s -> %s: %.2f J, %.2f m/s"),*GetNameSafe(Part->GetOwner()),*GetNameSafe(Other),Energy,Speed);
+ UE_LOG(LogTemp,Verbose,TEXT("WAREHOUSE_IMPACT %s.%s -> %s.%s at %s: %.2f J, %.2f m/s"),*GetNameSafe(Part->GetOwner()),*GetNameSafe(Part),*GetNameSafe(Other),*GetNameSafe(OtherPart),*Hit.ImpactPoint.ToString(),Energy,Speed);
  Contact(Part->GetOwner(),Other,Energy,Part,OtherPart);
 }
 void AWarehouseDamageSystem::Release(int32 Index)

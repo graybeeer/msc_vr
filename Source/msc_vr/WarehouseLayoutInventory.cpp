@@ -158,6 +158,25 @@ void AWarehouseLayoutInventory::CapturePrototypes(AWarehouseLayoutEditor* Layout
  for (TActorIterator<AWarehouseInboundZone> It(GetWorld());It;++It)
   for (auto Slot:It->RackSlots) if (IsValid(Slot.Rack) && !RackCatalogue.ContainsByPredicate([&](const auto& Existing) { return Existing.Name==Slot.Name && Existing.Rack==Slot.Rack; }))
   { Slot.Pose=Slot.Pose.GetRelativeTransform(Slot.Rack->GetActorTransform());RackCatalogue.Add(Slot); }
+ // Racks share one storage model. Prefer the complete, registered slot template
+ // instead of whichever frame happens to appear first in the actor iterator.
+ auto RackKey=[](const AActor* A) { const FName Group=GroupTag(A);return Group.IsNone() ? A->GetFName() : Group; };
+ TMap<FName,int32> SlotCounts;
+ for (const auto& Slot:RackCatalogue) if (IsValid(Slot.Rack)) ++SlotCounts.FindOrAdd(RackKey(Slot.Rack));
+ AActor* RackTemplate=nullptr;int32 BestSlotRank=-1,BestModel=-1;FString BestRackKey;
+ for (TActorIterator<AActor> It(GetWorld());It;++It)
+ {
+  AActor* A=*It;if (!A->ActorHasTag(TEXT("LayoutType:Rack")) || A->ActorHasTag(TEXT("LayoutFixed"))) continue;
+  const FName Group=RackKey(A);const int32 Slots=SlotCounts.FindRef(Group);
+  const int32 SlotRank=Slots==4 ? MAX_int32 : Slots;
+  const FString Key=Group.ToString()+TEXT("/")+A->GetActorNameOrLabel();
+  const int32 Model=Group.ToString().StartsWith(TEXT("LayoutGroup:WH_InboundRack_")) ? 2 :
+   Group==TEXT("LayoutGroup:PalletRack_Left_00") ? 1 : 0;
+  if (SlotRank>BestSlotRank || (SlotRank==BestSlotRank && (Model>BestModel || (Model==BestModel && Key<BestRackKey))))
+  { RackTemplate=A;BestSlotRank=SlotRank;BestModel=Model;BestRackKey=Key; }
+ }
+ // Legacy/test maps may have no registered storage slots. Preserve their real
+ // template data rather than inventing load positions from visual bounds.
  for (auto& Zone:Layout->Zones) if (Zone.Name==TEXT("Outbound") && Zone.Destinations.IsEmpty())
   for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) Zone.Destinations=It->OutboundDestinations;
  TSet<FName> Groups;TSet<FString> Singles;
@@ -173,6 +192,7 @@ void AWarehouseLayoutInventory::CapturePrototypes(AWarehouseLayoutEditor* Layout
   else if (A->IsA<AWarehouseElevator>() || A->IsA<AWarehousePalletLift>() || A->ActorHasTag(TEXT("LayoutType:Elevator"))) Category=EWarehouseLayoutCategory::Elevator;
   else if (A->ActorHasTag(TEXT("LayoutType:Rack"))) Category=EWarehouseLayoutCategory::Rack;
   else if (!A->ActorHasTag(TEXT("LayoutType:Other"))) continue;
+  if (Category==EWarehouseLayoutCategory::Rack && A!=RackTemplate) continue;
   const FName Group=GroupTag(A);TArray<AActor*> Members;
   if (Group!=NAME_None)
   {
@@ -190,6 +210,7 @@ void AWarehouseLayoutInventory::CapturePrototypes(AWarehouseLayoutEditor* Layout
   }
   if (Members.IsEmpty()) continue;
   FVector Origin=A->GetActorLocation();FString Name=A->GetActorNameOrLabel();
+  if (Category==EWarehouseLayoutCategory::Rack) Name=TEXT("팔레트 보관 랙");
   if (const auto* Conveyor=Cast<AWarehouseConveyor>(A)) Name=Conveyor->Kind==EWarehouseConveyorKind::PalletRoller ? TEXT("팔레트 롤러 컨베이어") :
    Conveyor->Kind==EWarehouseConveyorKind::RotaryTransfer ? TEXT("90° 회전 이송대") : TEXT("상자 컨베이어");
   if (Category==EWarehouseLayoutCategory::Elevator) for (AActor* Member:Members)

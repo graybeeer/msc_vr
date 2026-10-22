@@ -32,7 +32,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 배송편 명세·출고 실제 인계·한 묶음씩 트럭 상차/입고 하역·출발 | `WarehouseShippingSystem.h/.cpp`, `WarehouseLogisticsTruck.h/.cpp`, `Scripts/configure_shipping_system.py`, `Scripts/verify_shipping_workflow_pie.py`, `Scripts/verify_shipping_saved_map_pie.py` | 관제 UI는 `WarehouseComputerUI.cpp`, 기존 운반 검증·지시는 `WarehouseComputer`; 운영 기준과 남은 계획은 `TRUCK_LOGISTICS_DESIGN.md`, 화면 사용은 `WAREHOUSE.md` |
 | 현재 이동 알고리즘 도식·실제 산업 AGV/FMS 비교 | `FLEET_ALGORITHM_COMPARISON.md` | 구현은 `WarehouseForkliftAI`, `WarehouseFleetCoordinator`, 실행 검증은 `AUTONOMY.md` |
 | 중앙 관제 통로 예약·우회·후퇴·양보·구간 폐쇄·운반 시간 측정 | `WarehouseFleetCoordinator.h/.cpp`, `WarehouseForkliftAI.cpp`, `WarehouseForkliftRecovery.cpp`, `Scripts/configure_fleet_corridors.py`, `Scripts/verify_fleet_workflow_pie.py`, `Scripts/verify_fleet_traffic_pie.py` | 물리 주행은 `WarehouseForkliftPhysics.cpp`, 중앙 관제 설계·검증은 `AUTONOMY.md` |
-| 입구 관제 컴퓨터·E 접속/복귀·실시간 재고·출고 작업 지시·차량 관리 | `WarehouseComputer.h/.cpp`, `WarehouseComputerUI.cpp`, `Scripts/configure_warehouse_computer.py`, `Scripts/verify_warehouse_computer_pie.py` | 화면/입력 연결은 `msc_vrPlayerController`·`msc_vrCharacter`, 실제 지시는 `WarehouseForkliftAI.cpp`의 `SubmitJob`, 접촉 재고는 `WarehouseDamageSystem::GetSupportedActors`, 사용·한계는 `WAREHOUSE.md` |
+| 입구 관제 컴퓨터·새 대시보드/레거시·E 접속/복귀·실시간 재고·작업 지시 | `WarehouseComputer.h/.cpp`, `WarehouseComputerUI.cpp`, `WarehouseComputerDashboard.cpp`, `WarehouseComputerUILegacy.cpp`, `Scripts/verify_computer_dashboard_pie.py`, `Scripts/configure_warehouse_computer.py`, `Scripts/verify_warehouse_computer_pie.py` | 화면/입력 연결은 `msc_vrPlayerController`·`msc_vrCharacter`, 실제 지시는 `WarehouseForkliftAI.cpp`의 `SubmitJob`, 접촉 재고는 `WarehouseDamageSystem::GetSupportedActors`, 사용·한계는 `WAREHOUSE.md` |
 | 작은 박스·최소 크기 유지, 큰 박스 상한 확대 | `Scripts/expand_large_cargo.py`, `Scripts/verify_large_cargo_pie.py`, `WarehouseCargo.cpp`의 수량별 상한 | `CARGO_RULES.md`, 적용 전후 기록 `Saved/Testing/LargeCargoExpansion.json`; 전체 물품 재생성은 `configure_cargo_variety.py` |
 | 구석의 색상별1000kg 중량 시험 상자4개·2단 적재 | `Scripts/configure_heavy_test_cargo.py`, `Scripts/verify_heavy_test_cargo_pie.py` | 맵·재생성·실제 검증 범위는 `WAREHOUSE.md`, `ExceptionCargo` 보존은 `configure_cargo_variety.py`, 파생 Fab 재질은 `Content/Warehouse/Cargo/BoxesPalletsPack/HeavyTest/Materials/` (Git 제외) |
 | 구역 위치 한글 UI·층별 표시·메뉴/이름표/안내의 공통 스타일 | `WarehouseAreaLabel.h/.cpp`, `WarehouseUIStyle.h`, `Scripts/configure_area_labels.py`, `Scripts/verify_area_labels_pie.py` | 작업자 이름표는 `WarehouseWorker.h/.cpp`, HUD·설정·비상 안내는 `msc_vrPlayerController.cpp`, 배치와 사용 규칙은 `WAREHOUSE.md` |
@@ -46,10 +46,12 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 랙·화물 재배치와 지게차 2/3/4대 스트레스 검사 | `Scripts/verify_fleet_layout_stress_pie.py` | 실제 저장 창고의 재배치·운반 및 별도 교차·후퇴·우회·안전 정지 사례; 결과는 `Saved/Testing/FleetLayoutStress/Report.json` |
 | 창고 작업자·역할 이름표·배치 | `Source/msc_vr/WarehouseWorker.h/.cpp`, `Scripts/configure_warehouse_workers.py`, `Scripts/verify_warehouse_workers.py` | `WAREHOUSE.md`의 역할별 작업자, 기본 플레이어 전신 메시 |
 | 3층 복층·승강기·층간 운반 | `Scripts/configure_mezzanine.py`, `Source/msc_vr/WarehouseElevator.h/.cpp`, `WarehouseForkliftAI.cpp` | `MEZZANINE.md`, `Scripts/verify_mezzanine.py`, `Scripts/verify_mezzanine_pie.py`, `Scripts/verify_dynamic_forklift_transfer_pie.py`; 관찰 층 선택은 PlayerController |
+| 팀원 범용 승강기 모델·4층 호출대·문닫힘·물리 문턱 | `ELEVATOR_MODEL.md`, `WarehouseElevator.h/.cpp`, `Scripts/apply_cargo_elevator.py`, `Scripts/extend_cargo_elevator_fourth_floor.py` | 모델은 `Art/Equipment/CargoElevator`·`Content/Warehouse/Elevator`; native 운행은 `verify_cargo_elevator_pie.py`, 문틀/콜스탠드 추가·삭제·층수 검사는 `verify_elevator_model_layout_pie.py` |
 | 범용/화물용 승강기 구분·팔레트 한 개 전용 타워 모델·E 호출/발송 | `MEZZANINE.md`, `WarehousePalletLift.h/.cpp`, `Scripts/build_pallet_lift.py`, `Scripts/apply_pallet_lift.py`, `Art/Equipment/PalletLift/` | `Content/Warehouse/PalletLift/`, `Scripts/verify_native_pallet_lift_pie.py`; 배치 공용 개구부는 `WarehouseElevatorLayout`, 기존 AGV 운반은 `WarehouseElevator`만 사용 |
 | 창고 배치·랙·화물·조명 | `WAREHOUSE.md`, `Scripts/build_first_person_warehouse.py`, `Content/FirstPerson/Lvl_FirstPerson.umap` | `Content/__ExternalActors__/FirstPerson/Lvl_FirstPerson/` (엔진이 생성한 액터 데이터) |
 | 빈 랙·구석 빈 팔레트 더미·손으로 팔레트 쌓기 | `Scripts/configure_empty_storage.py`, `msc_vrCharacter.cpp`의 `FindPlacement`/`TryPlaceOnPallet`, `Scripts/verify_empty_storage_pie.py` | `Scripts/configure_warehouse_strength.py`, `WAREHOUSE.md`의 양손 운반과 적재; 짐 운반의 균형은 `WarehouseWorker.cpp`의 `DriveCapsule`과 `PHYSICS.md` |
-| 지게차 기준 실측 크기·팔레트/중량/경량 랙·통로·팔레트·트럭 | `Scripts/apply_real_world_scale.py`, `Scripts/verify_real_world_scale.py`, `WAREHOUSE.md`의 실제 크기 기준 | `VNSL14_SPEC.md`, 창고/외부 에셋 배치 스크립트 |
+| 전 층 공통 팔레트 보관 랙·단일 추가 원형·피킹 추후 계획 | `Scripts/configure_unified_racks.py`, `WarehouseLayoutInventory::CapturePrototypes`, `Scripts/verify_layout_inventory_pie.py` | 주랙 프레임8부품·안전 데크2개와 하중은 `configure_warehouse_strength.py`; 기존 주소·그룹과 화물 보존, 재생성은 `apply_real_world_scale.py`·`configure_empty_storage.py`; 사용·검증은 `WAREHOUSE.md` |
+| 지게차 기준 실측 크기·공통 보관 랙·통로·팔레트·트럭 | `Scripts/apply_real_world_scale.py`, `Scripts/verify_real_world_scale.py`, `WAREHOUSE.md`의 실제 크기 기준 | `VNSL14_SPEC.md`, 창고/외부 에셋 배치 스크립트 |
 | 트럭 후면 개방·적재함 내부·택배 적재 | `Scripts/configure_truck_interior.py`, `Scripts/verify_truck_interior_pie.py`, `WAREHOUSE.md`의 트럭 내부 절 | 맵의 `TRK_` 액터, `Content/Warehouse/Exterior/TruckInterior/` (Fab 파생 메시, Git 제외); 큰 지게차 안내는 `msc_vrPlayerController.cpp` |
 | 건물 외관·트럭 진입로·하역장 | `WAREHOUSE.md`의 외부 에셋 선정/설치 상태, `Scripts/build_warehouse_exterior.py`, `Scripts/verify_warehouse_exterior.py` | 맵의 `EXT_` 액터, `Content/Warehouse/Exterior/Materials/` |
 | 밝기·자동 노출 | `Config/DefaultEngine.ini`의 AutoExposure, 맵 생성 스크립트의 작업등 | 인게임 카메라·후처리 설정 |
@@ -103,6 +105,7 @@ msc_vr/
   CARGO_RULES.md
   CHARGER_MODEL.md
   COLLISION_POLICY.md
+  ELEVATOR_MODEL.md
   FLEET_ALGORITHM_COMPARISON.md
   MCP_SETUP.md
   MEZZANINE.md
@@ -125,6 +128,7 @@ msc_vr/
   Scripts/
     analyze_warehouse_profile.py
     apply_agv_charger.py
+    apply_cargo_elevator.py
     apply_exterior_fab_assets.py
     apply_forklift_drive_tuning.py
     apply_intact_cargo_physics.py
@@ -136,6 +140,7 @@ msc_vr/
     apply_warehouse_services.py
     build_agv_charger.py
     build_agv_motion_test.py
+    build_cargo_elevator.py
     build_cat_accessory.py
     build_column_protectors.py
     build_conveyor_model.py
@@ -163,6 +168,7 @@ msc_vr/
     configure_sensor_structure_tags.py
     configure_shipping_system.py
     configure_truck_interior.py
+    configure_unified_racks.py
     configure_warehouse_computer.py
     configure_warehouse_layout.py
     configure_warehouse_services_collision.py
@@ -176,8 +182,10 @@ msc_vr/
     export_agv_charger.py
     export_agv_counterbalance.py
     export_agv_refined.py
+    export_cargo_elevator.py
     export_orange_agv_unreal.py
     export_warehouse_services.py
+    extend_cargo_elevator_fourth_floor.py
     import_agv_original5.py
     import_agv_refined.py
     import_boxes_pallets_pack.py
@@ -200,7 +208,9 @@ msc_vr/
     preview_warehouse_services.py
     profile_warehouse_pie.py
     refine_agv_original_proportions.py
+    refine_cargo_elevator_call_stands.py
     refine_warehouse_services_layout.py
+    render_cargo_elevator.py
     restore_front_wheel_mounts.py
     revise_agv_counterbalance.py
     update_structure_summary.ps1
@@ -216,6 +226,7 @@ msc_vr/
     verify_building_lift_four_floors_pie.py
     verify_building_saved_map_pie.py
     verify_building_shaft_layout_pie.py
+    verify_cargo_elevator_pie.py
     verify_cargo_pallet_physics_pie.py
     verify_cargo_rules.py
     verify_cargo_variety_pie.py
@@ -223,6 +234,7 @@ msc_vr/
     verify_carry_response_pie.py
     verify_character_drive_response_pie.py
     verify_collision_policy_pie.py
+    verify_computer_dashboard_pie.py
     verify_construction_editor_pie.py
     verify_conveyor_layout_pie.py
     verify_conveyor_transport_pie.py
@@ -230,6 +242,7 @@ msc_vr/
     verify_dual_forklifts_remote_pie.py
     verify_dynamic_forklift_transfer_pie.py
     verify_dynamic_warehouse_startup.py
+    verify_elevator_model_layout_pie.py
     verify_elevator_route_visuals_pie.py
     verify_empty_storage_pie.py
     verify_first_person_warehouse.py
@@ -314,7 +327,10 @@ msc_vr/
       WarehouseChargingStation.h
       WarehouseComputer.cpp
       WarehouseComputer.h
+      WarehouseComputerDashboard.cpp
+      WarehouseComputerDashboard.h
       WarehouseComputerUI.cpp
+      WarehouseComputerUILegacy.cpp
       WarehouseConstructionEditor.cpp
       WarehouseConstructionEditor.h
       WarehouseConveyor.cpp
@@ -410,6 +426,8 @@ msc_vr/
       Textures/
     MSPresets/
       MS_Foliage_Material/
+    Python/
+      __pycache__/
     Scene_Warehouse/
     Variant_Horror/
       Lvl_Horror.umap
@@ -436,6 +454,7 @@ msc_vr/
       ChargingStation/
       Collision/
       Conveyor/
+      Elevator/
       Exterior/
       Maps/
       Materials/

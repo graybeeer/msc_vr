@@ -1589,8 +1589,10 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   Route(Elevator->WaitingPose(TransferFromFloor),EWarehouseAIState::ElevatorCall,TEXT("FMS CALL ELEVATOR"),LoadedTravelSpeedCm);
   break;
  case EWarehouseAIState::ElevatorCall:
+  // Continue physical low-speed alignment after route braking settles.
+  if (AIElapsed>180.f) { FaultAI(TEXT("ELEVATOR RESERVATION TIMEOUT"));break; }
+  if (!MovePrecise(Elevator->WaitingPose(TransferFromFloor).GetLocation(),5,Dt)) break;
   if (Elevator->RequestTransfer(this,TransferFromFloor,TransferToFloor)) Next(EWarehouseAIState::ElevatorWait,TEXT("WAIT FOR ARRIVAL / OPEN DOOR / ENTRY PERMISSION"));
-  else if (AIElapsed>180.f) FaultAI(TEXT("ELEVATOR RESERVATION TIMEOUT"));
   break;
  case EWarehouseAIState::ElevatorWait:
   if (Elevator->CanEnter(this)) Next(EWarehouseAIState::ElevatorBoard,TEXT("ENTER PLATFORM - PRECISE STOP"));
