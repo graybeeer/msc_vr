@@ -1,4 +1,5 @@
 #include "WarehouseExperimentStorage.h"
+#include "WarehousePlayMode.h"
 #include "WarehouseBuildingLayout.h"
 #include "WarehouseCargo.h"
 #include "WarehouseComputer.h"
@@ -318,6 +319,7 @@ FString WarehouseExperimentStorage::MapIdentity(const UWorld* World)
 FString WarehouseExperimentStorage::LayoutDirectory() { return FPaths::Combine(FPaths::ProjectSavedDir(),TEXT("WarehouseExperiments/Layouts")); }
 bool WarehouseExperimentStorage::CanCapture(UWorld* World,FString& Error)
 {
+ if (AWarehousePlayStage::Find(World)) return Fail(Error,TEXT("배치 저장·실험은 관리자 모드에서 사용하세요."));
  Error.Reset();if (!World || !World->IsGameWorld() || !UGameplayStatics::IsGamePaused(World)) return Fail(Error,TEXT("배치 편집으로 시뮬레이션을 일시정지한 뒤 저장하세요."));
  for (TActorIterator<AWarehouseLayoutEditor> It(World);It;++It) if (It->bDragging || It->bMarqueeSelecting) return Fail(Error,TEXT("진행 중인 드래그·선택을 끝내세요."));
  if (auto* PC=Cast<Amsc_vrPlayerController>(World->GetFirstPlayerController()))

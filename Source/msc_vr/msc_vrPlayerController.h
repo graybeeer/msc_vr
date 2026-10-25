@@ -37,6 +37,8 @@ public:
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") float MouseSensitivity = 1.f;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") float ViewFOV = 90.f;
 	UFUNCTION(BlueprintCallable, Category="Settings") void ToggleWarehouseMenu();
+	UFUNCTION(BlueprintCallable, Category="Play mode") bool OpenPlayMode(int32 StageIndex);
+	UFUNCTION(BlueprintPure, Category="Play mode") bool IsMainMenu() const;
 	UFUNCTION(BlueprintCallable, Category="Settings") void ToggleObserverView();
 	UFUNCTION(BlueprintCallable, Category="Settings") void FrameWarehouse();
 	UFUNCTION(BlueprintCallable, Category="Settings") void SetObserverFloor(int32 Floor);
@@ -56,7 +58,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Layout|Conveyor") bool ConfigureLayoutConveyor(int32 Field,float Value);
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Settings") int32 ObserverFloor=-1;
 	UFUNCTION(BlueprintPure, Category="Settings") bool IsObserverView() const { return bObserverView; }
-	UFUNCTION(BlueprintPure, Category="Settings") bool IsWarehouseMenuOpen() const { return MenuWidget.IsValid() || ComputerWidget.IsValid() || ExperimentWidget.IsValid(); }
+	UFUNCTION(BlueprintPure, Category="Settings") bool IsWarehouseMenuOpen() const { return IsMainMenu() || MenuWidget.IsValid() || ComputerWidget.IsValid() || ExperimentWidget.IsValid(); }
 	UFUNCTION(BlueprintCallable, Category="Console") bool OpenWarehouseComputer(AWarehouseComputer* Computer);
 	UFUNCTION(BlueprintCallable, Category="Console") void CloseWarehouseComputer();
 	UFUNCTION(BlueprintPure, Category="Console") bool IsWarehouseComputerOpen() const { return ComputerWidget.IsValid(); }
@@ -122,6 +124,7 @@ protected:
 	TSharedPtr<SWidget> MenuWidget;
 	TSharedPtr<SWidget> ComputerWidget;
 	TSharedPtr<SWidget> ExperimentWidget;
+	TSharedPtr<SWidget> PlayWidget;
 	UPROPERTY(Transient) TObjectPtr<AWarehouseComputer> ActiveComputer;
 	UPROPERTY(Transient) TObjectPtr<ACameraActor> ObserverCamera;
 	UPROPERTY(Transient) TObjectPtr<AWarehouseLayoutEditor> LayoutEditor;

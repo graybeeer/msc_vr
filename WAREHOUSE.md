@@ -1,6 +1,6 @@
 # 물류창고 맵과 교육 시뮬레이션
 
-현재 기준: **2026-10-25**, Unreal Engine 5.8, 기본 맵 `/Game/FirstPerson/Lvl_FirstPerson`.
+현재 기준: **2026-10-25**, Unreal Engine 5.8, 관리자 창고 맵 `/Game/FirstPerson/Lvl_FirstPerson`. 게임 시작은 메인 메뉴이며, 관리자/플레이 모드와 스테이지·모델 아이콘은 [PLAY_MODE.md](PLAY_MODE.md)를 따른다.
 
 이 문서는 현재 맵의 공간 구성, 플레이어 조작, 하중·손상 프로필을 설명한다. 실제 강체·접촉·구동의 공통 기준은 [PHYSICS.md](PHYSICS.md), 작업 로직은 [AUTONOMY.md](AUTONOMY.md), 차량 사양은 [VNSL14_SPEC.md](VNSL14_SPEC.md), 최종 모델은 [REFINED_AGV.md](REFINED_AGV.md), 설치는 [TEAM_ASSETS.md](TEAM_ASSETS.md)를 기준으로 한다. 수정할 파일을 찾을 때는 [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)를 먼저 확인한다.
 

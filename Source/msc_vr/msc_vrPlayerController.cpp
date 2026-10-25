@@ -26,8 +26,12 @@
 #include "WarehouseComputer.h"
 #include "WarehouseExperimentUI.h"
 #include "WarehouseExperimentSubsystem.h"
+#include "WarehousePlayMode.h"
+#include "Misc/PackageName.h"
+#include "TimerManager.h"
 #include "WarehouseUIStyle.h"
 #include "WarehouseLayoutEditor.h"
+#include "WarehouseLayoutIcons.h"
 #include "WarehouseLayoutInventory.h"
 #include "WarehouseConstructionEditor.h"
 #include "WarehouseConveyor.h"
@@ -231,6 +235,7 @@ void Amsc_vrPlayerController::BeginPlay()
 		auto Floors=SNew(SWrapBox).UseAllottedSize(true);
 		for (int32 Floor=-1;Floor<4;++Floor)
 			Floors->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(FMargin(10,5))
+				.Visibility(AWarehousePlayStage::IsPlay(this) && Floor>0 ? EVisibility::Collapsed : EVisibility::Visible)
 				.ToolTipText(FText::FromString(Floor<0 ? TEXT("전체 층 관찰 · 재배치를 끄고 시뮬레이션을 재개합니다.") : TEXT("선택한 층을 관찰하고 같은 층 안에서 편집합니다.")))
 				.OnClicked_Lambda([this,Floor]() { SetObserverFloor(Floor);return FReply::Handled(); })
 				[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize))
@@ -243,7 +248,7 @@ void Amsc_vrPlayerController::BeginPlay()
 			Actions->AddSlot().FillWidth(1).Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(12)
 				.OnClicked_Lambda([this,I]() { SetLayoutAction(I);return FReply::Handled(); })
 				[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity_Lambda([this,I]() { return LayoutEditor && !(ConstructionEditor && ConstructionEditor->bActive) && int32(LayoutEditor->Action)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(ActionNames[I]))]];
-		Actions->AddSlot().FillWidth(1).Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(12)
+		Actions->AddSlot().FillWidth(1).Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(12).Visibility(AWarehousePlayStage::IsPlay(this) ? EVisibility::Collapsed : EVisibility::Visible)
 			.OnClicked_Lambda([this]() { SetConstructionEditing(true);return FReply::Handled(); })
 			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity_Lambda([this]() { return ConstructionEditor && ConstructionEditor->bActive ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(TEXT("건물 · 복층")))]];
 		Tools->AddSlot().AutoHeight()[Actions];
@@ -291,11 +296,16 @@ void Amsc_vrPlayerController::BeginPlay()
 		const TCHAR* Labels[]={TEXT("랙"),TEXT("지게차"),TEXT("승강기"),TEXT("입출고 구역"),TEXT("기타 물건"),TEXT("충전기"),TEXT("일반 대기 자리"),TEXT("상자"),TEXT("팔레트")};
 		for (int32 I=0;I<UE_ARRAY_COUNT(Labels);++I)
 			Row->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+				.Visibility(AWarehousePlayStage::IsPlay(this) && AWarehousePlayStage::RequiredStage(EWarehouseLayoutCategory(I))>3 ? EVisibility::Collapsed : EVisibility::Visible)
 				.OnClicked_Lambda([this,I]() { SetLayoutCategory(I);return FReply::Handled(); })
-				[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity_Lambda([this,I]() { return LayoutEditor && int32(LayoutEditor->Category)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(Labels[I]))]];
+				[SNew(SHorizontalBox)
+				 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[MakeWarehouseLayoutIcon([I](){return EWarehouseLayoutCategory(I);})]
+				 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(5,0)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity_Lambda([this,I]() { return LayoutEditor && int32(LayoutEditor->Category)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(Labels[I]))]]];
 		Row->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
 			.OnClicked_Lambda([this]() { SetLayoutCategory(int32(EWarehouseLayoutCategory::Conveyor));return FReply::Handled(); })
-			[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity_Lambda([this]() { return LayoutEditor && LayoutEditor->Category==EWarehouseLayoutCategory::Conveyor ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(TEXT("컨베이어")))]];
+			[SNew(SHorizontalBox)
+			 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[MakeWarehouseLayoutIcon([](){return EWarehouseLayoutCategory::Conveyor;})]
+			 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(5,0)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity_Lambda([this]() { return LayoutEditor && LayoutEditor->Category==EWarehouseLayoutCategory::Conveyor ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(TEXT("컨베이어")))]]];
 		OrdinaryTools->AddSlot().AutoHeight()[Row];
 		auto SelectionRow=SNew(SHorizontalBox);
 		SelectionRow->AddSlot().AutoWidth().Padding(3)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Accent)
@@ -309,7 +319,7 @@ void Amsc_vrPlayerController::BeginPlay()
 		SelectionRow->AddSlot().AutoWidth().Padding(12,0)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize))
 			.ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(TEXT("선택 후 우클릭 · 좌우 90도 회전 / 삭제")))];
 		OrdinaryTools->AddSlot().AutoHeight()[SelectionRow];
-		OrdinaryTools->AddSlot().AutoHeight().Padding(3,6)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+		OrdinaryTools->AddSlot().AutoHeight().Padding(3,6)[SNew(SButton).IsFocusable(false).ContentPadding(8).Visibility(AWarehousePlayStage::IsPlay(this) ? EVisibility::Collapsed : EVisibility::Visible)
 			.OnClicked_Lambda([this]() { OpenWarehouseExperiments();return FReply::Handled(); })
 			[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity(WarehouseUIStyle::Accent)
 				.Text(FText::FromString(TEXT("배치 저장 · 실험")))]];
@@ -386,9 +396,11 @@ void Amsc_vrPlayerController::BeginPlay()
 		OrdinaryTools->AddSlot().AutoHeight()[SNew(SButton).IsFocusable(false).ContentPadding(8)
 			.Visibility_Lambda([this]() { return LayoutEditor && LayoutEditor->Action==EWarehouseLayoutAction::Add ? EVisibility::Visible : EVisibility::Collapsed; })
 			.OnClicked_Lambda([this]() { if (LayoutEditor) LayoutEditor->CycleAddChoice();return FReply::Handled(); })
-			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text_Lambda([this]() { return FText::FromString(LayoutEditor ? TEXT("추가 대상: ")+LayoutEditor->GetAddChoiceLabel()+TEXT(" · 클릭하면 다음 종류") : FString()); })]];
+			[SNew(SHorizontalBox)
+			 +SHorizontalBox::Slot().AutoWidth().Padding(0,0,10,0)[MakeWarehouseLayoutIcon([this](){return LayoutEditor ? LayoutEditor->Category : EWarehouseLayoutCategory::All;},[this](){return LayoutEditor ? LayoutEditor->GetAddChoiceLabel() : FString();},72)]
+			 +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).AutoWrapText(true).Text_Lambda([this]() { return FText::FromString(LayoutEditor ? TEXT("추가 대상: ")+LayoutEditor->GetAddChoiceLabel()+TEXT(" · 클릭하면 다음 종류") : FString()); })]]];
 		OrdinaryTools->AddSlot().AutoHeight().Padding(3)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
-			.Text_Lambda([this]() { auto* Store=AWarehouseLayoutInventory::Find(this);return FText::FromString(FString::Printf(TEXT("보류된 물류 %d개 · 상자 데이터 생성·영구 삭제는 중앙 컴퓨터에서"),Store ? Store->HeldCargo.Num() : 0)); })];
+			.Text_Lambda([this]() { if(AWarehousePlayStage::IsPlay(this)) return FText::FromString(TEXT("고정 창고 · 설비 추가는 예산에서 결제 · 취소 무료 · 철거 환불 없음"));auto* Store=AWarehouseLayoutInventory::Find(this);return FText::FromString(FString::Printf(TEXT("보류된 물류 %d개 · 상자 데이터 생성·영구 삭제는 중앙 컴퓨터에서"),Store ? Store->HeldCargo.Num() : 0)); })];
 		Tools->AddSlot().AutoHeight().Padding(3,8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(740)
 			.Text_Lambda([this]() { return FText::FromString(ConstructionEditor && ConstructionEditor->bActive ? ConstructionEditor->Status : LayoutEditor ? LayoutEditor->Status : FString()); })];
 		auto ObserverTools=SNew(SVerticalBox)
@@ -408,6 +420,14 @@ void Amsc_vrPlayerController::BeginPlay()
 	}
 
 	
+	if (IsLocalPlayerController() && GetWorld()->GetGameViewport())
+	 if (auto* Stage=AWarehousePlayStage::Find(this))
+	 {
+	  PlayWidget=MakeWarehousePlayPanel(this,Stage);
+	  GetWorld()->GetGameViewport()->AddViewportWidgetContent(PlayWidget.ToSharedRef(),Stage->StageIndex==0 ? 300 : 40);
+	  if (Stage->StageIndex==0) { UGameplayStatics::SetGamePaused(this,true);UpdateInputMode(); }
+	  else GetWorld()->GetTimerManager().SetTimerForNextTick(FTimerDelegate::CreateWeakLambda(this,[this]() { SetLayoutEditing(true); }));
+	 }
 	// only spawn touch controls on local player controllers
 	if (IsLocalPlayerController() && ShouldUseTouchControls())
 	{
@@ -428,6 +448,18 @@ void Amsc_vrPlayerController::BeginPlay()
 	}
 }
 
+bool Amsc_vrPlayerController::IsMainMenu() const { return AWarehousePlayStage::IsMenu(this); }
+bool Amsc_vrPlayerController::OpenPlayMode(int32 StageIndex)
+{
+ if (StageIndex < -1 || StageIndex>3) return false;
+ if (const auto* Experiment=GetGameInstance()->GetSubsystem<UWarehouseExperimentSubsystem>();Experiment && (Experiment->bLoading || Experiment->bBatchRunning)) return false;
+ const auto* Progress=GetGameInstance()->GetSubsystem<UWarehousePlayProgress>();
+ if (StageIndex>0 && (!Progress || StageIndex>Progress->UnlockedStage)) return false;
+ const FString Map=StageIndex==-1 ? TEXT("/Game/FirstPerson/Lvl_FirstPerson") : AWarehousePlayStage::StageMap(StageIndex);
+ if (!FPackageName::DoesPackageExist(Map)) return false;
+ if (LayoutEditor && LayoutEditor->bDragging) LayoutEditor->EndDrag(false);
+ UGameplayStatics::SetGamePaused(this,false);UGameplayStatics::OpenLevel(this,FName(*Map));return true;
+}
 void Amsc_vrPlayerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
@@ -474,7 +506,11 @@ void Amsc_vrPlayerController::UpdateInputMode()
 		if (auto* PlayerCharacter=Cast<ACharacter>(GetPawn())) PlayerCharacter->GetCharacterMovement()->StopMovementImmediately();
 	}
 	bShowMouseCursor=IsWarehouseMenuOpen() || bObserverView;
-	if (ExperimentWidget.IsValid())
+	if (IsMainMenu() && PlayWidget.IsValid())
+	{
+		FInputModeUIOnly Mode;SetInputMode(Mode);
+	}
+	else if (ExperimentWidget.IsValid())
 	{
 		FInputModeUIOnly Mode;Mode.SetWidgetToFocus(ExperimentWidget);SetInputMode(Mode);
 	}
@@ -508,6 +544,7 @@ void Amsc_vrPlayerController::CloseWarehouseMenu()
 
 void Amsc_vrPlayerController::ToggleWarehouseMenu()
 {
+	if (IsMainMenu()) return;
 	if (ExperimentWidget.IsValid()) { CloseWarehouseExperiments();return; }
 	if (LayoutEditor && (LayoutEditor->bDragging || LayoutEditor->bMarqueeSelecting)) LayoutEditor->PointerUp(false);
 	if (ConstructionEditor) ConstructionEditor->EndGesture(false);
@@ -549,6 +586,7 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 		.Text_Lambda([]() { return FText::FromString(GEngine->GetGameUserSettings()->IsVSyncEnabled() ? TEXT("수직 동기화: 켜짐") : TEXT("수직 동기화: 꺼짐")); })
 		.OnClicked_Lambda([]() { auto* S=GEngine->GetGameUserSettings(); S->SetVSyncEnabled(!S->IsVSyncEnabled()); S->ApplySettings(false); return FReply::Handled(); })];
 	Button(TEXT("설정 저장 · 메뉴 닫기"),[this]() { CloseWarehouseMenu(); });
+	Button(TEXT("메인 메뉴로 · 현재 진행 초기화"),[this]() { OpenPlayMode(0); });
 	MenuWidget=SNew(SBorder).HAlign(HAlign_Center).VAlign(VAlign_Center)
 		.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(0,0,0,.72f))
 		[SNew(SBox).WidthOverride(680).MaxDesiredHeight(760)
@@ -561,6 +599,7 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 
 void Amsc_vrPlayerController::ToggleObserverView()
 {
+	if (IsMainMenu()) return;
 	if (const auto* Experiment=GetGameInstance() ? GetGameInstance()->GetSubsystem<UWarehouseExperimentSubsystem>() : nullptr;Experiment && (Experiment->bBatchRunning || Experiment->bLoading)) return;
 	if (ExperimentWidget.IsValid()) CloseWarehouseExperiments();
 	if (ComputerWidget.IsValid()) CloseWarehouseComputer();
@@ -662,6 +701,7 @@ bool Amsc_vrPlayerController::SetSimulationSpeed(int32 Multiplier)
 }
 void Amsc_vrPlayerController::OpenWarehouseExperiments()
 {
+ if (AWarehousePlayStage::Find(this)) return;
  if (!IsLocalController() || !GetWorld()->GetGameViewport() || ExperimentWidget.IsValid()) return;
  if (LayoutEditor && (LayoutEditor->bDragging || LayoutEditor->bMarqueeSelecting)) LayoutEditor->PointerUp(false);
  if (ConstructionEditor) ConstructionEditor->EndGesture(false);
@@ -701,6 +741,7 @@ void Amsc_vrPlayerController::SetLayoutEditing(bool Enabled)
 }
 void Amsc_vrPlayerController::SetConstructionEditing(bool Enabled)
 {
+ if (Enabled && AWarehousePlayStage::Find(this)) return;
  if (Enabled)
   if (const auto* Experiment=GetGameInstance() ? GetGameInstance()->GetSubsystem<UWarehouseExperimentSubsystem>() : nullptr;Experiment && (Experiment->bBatchRunning || Experiment->bLoading)) return;
  if (!ConstructionEditor || !LayoutEditor) return;
@@ -898,6 +939,8 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
 
 void Amsc_vrPlayerController::EndPlay(const EEndPlayReason::Type Reason)
 {
+	if (PlayWidget.IsValid() && GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(PlayWidget.ToSharedRef());
+	PlayWidget.Reset();
 	bWarehouseEndingPlay=true;
 	CloseWarehouseExperiments();
 	if (ObserverWallFade) ObserverWallFade->Restore();

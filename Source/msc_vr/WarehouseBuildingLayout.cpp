@@ -1,4 +1,5 @@
 #include "WarehouseBuildingLayout.h"
+#include "WarehousePlayMode.h"
 #include "WarehousePhysics.h"
 #include "WarehouseDamageSystem.h"
 #include "WarehouseElevator.h"
@@ -593,6 +594,7 @@ void AWarehouseBuildingLayout::RestoreOriginalStructure()
 
 bool AWarehouseBuildingLayout::ApplySettings(const FWarehouseBuildingSettings& Proposed)
 {
+ if (AWarehousePlayStage::Find(this)) { Status=TEXT("플레이 스테이지의 건물·층수·지형은 고정입니다.");return false; }
  CaptureExistingLayout();FString Reason;if (!ValidateSettings(Proposed,Reason)) { Status=Reason;return false; }
  const auto Parts=Plan(this,Proposed);TArray<TObjectPtr<AStaticMeshActor>> Next;
  auto* Cube=LoadObject<UStaticMesh>(nullptr,TEXT("/Engine/BasicShapes/Cube.Cube"));if (!Cube) { Status=TEXT("구조용 메시를 불러올 수 없습니다.");return false; }

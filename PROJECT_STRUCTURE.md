@@ -8,6 +8,8 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 ## 실행 구조 한눈에 보기
 
+메인 메뉴는 `Content/Warehouse/Play/Maps/MainMenu`다. 기존 3층 창고는 관리자 모드로 유지하고, 플레이 모드는 별도의 고정 단층 맵 3개와 예산·해금을 사용한다. 모드 경계·비용 가정·장식·모델 아이콘은 [PLAY_MODE.md](PLAY_MODE.md)에서 관리한다.
+
 2026-10-25 로컬 `main`의 `391c5f8b`에서 구조 정리를 시작하고, 초기 배치 저장·반복 실험·운영 성과 기능을 반영했다. 아래는 현재 실행 경계이며, 추가 제안·우선순위는 [시뮬레이션 개선안](SIMULATION_ROADMAP.md)에서 별도로 관리한다. 기능별 실제 검증 범위는 담당 문서에서 확인한다.
 
 | 담당 | 현재 진입점 | 연결되는 영역 |
@@ -28,6 +30,8 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
+| 배치 도구 모델 PNG·종류 아이콘·추가 모델 미리보기 | `WarehouseLayoutIcons.h/.cpp`, `msc_vrPlayerController`, `Scripts/render_warehouse_layout_icons.py`, `Art/UI/LayoutIcons/`, `Content/Warehouse/UI/Icons/` | 실제 프로젝트 모델의 오프라인 512px 렌더, 세부 규칙은 `PLAY_MODE.md`의 아이콘 절; 런타임 캡처 없음 |
+| 시작 메뉴·관리자/플레이·스테이지·구매 예산·해금·스테이지 장식 | `PLAY_MODE.md`, `WarehousePlayMode.h/.cpp`, `Scripts/build_warehouse_play_stages.py`, `Content/Warehouse/Play/Maps/` | 화면/진입은 `msc_vrPlayerController`, 편집 제한/결제는 `WarehouseLayoutEditor`; 기존 입고/물리 운반 사용. 실제 캠페인은 `Scripts/verify_warehouse_play_pie.py`; 관리자 원본 맵은 생성 시 저장하지 않음 |
 | 현재 구조 평가·추가 개발 우선순위 | `SIMULATION_ROADMAP.md`, 이 문서의 실행 구조 표 | 구현된 1·2번 범위는 `WAREHOUSE.md`, 운용 기준은 `AUTONOMY.md`, 물리 가정은 `PHYSICS.md`, 입출고 계획은 `TRUCK_LOGISTICS_DESIGN.md` |
 | 초기 배치 저장·불러오기·같은 주문 반복·성과 대시보드 | `WarehouseExperimentSubsystem.h/.cpp`, `WarehouseExperimentStorage.h/.cpp`, `WarehouseExperimentMetrics.h/.cpp`, `WarehouseExperimentUI.cpp`, `WAREHOUSE.md`의 실험 절 | 저장은 새 레벨 BeginPlay 전 복원, 계측은 기존 보고 관측; `Scripts/verify_warehouse_experiments_pie.py`, `verify_warehouse_experiment_transport.py`, `verify_warehouse_experiment_ui.py`; 목적지 예약·주문 순서·재시작 기록은 `verify_warehouse_experiment_guards.py`, native `Warehouse.Experiments.MetricsAccounting`; 결과는 Git 제외 `Saved/WarehouseExperiments/` |
 | 충돌/비충돌 공통 기준·선택 전용 판·모든 판정의 대상 분류 | `COLLISION_POLICY.md`, `WarehousePhysics.h/.cpp`, `Scripts/verify_collision_policy_pie.py` | `WarehouseWaitingBay`, `WarehouseDamageSystem`, `WarehouseLayoutEditor`, `WarehouseForklift*`, `WarehouseElevator`, `Config/DefaultEngine.ini` |
@@ -130,6 +134,7 @@ msc_vr/
   MEZZANINE.md
   msc_vr.uproject
   PHYSICS.md
+  PLAY_MODE.md
   PROJECT_STRUCTURE.md
   README.md
   REFINED_AGV.md
@@ -168,8 +173,10 @@ msc_vr/
     build_orange_agv.py
     build_pallet_lift.py
     build_warehouse_exterior.py
+    build_warehouse_play_stages.py
     build_warehouse_services.py
     capture_dense_warehouse_services.py
+    capture_warehouse_play_ui.py
     capture_warehouse_services.py
     configure_area_labels.py
     configure_cargo_variety.py
@@ -231,6 +238,7 @@ msc_vr/
     refine_cargo_elevator_call_stands.py
     refine_warehouse_services_layout.py
     render_cargo_elevator.py
+    render_warehouse_layout_icons.py
     restore_front_wheel_mounts.py
     revise_agv_counterbalance.py
     update_structure_summary.ps1
@@ -319,6 +327,7 @@ msc_vr/
     verify_warehouse_experiments_pie.py
     verify_warehouse_exterior.py
     verify_warehouse_interaction_pie.py
+    verify_warehouse_play_pie.py
     verify_warehouse_strength.py
     verify_warehouse_strength_pie.py
     verify_warehouse_workers.py
@@ -388,6 +397,8 @@ msc_vr/
       WarehouseInboundZone.h
       WarehouseLayoutEditor.cpp
       WarehouseLayoutEditor.h
+      WarehouseLayoutIcons.cpp
+      WarehouseLayoutIcons.h
       WarehouseLayoutInventory.cpp
       WarehouseLayoutInventory.h
       WarehouseLayoutSnap.cpp
@@ -406,6 +417,8 @@ msc_vr/
       WarehousePerformance.h
       WarehousePhysics.cpp
       WarehousePhysics.h
+      WarehousePlayMode.cpp
+      WarehousePlayMode.h
       WarehouseShippingSystem.cpp
       WarehouseShippingSystem.h
       WarehouseSimulationClock.cpp
@@ -494,7 +507,9 @@ msc_vr/
       Materials/
       PalletLift/
       Physics/
+      Play/
       Services/
+      UI/
     Weapons/
       GrenadeLauncher/
       Pistol/

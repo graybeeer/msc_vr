@@ -1,4 +1,5 @@
 #include "WarehouseLayoutInventory.h"
+#include "WarehousePlayMode.h"
 #include "WarehouseForklift.h"
 #include "WarehousePallet.h"
 #include "WarehouseWaitingBay.h"
@@ -46,6 +47,7 @@ AWarehouseLayoutInventory* AWarehouseLayoutInventory::Find(const AActor* Context
 }
 bool AWarehouseLayoutInventory::CreateHeldCargo(FName Id,FText Product,float MassKg,FVector SizeCm)
 {
+ if (AWarehousePlayStage::Find(this)) {LastMessage=TEXT("플레이 모드 물류는 스테이지 입고 규칙으로 생성됩니다.");return false;}
  if (!HasAuthority()) return false;
  if (Id.IsNone() || Id.ToString().Len()>64 || Product.IsEmpty() || !FMath::IsFinite(MassKg) || MassKg<.1f || MassKg>10000 ||
      SizeCm.ContainsNaN() || SizeCm.GetMin()<5 || SizeCm.GetMax()>300)
@@ -67,6 +69,7 @@ bool AWarehouseLayoutInventory::CreateHeldCargo(FName Id,FText Product,float Mas
 }
 bool AWarehouseLayoutInventory::DeleteHeldCargo(FName Id)
 {
+ if (AWarehousePlayStage::Find(this)) {LastMessage=TEXT("플레이 모드에서는 물류 데이터를 삭제할 수 없습니다.");return false;}
  if (!HasAuthority()) return false;
  const int32 Index=HeldCargo.IndexOfByPredicate([&](const auto& Row) { return Row.CargoId==Id; });
  if (Index==INDEX_NONE) { LastMessage=TEXT("삭제할 보류 물류가 없습니다.");return false; }

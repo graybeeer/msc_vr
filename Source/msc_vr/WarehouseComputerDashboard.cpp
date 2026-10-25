@@ -1,5 +1,6 @@
 #include "WarehouseComputerDashboard.h"
 #include "WarehouseExperimentUI.h"
+#include "WarehousePlayMode.h"
 #include "WarehouseComputer.h"
 #include "WarehouseCargo.h"
 #include "WarehousePallet.h"
@@ -86,6 +87,7 @@ public:
    TSharedPtr<SButton> Tab;
    Tabs->AddSlot().FillWidth(1).Padding(Index ? 4 : 0,0,0,0)
    [SAssignNew(Tab,SButton).ContentPadding(FMargin(14,12)).IsFocusable(false)
+    .Visibility(AWarehousePlayStage::IsPlay(Computer.Get()) && Index>=3 ? EVisibility::Collapsed : EVisibility::Visible)
     .ButtonColorAndOpacity_Lambda([this,Index]() { return Page==Index ? Primary : Surface; })
     .OnClicked_Lambda([this,Index]() { Page=Index;bConfirmDeleteHeld=false;return FReply::Handled(); })
     [SNew(STextBlock).Text(FText::FromString(Titles[Index])).Font(WarehouseUIStyle::Font(18,true))

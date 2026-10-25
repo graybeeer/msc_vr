@@ -5,13 +5,14 @@ Unreal Engine 5.8 기반 PC 프로젝트다. 물류창고에서 무인 지게차
 ## 시작하기
 
 1. 팀원은 [에셋 설치 안내](TEAM_ASSETS.md)에 따라 외부 에셋을 준비한다.
-2. `msc_vr.uproject`를 열고 기본 맵 `Content/FirstPerson/Lvl_FirstPerson.umap`에서 플레이한다.
+2. `msc_vr.uproject`를 열고 기본 메인 메뉴에서 플레이한다. **관리자 모드**는 기존 창고, **플레이 모드**는 예산과 해금이 있는 3개 프로토타입 맵이다. [모드·스테이지 안내](PLAY_MODE.md)를 참고한다.
 3. 현재 맵과 조작은 [창고 안내](WAREHOUSE.md), 수정할 파일은 [구조 요약](PROJECT_STRUCTURE.md)을 확인한다.
 
 ## 문서 안내
 
 | 문서 | 담당 내용 |
 | --- | --- |
+| [PLAY_MODE.md](PLAY_MODE.md) | 메인 메뉴·관리자/플레이 분리·3개 고정 스테이지·예산/해금·가격 가정·스테이지 장식·모델 아이콘·검증 |
 | [WAREHOUSE.md](WAREHOUSE.md) | 현재 맵·플레이어/배치 편집·초기 배치 저장·반복 실험/성과 비교·보류 물류·관제 화면·건축/작업자 |
 | [PHYSICS.md](PHYSICS.md) | 강체·접촉·사람/차량 구동·손 운반·질량·마찰·손상 가정과 실행 검증 |
 | [COLLISION_POLICY.md](COLLISION_POLICY.md) | 충돌/비충돌 부품 분류·공통 검사·선택 전용 채널·분류 검증 |

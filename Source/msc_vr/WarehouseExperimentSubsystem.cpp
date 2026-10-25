@@ -1,4 +1,5 @@
 #include "WarehouseExperimentSubsystem.h"
+#include "WarehousePlayMode.h"
 #include "WarehouseComputer.h"
 #include "WarehouseCargo.h"
 #include "WarehousePallet.h"
@@ -177,6 +178,7 @@ bool UWarehouseExperimentSubsystem::QueueLoad(const FString& Id)
 }
 bool UWarehouseExperimentSubsystem::LoadLayout(const FString& Id)
 {
+ if (AWarehousePlayStage::Find(this)) {LastMessage=TEXT("배치 불러오기는 관리자 모드에서 사용하세요.");return false;}
  if (bBatchRunning || bLoading) { LastMessage=TEXT("진행 중인 실험을 먼저 중지하세요.");return false; }
  LastMessage=TEXT("저장 배치를 새 실행에 복원 중…");return QueueLoad(Id);
 }
@@ -257,6 +259,7 @@ bool UWarehouseExperimentSubsystem::CheckWorkload(const TArray<FString>& LayoutI
 }
 bool UWarehouseExperimentSubsystem::StartBatch(const TArray<FString>& LayoutIds,int32 Repeats,double DurationSeconds,int32 InSeed,int32 InSpeed)
 {
+ if (AWarehousePlayStage::Find(this)) {LastMessage=TEXT("반복 실험은 관리자 모드에서 사용하세요.");return false;}
  if (bBatchRunning || bLoading) return false;
  if (Repeats<1 || Repeats>30 || LayoutIds.Num()*Repeats>100 || !FMath::IsFinite(DurationSeconds) || DurationSeconds<10 || DurationSeconds>86400 || (InSpeed!=1 && InSpeed!=2 && InSpeed!=4))
  { LastMessage=TEXT("반복 1~30회, 총 100회 이하, 실행 10~86400초, 배속 1/2/4를 사용하세요.");return false; }

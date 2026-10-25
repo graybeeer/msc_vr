@@ -1,4 +1,5 @@
 #include "WarehouseLayoutEditor.h"
+#include "WarehousePlayMode.h"
 #include "Components/SceneComponent.h"
 #include "WarehouseForklift.h"
 #include "WarehouseChargingStation.h"
@@ -117,10 +118,18 @@ void AWarehouseLayoutEditor::CycleAddChoice()
 FString AWarehouseLayoutEditor::GetAddChoiceLabel() const
 {
  const auto Names=AWarehouseLayoutInventory::Find(this)->Choices(Category);
+ if (const auto* Stage=AWarehousePlayStage::Find(this);Stage && Stage->StageIndex>0)
+ {
+  const FString Name=Category==EWarehouseLayoutCategory::Forklift ? TEXT("무인 지게차") :
+   Category==EWarehouseLayoutCategory::Charger ? TEXT("공유 충전기") :
+   Category==EWarehouseLayoutCategory::WaitingBay ? TEXT("일반 대기 자리") : Names.IsValidIndex(AddChoice) ? Names[AddChoice] : FString();
+  return (Name.IsEmpty() ? FString() : Name+TEXT(" · "))+Stage->PurchaseDescription(Category);
+ }
  return Names.IsValidIndex(AddChoice) ? Names[AddChoice] : TEXT("추가 가능한 요소 없음");
 }
 bool AWarehouseLayoutEditor::Eligible(AActor* Actor) const
 {
+ if (const auto* Stage=AWarehousePlayStage::Find(this);Stage && Stage->StageIndex>0 && !Stage->CanEditActor(Actor)) return false;
  // Older saved metadata may have marked a charging bay as fixed.
  if (Actor && Actor->ActorHasTag(TEXT("LogisticsInTransit"))) return false;
  if (!Actor || Actor==this || (Actor->ActorHasTag(TEXT("LayoutFixed")) && !Actor->IsA<AWarehouseChargingStation>())) return false;
@@ -287,6 +296,7 @@ bool AWarehouseLayoutEditor::SelectScreenRectangle(FVector2D Start,FVector2D End
 bool AWarehouseLayoutEditor::BeginDrag(AActor* HitActor,FVector FloorPoint)
 {
  if (!bEditing || bDragging || FloorPoint.ContainsNaN()) return false;
+ if (AWarehousePlayStage::IsPlay(this) && Category==EWarehouseLayoutCategory::Zone) {Status=TEXT("플레이 모드의 입출고 위치는 고정입니다.");return false;}
  TArray<AActor*> Members;TArray<FBox> CargoAreas,ZoneAreas;
  MovingZones.Reset();ReferenceAreas.Reset();ShaftReferenceAreas.Reset();OriginalBounds=FBox(ForceInit);
  auto AddZone=[&](int32 I)
@@ -485,6 +495,7 @@ void AWarehouseLayoutEditor::UpdateSurfaceDrag(FVector FloorPoint,AActor* Suppor
 bool AWarehouseLayoutEditor::BeginAdd(FVector FloorPoint)
 {
  if (!bEditing || bDragging || !HasAuthority() || FloorPoint.ContainsNaN()) return false;
+ if (const auto* Stage=AWarehousePlayStage::Find(this);Stage && Stage->StageIndex>0 && !Stage->CanPurchase(Category)) { Status=Stage->PurchaseDescription(Category);return false; }
  if (Category==EWarehouseLayoutCategory::All) { Status=TEXT("추가할 물체의 개별 종류를 먼저 선택하세요.");return false; }
  auto* Store=AWarehouseLayoutInventory::Find(this);Store->CapturePrototypes(this);
  TArray<AActor*> NewActors;
@@ -551,6 +562,8 @@ bool AWarehouseLayoutEditor::ConfigureSelectedConveyor(float YawDegrees,float In
  { Status=TEXT("비어 있고 승강기 인계 중이 아닌 컨베이어 한 개를 선택하세요.");return false; }
  const FTransform OldPose=Conveyor->GetActorTransform();
  const float OldLength=Conveyor->LengthCm,OldWidth=Conveyor->WidthCm,OldHeight=Conveyor->SurfaceHeightCm,OldSpeed=Conveyor->SpeedCm;
+ if (AWarehousePlayStage::IsPlay(this) && (!FMath::IsNearlyEqual(LengthCm,OldLength) || !FMath::IsNearlyEqual(WidthCm,OldWidth) || !FMath::IsNearlyEqual(SpeedCm,OldSpeed)))
+ {Status=TEXT("플레이 모드는 구매한 컨베이어의 크기·속도를 유지합니다. 추가 모듈을 구매해 연결하세요.");return false;}
  const bool Applied=Conveyor->ConfigureGeometry(LengthCm,WidthCm,OldHeight,SpeedCm) &&
   Conveyor->SetConveyorPose(YawDegrees,InclineDegrees,BaseHeightCm);
  if (!Applied || !ConveyorPlacementClear({Conveyor}))
@@ -721,6 +734,7 @@ bool AWarehouseLayoutEditor::DeleteSelection()
  bool Allowed=true;
  for (AActor* A:Members)
  {
+  if (AWarehousePlayStage::IsPlay(this) && (A->IsA<AWarehouseCargo>() || A->IsA<AWarehousePallet>())) {Status=TEXT("물류가 담긴 설비는 먼저 화물을 옮긴 뒤 철거하세요.");Allowed=false;break;}
   if (auto* V=Cast<AWarehouseForklift>(A);V && !V->IsIdleForLayout()) { Status=TEXT("운반·원격 조작 중인 차량은 작업이 끝난 뒤 삭제하세요.");Allowed=false;break; }
   for (TActorIterator<Amsc_vrCharacter> It(GetWorld());It;++It) if (It->GetHeldCargo()==A) { Status=TEXT("플레이어가 들고 있는 물체는 내려놓은 뒤 삭제하세요.");Allowed=false;break; }
   if (!Allowed) break;
@@ -740,6 +754,13 @@ bool AWarehouseLayoutEditor::DeleteSelection()
 }
 bool AWarehouseLayoutEditor::PlacementClear()
 {
+ if (const auto* Stage=AWarehousePlayStage::Find(this);Stage && Stage->StageIndex>0)
+  for (const auto& M:Moving) if (M.Actor.IsValid())
+  {
+   FBox Bounds=AWarehouseDamageSystem::GetPhysicalBounds(M.Actor.Get());
+   if (!Bounds.IsValid) Bounds=M.Actor->GetComponentsBoundingBox(true);
+   if (!Stage->Contains(Bounds)) { Status=TEXT("고정된 스테이지 건물 안에 설비 전체가 들어와야 합니다.");return false; }
+  }
  FComponentQueryParams Params(SCENE_QUERY_STAT(LayoutPlacement));
  TArray<AActor*> Ignored;
  for (auto& A:Moving) if (A.Actor.IsValid()) { Params.AddIgnoredActor(A.Actor.Get());Ignored.Add(A.Actor.Get()); }
@@ -941,7 +962,9 @@ bool AWarehouseLayoutEditor::EndDrag(bool Commit)
  const bool HasShaft=Moving.ContainsByPredicate([](const FMember& M) { return IsShaft(M.Actor.Get()); });
  const bool OpeningReady=!HasShaft || !Commit || WarehouseElevatorLayout::Rebuild(this);
  const bool QueueUnchanged=!bAdding || AddedCargoId.IsNone() || (!AWarehouseLayoutInventory::Find(this)->HeldCargo.IsEmpty() && AWarehouseLayoutInventory::Find(this)->HeldCargo[0].CargoId==AddedCargoId);
- const bool Accepted=Commit && QueueUnchanged && OpeningReady && PlacementClear();Restore(!Accepted);
+ auto* PlayStage=AWarehousePlayStage::Find(this);
+ const bool Affordable=!bAdding || !PlayStage || PlayStage->StageIndex==0 || PlayStage->CanPurchase(Category);
+ const bool Accepted=Commit && QueueUnchanged && OpeningReady && Affordable && PlacementClear();Restore(!Accepted);
  if (HasShaft && Commit && !Accepted)
  { TArray<AActor*> Excluded;if (bAdding) for (AActor* A:AddedActors) Excluded.Add(A);WarehouseElevatorLayout::Rebuild(this,false,Excluded); }
  if (!OpeningReady) Status=TEXT("승강기 이동 공간·층별 진입 바닥이 막혔습니다. 원래 위치로 되돌렸습니다.");
@@ -964,6 +987,11 @@ bool AWarehouseLayoutEditor::EndDrag(bool Commit)
    {
     Zones.RemoveAll([&](const auto& Z) { return Z.Name==TEXT("Preview") && !NewActors.IsEmpty() && Z.Members.Contains(NewActors[0]); });
     Store->CommitPrototype(NewActors);
+    if (PlayStage && PlayStage->StageIndex>0)
+    {
+     PlayStage->ChargePurchase(Category);
+     if (PlayStage->bOperating) for(AActor* A:NewActors) if(auto* V=Cast<AWarehouseForklift>(A);V && !V->bPowered) V->ToggleAutonomy();
+    }
    }
    const bool ConveyorsOnly=!NewActors.IsEmpty() && !NewActors.ContainsByPredicate([](AActor* A) { return !A || !A->IsA<AWarehouseConveyor>(); });
    RefreshAfterEdit(!ConveyorsOnly);
