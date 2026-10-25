@@ -77,6 +77,11 @@ void UWarehouseObserverWallFade::Restore()
  LastUpdate=0.;
  NextMembership=0.;
 }
+UMaterialInterface* UWarehouseObserverWallFade::GetOriginalMaterial(const UMeshComponent* Mesh,int32 Slot) const
+{
+ for (const auto& State:Walls) if (State.Mesh.Get()==Mesh && State.bInstalled && State.Originals.IsValidIndex(Slot)) return State.Originals[Slot];
+ return Mesh ? Mesh->GetMaterial(Slot) : nullptr;
+}
 
 void UWarehouseObserverWallFade::Update(APlayerController* PC, bool Enabled)
 {

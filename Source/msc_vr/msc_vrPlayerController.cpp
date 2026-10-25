@@ -4,6 +4,7 @@
 #include "msc_vrPlayerController.h"
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
+#include "Engine/GameInstance.h"
 #include "InputMappingContext.h"
 #include "msc_vrCameraManager.h"
 #include "msc_vrCharacter.h"
@@ -23,6 +24,8 @@
 #include "WarehouseForklift.h"
 #include "WarehousePalletLift.h"
 #include "WarehouseComputer.h"
+#include "WarehouseExperimentUI.h"
+#include "WarehouseExperimentSubsystem.h"
 #include "WarehouseUIStyle.h"
 #include "WarehouseLayoutEditor.h"
 #include "WarehouseLayoutInventory.h"
@@ -306,6 +309,10 @@ void Amsc_vrPlayerController::BeginPlay()
 		SelectionRow->AddSlot().AutoWidth().Padding(12,0)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize))
 			.ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(TEXT("선택 후 우클릭 · 좌우 90도 회전 / 삭제")))];
 		OrdinaryTools->AddSlot().AutoHeight()[SelectionRow];
+		OrdinaryTools->AddSlot().AutoHeight().Padding(3,6)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			.OnClicked_Lambda([this]() { OpenWarehouseExperiments();return FReply::Handled(); })
+			[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity(WarehouseUIStyle::Accent)
+				.Text(FText::FromString(TEXT("배치 저장 · 실험")))]];
 		auto ConveyorTools=SNew(SVerticalBox).Visibility_Lambda([this]() { return LayoutEditor && LayoutEditor->GetSelectedConveyor() && LayoutEditor->Action!=EWarehouseLayoutAction::Add ? EVisibility::Visible : EVisibility::Collapsed; });
 		auto ConveyorValues=SNew(SWrapBox).UseAllottedSize(true);
 		const TCHAR* ConveyorFields[]={TEXT("방향 °"),TEXT("경사 °"),TEXT("바닥 높이 cm"),TEXT("길이 cm"),TEXT("폭 cm"),TEXT("속도 cm/s")};
@@ -467,7 +474,11 @@ void Amsc_vrPlayerController::UpdateInputMode()
 		if (auto* PlayerCharacter=Cast<ACharacter>(GetPawn())) PlayerCharacter->GetCharacterMovement()->StopMovementImmediately();
 	}
 	bShowMouseCursor=IsWarehouseMenuOpen() || bObserverView;
-	if (ComputerWidget.IsValid())
+	if (ExperimentWidget.IsValid())
+	{
+		FInputModeUIOnly Mode;Mode.SetWidgetToFocus(ExperimentWidget);SetInputMode(Mode);
+	}
+	else if (ComputerWidget.IsValid())
 	{
 		FInputModeUIOnly Mode;Mode.SetWidgetToFocus(ComputerWidget);SetInputMode(Mode);
 	}
@@ -497,6 +508,7 @@ void Amsc_vrPlayerController::CloseWarehouseMenu()
 
 void Amsc_vrPlayerController::ToggleWarehouseMenu()
 {
+	if (ExperimentWidget.IsValid()) { CloseWarehouseExperiments();return; }
 	if (LayoutEditor && (LayoutEditor->bDragging || LayoutEditor->bMarqueeSelecting)) LayoutEditor->PointerUp(false);
 	if (ConstructionEditor) ConstructionEditor->EndGesture(false);
 	if (ComputerWidget.IsValid()) { CloseWarehouseComputer(); return; }
@@ -549,6 +561,8 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 
 void Amsc_vrPlayerController::ToggleObserverView()
 {
+	if (const auto* Experiment=GetGameInstance() ? GetGameInstance()->GetSubsystem<UWarehouseExperimentSubsystem>() : nullptr;Experiment && (Experiment->bBatchRunning || Experiment->bLoading)) return;
+	if (ExperimentWidget.IsValid()) CloseWarehouseExperiments();
 	if (ComputerWidget.IsValid()) CloseWarehouseComputer();
 	if (!GetPawn()) return;
 	if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn())) OperatorCharacter->EndRemoteControl();
@@ -642,13 +656,39 @@ void Amsc_vrPlayerController::SetObserverFloor(int32 Floor)
 }
 
 bool Amsc_vrPlayerController::SetSimulationSpeed(int32 Multiplier)
-{ return SimulationClock && SimulationClock->SetSpeed(Multiplier); }
+{
+ if (const auto* Experiment=GetGameInstance() ? GetGameInstance()->GetSubsystem<UWarehouseExperimentSubsystem>() : nullptr;Experiment && (Experiment->bBatchRunning || Experiment->bLoading)) return false;
+ return SimulationClock && SimulationClock->SetSpeed(Multiplier);
+}
+void Amsc_vrPlayerController::OpenWarehouseExperiments()
+{
+ if (!IsLocalController() || !GetWorld()->GetGameViewport() || ExperimentWidget.IsValid()) return;
+ if (LayoutEditor && (LayoutEditor->bDragging || LayoutEditor->bMarqueeSelecting)) LayoutEditor->PointerUp(false);
+ if (ConstructionEditor) ConstructionEditor->EndGesture(false);
+ if (ComputerWidget.IsValid()) CloseWarehouseComputer();
+ if (MenuWidget.IsValid()) CloseWarehouseMenu();
+ ExperimentWidget=MakeWarehouseExperimentPanel(this,true);
+ GetWorld()->GetGameViewport()->AddViewportWidgetContent(ExperimentWidget.ToSharedRef(),260);
+ UpdateInputMode();
+ if (FSlateApplication::IsInitialized()) FSlateApplication::Get().SetKeyboardFocus(ExperimentWidget);
+}
+void Amsc_vrPlayerController::CloseWarehouseExperiments()
+{
+ if (!ExperimentWidget.IsValid()) return;
+ if (!bWarehouseEndingPlay)
+  if (auto* Experiment=GetGameInstance() ? GetGameInstance()->GetSubsystem<UWarehouseExperimentSubsystem>() : nullptr;Experiment && (Experiment->bBatchRunning || Experiment->bLoading))
+  { Experiment->LastMessage=TEXT("실험 중에는 '실험 중지' 버튼을 먼저 눌러야 일반 조작으로 돌아갈 수 있습니다.");return; }
+ if (GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(ExperimentWidget.ToSharedRef());
+ ExperimentWidget.Reset();UpdateInputMode();
+}
 void Amsc_vrPlayerController::ToggleLayoutEditing()
 { SetLayoutEditing(!IsLayoutEditing()); }
 bool Amsc_vrPlayerController::IsLayoutEditing() const
 { return LayoutEditor && LayoutEditor->bEditing; }
 void Amsc_vrPlayerController::SetLayoutEditing(bool Enabled)
 {
+ if (Enabled)
+  if (const auto* Experiment=GetGameInstance() ? GetGameInstance()->GetSubsystem<UWarehouseExperimentSubsystem>() : nullptr;Experiment && (Experiment->bBatchRunning || Experiment->bLoading)) return;
  if (!LayoutEditor) return;
  if (Enabled && !bObserverView) { ToggleObserverView();return; }
  if (Enabled==LayoutEditor->bEditing) { UpdateInputMode();return; }
@@ -661,6 +701,8 @@ void Amsc_vrPlayerController::SetLayoutEditing(bool Enabled)
 }
 void Amsc_vrPlayerController::SetConstructionEditing(bool Enabled)
 {
+ if (Enabled)
+  if (const auto* Experiment=GetGameInstance() ? GetGameInstance()->GetSubsystem<UWarehouseExperimentSubsystem>() : nullptr;Experiment && (Experiment->bBatchRunning || Experiment->bLoading)) return;
  if (!ConstructionEditor || !LayoutEditor) return;
  if (Enabled && !LayoutEditor->bEditing) ToggleLayoutEditing();
  if (LayoutEditor->bDragging || LayoutEditor->bMarqueeSelecting) LayoutEditor->PointerUp(false);
@@ -856,6 +898,8 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
 
 void Amsc_vrPlayerController::EndPlay(const EEndPlayReason::Type Reason)
 {
+	bWarehouseEndingPlay=true;
+	CloseWarehouseExperiments();
 	if (ObserverWallFade) ObserverWallFade->Restore();
 	if (FSlateApplication::IsInitialized()) FSlateApplication::Get().DismissAllMenus();
 	if (ConstructionEditor) ConstructionEditor->SetActive(false);

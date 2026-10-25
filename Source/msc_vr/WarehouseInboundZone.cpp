@@ -159,7 +159,7 @@ void AWarehouseInboundZone::ScanInbound()
   { Pallet->TearWrap();--Confirmed;++Inspection;continue; }
   // Inspection/wrapping is independent of truck/rack/vehicle availability.
   // Only the shared pickup lane's dispatch remains serial.
-  if (bClaimed || !Reservations.IsEmpty() || Fleet.IsEmpty() || RackSlots.IsEmpty()) continue;
+  if (bExternalDispatchOnly || bClaimed || !Reservations.IsEmpty() || Fleet.IsEmpty() || RackSlots.IsEmpty()) continue;
   const float Mass=Pallet->PalletMassKg+Strength->GetSupportedMass(Pallet);
   const float Height=Bounds.Max.Z-Bounds.Min.Z;
   AWarehouseForklift* BestVehicle=nullptr;

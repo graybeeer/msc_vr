@@ -1,6 +1,7 @@
 #include "WarehouseForklift.h"
 #include "WarehousePhysics.h"
 #include "WarehousePerformance.h"
+#include "WarehouseExperimentMetrics.h"
 #include "WarehouseFleetCoordinator.h"
 #include "WarehousePallet.h"
 #include "WarehouseDamageSystem.h"
@@ -261,9 +262,11 @@ void AWarehouseForklift::Tick(float DeltaSeconds)
   LiftOffset=GetActorTransform().InverseTransformPosition(Carriage->GetComponentLocation()).Z;
  }
  BrakeDrive();
+ bExperimentSensorWaiting=false;
  UpdateSensorSnapshot();
  AdvanceSimulation(DeltaSeconds);
  UpdatePhysicalRig(FMath::Clamp(DeltaSeconds,0.f,.133333f));
+ FWarehouseExperimentMetrics::NotifyVehicleTick(this);
 }
 bool AWarehouseForklift::RefreshObstacleChecks()
 {

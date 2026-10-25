@@ -179,6 +179,37 @@ namespace
 
 bool WarehouseElevatorLayout::SetOpening(AActor* Context,FVector Delta,bool ValidatePlacement)
 { return !Delta.ContainsNaN() && FMath::Abs(Delta.Z)<.01 && Rebuild(Context,ValidatePlacement); }
+void WarehouseElevatorLayout::ExportExperimentState(AActor* Context,TArray<FSnapshotSource>& Sources,TArray<AActor*>& Replacements)
+{
+ Sources.Reset();Replacements.Reset();if (!IsValid(Context)) return;
+ if (const FState* State=States.Find(Context->GetWorld()))
+ {
+  for (const auto& Source:State->Sources) if (Source.Actor.IsValid()) Sources.Add({Source.Actor.Get(),Source.Visible,Source.Hidden,Source.Collision,int32(Source.Mode)});
+  for (const auto& A:State->Replacements) if (A.IsValid()) Replacements.Add(A.Get());
+ }
+}
+bool WarehouseElevatorLayout::RestoreExperimentState(AActor* Context,const TArray<FSnapshotSource>& Sources,const TArray<AActor*>& Replacements)
+{
+ if (!IsValid(Context) || Context->GetWorld()->HasBegunPlay()) return false;
+ if (Sources.IsEmpty()) return Replacements.IsEmpty();
+ TArray<FSource> Current;
+ for (const auto& Source:Sources)
+ {
+  auto* A=Cast<AStaticMeshActor>(Source.Actor);if (!IsValid(A) || !A->GetStaticMeshComponent()) return false;
+  auto* Mesh=A->GetStaticMeshComponent();FSource Saved;Saved.Actor=A;Saved.Mesh=Mesh;Saved.Visible=Mesh->IsVisible();Saved.Hidden=A->IsHidden();Saved.Collision=A->GetActorEnableCollision();Saved.Mode=Mesh->GetCollisionEnabled();Current.Add(Saved);
+ }
+ for (const auto& Source:Sources)
+ {
+  auto* A=CastChecked<AStaticMeshActor>(Source.Actor);A->SetActorEnableCollision(Source.Collision);A->SetActorHiddenInGame(Source.Hidden);
+  A->GetStaticMeshComponent()->SetVisibility(Source.Visible);A->GetStaticMeshComponent()->SetCollisionEnabled(ECollisionEnabled::Type(Source.CollisionMode));
+ }
+ FState Restored;const bool Captured=Capture(Context->GetWorld(),Restored);
+ for (const auto& Saved:Current)
+ { Saved.Actor->SetActorHiddenInGame(Saved.Hidden);Saved.Actor->SetActorEnableCollision(Saved.Collision);Saved.Mesh->SetVisibility(Saved.Visible);Saved.Mesh->SetCollisionEnabled(Saved.Mode); }
+ if (!Captured) return false;
+ for (AActor* A:Replacements) { auto* Floor=Cast<AStaticMeshActor>(A);if (!IsValid(Floor)) return false;Restored.Replacements.Add(Floor); }
+ States.Add(Context->GetWorld(),MoveTemp(Restored));return true;
+}
 bool WarehouseElevatorLayout::Initialize(AActor* Context)
 {
  if (!IsValid(Context) || !Context->GetWorld() || !Context->GetWorld()->IsGameWorld()) return false;

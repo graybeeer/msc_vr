@@ -1,5 +1,7 @@
 #include "WarehouseForklift.h"
 #include "WarehousePerformance.h"
+#include "WarehouseExperimentMetrics.h"
+#include "WarehouseExperimentSubsystem.h"
 #include "Misc/ScopeExit.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -19,6 +21,7 @@ static uint32 WarehouseNavigationQueryCount=0;
 #include "Components/SceneComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "Engine/GameInstance.h"
 #include "EngineUtils.h"
 #include "CollisionQueryParams.h"
 #include "Engine/OverlapResult.h"
@@ -67,6 +70,7 @@ void AWarehouseForklift::ReportJob(const FString& Result,const FString& Detail)
  JobReports.Add(Report);
  if (JobReports.Num()>100) JobReports.RemoveAt(0);
  OnJobReport.Broadcast(Report);
+ FWarehouseExperimentMetrics::NotifyReport(this,Report);
  UE_LOG(LogTemp,Log,TEXT("AGV_REPORT [%s] %s: %s"),*Report.JobId,*Result,*Detail);
 }
 void AWarehouseForklift::TransitionAI(EWarehouseAIState Next,const FString& Message)
@@ -113,6 +117,9 @@ void AWarehouseForklift::ToggleAutonomy()
 bool AWarehouseForklift::SubmitJob(const FWarehouseWorkOrder& Job)
 {
  if (!HasAuthority()) return false;
+ if (const auto* Instance=GetWorld() ? GetWorld()->GetGameInstance() : nullptr)
+  if (const auto* Experiment=Instance->GetSubsystem<UWarehouseExperimentSubsystem>();Experiment && Experiment->bBatchRunning && Job.SourceSystem!=TEXT("FMS-EXPERIMENT"))
+  { SetOperationError(TEXT("EXPERIMENT_ACTIVE"),TEXT("반복 실험 중에는 저장된 공통 주문만 실행할 수 있습니다."));return false; }
  if (Job.JobId.IsEmpty() || Job.Destination.ContainsNaN() ||
      !Job.Destination.GetScale3D().Equals(FVector::OneVector,.001f) || PendingJobs.Num()>=32) return false;
  const FString Resources=ValidateJobResources(Job);
@@ -139,6 +146,7 @@ bool AWarehouseForklift::SubmitJob(const FWarehouseWorkOrder& Job)
  if (IsValid(Job.Pallet)) WorkOrderSourcePoses.Add(Job.JobId,Job.Pallet->GetActorTransform());
  LastErrorCode=NAME_None;LastErrorMessage.Reset();
  for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) It->RecordJobSubmitted(this,Job);
+ FWarehouseExperimentMetrics::NotifySubmitted(this,Job.JobId);
  return true;
 }
 void AWarehouseForklift::RefreshAfterLayout(bool PublishTaskLocation)
@@ -1000,6 +1008,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
  if (!bPowered || Dt<=0) return;
  if (SensorMode!=EWarehouseSensorMode::Autonomous)
  {
+  bExperimentSensorWaiting=true;
   // Disabled/observation modes are diagnostics, never an omniscient legacy
   // autonomous fallback. The preceding sensor tick can still observe while parked.
   BrakeDrive();DesiredLift=LiftOffset;LiftMotorTarget=LiftOffset;
@@ -1012,6 +1021,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
  if (!Fault.IsEmpty()) { FaultAI(Fault); return; }
  if (SensorMode==EWarehouseSensorMode::Autonomous && AIState!=EWarehouseAIState::ElevatorRide && !AutonomousSensorsReady())
  {
+  bExperimentSensorWaiting=true;
   AIElapsed-=Dt;BrakeDrive();
   SetStatus(TEXT("SENSOR WAIT - FRESH SCAN / FLOOR MAP REQUIRED"));return;
  }

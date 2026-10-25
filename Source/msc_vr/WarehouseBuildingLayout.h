@@ -50,6 +50,9 @@ public:
  UFUNCTION(BlueprintPure,Category="Building") FBox GetFootprint() const;
  FBox2D GetSourceFootprint() const { return CapturedFootprint; }
  UFUNCTION(BlueprintPure,Category="Building") bool ValidateSettings(const FWarehouseBuildingSettings& Proposed,FString& Reason) const;
+ // Fresh-world initial-condition loading keeps the same source restoration bookkeeping.
+ void PrepareExperimentRestore();
+ void RestoreExperimentRuntimeState();
  UFUNCTION(BlueprintPure,Category="Building") static FVector2D GetMinimumSizeCm() { return FVector2D(1600,1600); }
  UFUNCTION(BlueprintPure,Category="Building") static FVector2D GetMaximumSizeCm() { return FVector2D(9600,8000); }
  UFUNCTION(BlueprintPure,Category="Building") static float GetMaximumRoofHeightCm() { return 2000.f; }

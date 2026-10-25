@@ -6,11 +6,30 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 **현재 맵:** 3층 복층·승강기, 트럭 적재함과 외부 환경, 양손 화물 운반, 1층 지게차 2대의 자율 작업·G 스마트폰 원격 조작, 센서/충돌/하중 검사와 자동 충전이 있다. 사람·차량·화물은 Chaos 강체와 유한 구동력을 사용한다. 실행 검증·계수·한계는 `PHYSICS.md`, 맵은 `WAREHOUSE.md`, 장비 사양은 `VNSL14_SPEC.md`를 확인한다. 기존 `WarehouseForklift`에 `Agv`의 센서만 연결하며, 별도 타이어·주행 알고리즘은 연결하지 않는다.
 
+## 실행 구조 한눈에 보기
+
+2026-10-25 로컬 `main`의 `391c5f8b`에서 구조 정리를 시작하고, 초기 배치 저장·반복 실험·운영 성과 기능을 반영했다. 아래는 현재 실행 경계이며, 추가 제안·우선순위는 [시뮬레이션 개선안](SIMULATION_ROADMAP.md)에서 별도로 관리한다. 기능별 실제 검증 범위는 담당 문서에서 확인한다.
+
+| 담당 | 현재 진입점 | 연결되는 영역 |
+| --- | --- | --- |
+| 조작·관찰·명령 화면 | `msc_vrCharacter`, `msc_vrPlayerController`, `WarehouseComputerDashboard`, `WarehouseComputerUILegacy` | 플레이어 상호작용, 배치 도구, 관제의 명령 API |
+| 재고·작업·배송편 | `WarehouseComputer`, `WarehouseInboundZone`, `WarehouseShippingSystem`, `WarehouseLayoutInventory` | 팔레트 작업 제출·완료 보고, 입고 확정, 트럭 인계, 보류 물류 |
+| 차량별 자율 운반 | `WarehouseForkliftAI`, `WarehouseForkliftRecovery`, `WarehouseForkliftParking`, `WarehouseForkliftPerception` | 작업 상태·경로·복구·충전, 고정 지도와 센서 관측 |
+| 다중 차량 교통 | `WarehouseFleetCoordinator` | 차량 경로의 공간 예약·양보·우회·폐쇄, 공유 충전 배정 |
+| 접촉·설비 | `WarehousePhysics`, `WarehouseDamageSystem`, `WarehouseForkliftPhysics`, `WarehouseElevator`, `WarehousePalletLift`, `WarehouseConveyor` | Chaos 구동·받침·손상, 범용/화물용 승강기와 컨베이어 인계 |
+| 공간 편집·시간 | `WarehouseLayoutEditor`, `WarehouseLayoutSnap`, `WarehouseBuildingLayout`, `WarehouseConstructionEditor`, `WarehouseSimulationClock` | 세션 내 재배치·건물 편집, 지도 갱신, 1/2/4배 시계 |
+| 배치 보관·반복 실험·성과 | `WarehouseExperimentStorage`, `WarehouseExperimentSubsystem`, `WarehouseExperimentMetrics`, `WarehouseExperimentUI` | 초기 배치 JSON 복원, 공통 주문·새 레벨 반복, 완료·대기 시간과 CSV/JSON 비교 |
+| 검증·모델·맵 | `Scripts/verify_*`, `Art/`, `Content/`, `Config/` | 회귀 검사·적용 도구, 자체 모델 원본, Unreal 에셋·맵, 실행 설정 |
+
+관제·차량·설비는 현재 같은 게임 프로세스 안에서 연결된다. `Source/msc_vr/Agv/` 중 센서만 운용 차량에 연결하며, 별도 주행·위치 추정은 독립 개발 영역이다. 자세한 상태 흐름과 정보 경계는 [알고리즘 도식](FLEET_ALGORITHM_COMPARISON.md)과 [자율 운반 기준](AUTONOMY.md)을 따른다.
+
 ## 작업별 첫 탐색 경로
 
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
+| 현재 구조 평가·추가 개발 우선순위 | `SIMULATION_ROADMAP.md`, 이 문서의 실행 구조 표 | 구현된 1·2번 범위는 `WAREHOUSE.md`, 운용 기준은 `AUTONOMY.md`, 물리 가정은 `PHYSICS.md`, 입출고 계획은 `TRUCK_LOGISTICS_DESIGN.md` |
+| 초기 배치 저장·불러오기·같은 주문 반복·성과 대시보드 | `WarehouseExperimentSubsystem.h/.cpp`, `WarehouseExperimentStorage.h/.cpp`, `WarehouseExperimentMetrics.h/.cpp`, `WarehouseExperimentUI.cpp`, `WAREHOUSE.md`의 실험 절 | 저장은 새 레벨 BeginPlay 전 복원, 계측은 기존 보고 관측; `Scripts/verify_warehouse_experiments_pie.py`, `verify_warehouse_experiment_transport.py`, `verify_warehouse_experiment_ui.py`; 목적지 예약·주문 순서·재시작 기록은 `verify_warehouse_experiment_guards.py`, native `Warehouse.Experiments.MetricsAccounting`; 결과는 Git 제외 `Saved/WarehouseExperiments/` |
 | 충돌/비충돌 공통 기준·선택 전용 판·모든 판정의 대상 분류 | `COLLISION_POLICY.md`, `WarehousePhysics.h/.cpp`, `Scripts/verify_collision_policy_pie.py` | `WarehouseWaitingBay`, `WarehouseDamageSystem`, `WarehouseLayoutEditor`, `WarehouseForklift*`, `WarehouseElevator`, `Config/DefaultEngine.ini` |
 | 배치 모드 재배치·추가·삭제·다중 선택·스냅 적재·시설 누락 | `WarehouseLayoutEditor.h/.cpp`, `WarehouseLayoutInventory.h/.cpp`, `WarehouseLayoutSnap.h/.cpp`, `Scripts/verify_layout_inventory_pie.py`, `Scripts/verify_layout_editor_pie.py` | 하단 Slate 도구·렌더링 검사는 `msc_vrPlayerController`, `Scripts/verify_layout_editing_ui_pie.py`, 승강기 개구부는 `WarehouseElevatorLayout`, 슬롯은 `WarehouseInboundZone`, 사용 기준은 `WAREHOUSE.md` |
 | 배치 모두 범주·혼합 선택·우클릭 좌우90도·공통 축 회전·삭제 | `WarehouseLayoutEditor::RotateSelection`/`CanRotateSelection`, `msc_vrPlayerController::OpenLayoutRotationMenu`/`RotateLayoutSelection`/`DeleteLayoutSelection` | 실제 부품·참조·물리 복원은 `WarehouseLayoutEditor`, 층별 개구부는 `WarehouseElevatorLayout`, 검사는 위 배치 native/UI 스크립트 |
@@ -114,6 +133,7 @@ msc_vr/
   PROJECT_STRUCTURE.md
   README.md
   REFINED_AGV.md
+  SIMULATION_ROADMAP.md
   TEAM_ASSETS.md
   TRUCK_LOGISTICS_DESIGN.md
   VNSL14_SPEC.md
@@ -292,6 +312,11 @@ msc_vr/
     verify_view_and_wheel_fixes_pie.py
     verify_warehouse_computer_pie.py
     verify_warehouse_contact_physics.py
+    verify_warehouse_experiment_building.py
+    verify_warehouse_experiment_guards.py
+    verify_warehouse_experiment_transport.py
+    verify_warehouse_experiment_ui.py
+    verify_warehouse_experiments_pie.py
     verify_warehouse_exterior.py
     verify_warehouse_interaction_pie.py
     verify_warehouse_strength.py
@@ -341,6 +366,14 @@ msc_vr/
       WarehouseElevator.h
       WarehouseElevatorLayout.cpp
       WarehouseElevatorLayout.h
+      WarehouseExperimentMetrics.cpp
+      WarehouseExperimentMetrics.h
+      WarehouseExperimentStorage.cpp
+      WarehouseExperimentStorage.h
+      WarehouseExperimentSubsystem.cpp
+      WarehouseExperimentSubsystem.h
+      WarehouseExperimentUI.cpp
+      WarehouseExperimentUI.h
       WarehouseFleetCoordinator.cpp
       WarehouseFleetCoordinator.h
       WarehouseForklift.cpp
@@ -392,6 +425,7 @@ msc_vr/
         UI/
         Weapons/
   Content/
+    __ExperimentTests/
     __ExternalActors__/
     __ExternalObjects__/
     AgvTest/

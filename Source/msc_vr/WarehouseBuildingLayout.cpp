@@ -563,6 +563,24 @@ void AWarehouseBuildingLayout::HideOriginalStructure()
   for (auto& P:Saved.Parts) if (auto* Part=P.Part.Get()) { Part->SetVisibility(false);Part->SetCollisionEnabled(ECollisionEnabled::NoCollision); }
  }
 }
+void AWarehouseBuildingLayout::PrepareExperimentRestore()
+{
+ if (HasActorBegunPlay()) return;
+ CaptureExistingLayout();
+ if (OriginalStates.IsEmpty()) for (AActor* Actor:ReplacedStructure) if (IsValid(Actor))
+ {
+  FOriginalState& Saved=OriginalStates.AddDefaulted_GetRef();Saved.Actor=Actor;Saved.Hidden=Actor->IsHidden();Saved.Collision=Actor->GetActorEnableCollision();
+  TArray<UPrimitiveComponent*> Parts;Actor->GetComponents(Parts);
+  for (auto* Part:Parts) Saved.Parts.Add({Part,Part->IsVisible(),Part->GetCollisionEnabled()});
+ }
+}
+void AWarehouseBuildingLayout::RestoreExperimentRuntimeState()
+{
+ if (HasActorBegunPlay()) return;
+ if (!bHasAppliedChanges) { OriginalStates.Reset();return; }
+ HideOriginalStructure();GeneratedLights.Reset();
+ for (TActorIterator<ASpotLight> It(GetWorld());It;++It) if (It->ActorHasTag(TEXT("WarehouseBuildingGenerated"))) GeneratedLights.Add(*It);
+}
 void AWarehouseBuildingLayout::RestoreOriginalStructure()
 {
  for (auto& Saved:OriginalStates) if (auto* Actor=Saved.Actor.Get())

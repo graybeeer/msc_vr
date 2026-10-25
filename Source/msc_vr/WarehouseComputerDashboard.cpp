@@ -1,4 +1,5 @@
 #include "WarehouseComputerDashboard.h"
+#include "WarehouseExperimentUI.h"
 #include "WarehouseComputer.h"
 #include "WarehouseCargo.h"
 #include "WarehousePallet.h"
@@ -79,8 +80,8 @@ public:
   AutomaticVehicle=MakeShared<FDashboardVehicle>();SelectedVehicle=AutomaticVehicle;
   Refresh();RefreshHeld();
   auto Tabs=SNew(SHorizontalBox);
-  const TCHAR* Titles[]={TEXT("운반 지시"),TEXT("배송편"),TEXT("작업 · 차량"),TEXT("보류 물류")};
-  for (int32 Index=0;Index<4;++Index)
+  const TCHAR* Titles[]={TEXT("운반 지시"),TEXT("배송편"),TEXT("작업 · 차량"),TEXT("보류 물류"),TEXT("실험 · 성과")};
+  for (int32 Index=0;Index<UE_ARRAY_COUNT(Titles);++Index)
   {
    TSharedPtr<SButton> Tab;
    Tabs->AddSlot().FillWidth(1).Padding(Index ? 4 : 0,0,0,0)
@@ -121,7 +122,8 @@ public:
        +SWidgetSwitcher::Slot()[BuildTransport()]
        +SWidgetSwitcher::Slot()[BuildShipping()]
        +SWidgetSwitcher::Slot()[BuildOperations()]
-       +SWidgetSwitcher::Slot()[BuildHeld()]]]
+       +SWidgetSwitcher::Slot()[BuildHeld()]
+       +SWidgetSwitcher::Slot()[MakeWarehouseExperimentPanel(Controller.Get())]]]
     +SVerticalBox::Slot().AutoHeight().Padding(0,12,0,0)[SNew(SBorder).Padding(FMargin(12,8))
      .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(Surface)
      [SNew(SHorizontalBox)

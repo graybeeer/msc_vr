@@ -151,6 +151,9 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Traffic") bool bTrafficYielding=false;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Traffic") FString TrafficStatus;
 private:
+ friend class FWarehouseExperimentMetrics;
+ // Observation only: set by the existing gate; never used to decide motion.
+ bool bExperimentSensorWaiting=false;
  friend class AWarehouseFleetCoordinator;
  friend class AWarehouseLayoutEditor;
  UPROPERTY(Transient) TObjectPtr<UAgvShadowSensorsComponent> SensorKit;

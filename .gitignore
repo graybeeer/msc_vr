@@ -119,3 +119,6 @@ __pycache__/
 
 # Rebuild observer wall fade variants from each installed source material.
 /Content/Warehouse/Materials/ObserverWalls/
+
+# Local repeatable experiment fixtures; source test scripts recreate these maps.
+/Content/__ExperimentTests/

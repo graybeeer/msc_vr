@@ -89,6 +89,7 @@ public:
  TArray<AActor*> SpawnPrototype(EWarehouseLayoutCategory Category,int32 Choice,FVector Point);
  void CommitPrototype(const TArray<AActor*>& Members);
  void ForgetActors(const TArray<AActor*>& Members);
+ void RestoreExperimentCatalogue() { bCaptured=!Prototypes.IsEmpty();PreviewPrototypes.Reset();++Revision; }
 private:
  UPROPERTY() TArray<FWarehouseLayoutPrototype> Prototypes;
  // Local rack poses survive deletion of every inbound dispatcher and follow
