@@ -1,4 +1,5 @@
 #include "WarehouseLayoutInventory.h"
+#include "WarehousePlayMode.h"
 #include "WarehouseForklift.h"
 #include "WarehousePallet.h"
 #include "WarehouseWaitingBay.h"
@@ -6,6 +7,7 @@
 #include "WarehouseComputer.h"
 #include "WarehouseElevator.h"
 #include "WarehousePalletLift.h"
+#include "WarehouseConveyor.h"
 #include "WarehouseWorker.h"
 #include "WarehouseElevatorLayout.h"
 #include "msc_vrCharacter.h"
@@ -45,6 +47,7 @@ AWarehouseLayoutInventory* AWarehouseLayoutInventory::Find(const AActor* Context
 }
 bool AWarehouseLayoutInventory::CreateHeldCargo(FName Id,FText Product,float MassKg,FVector SizeCm)
 {
+ if (AWarehousePlayStage::Find(this)) {LastMessage=TEXT("플레이 모드 물류는 스테이지 입고 규칙으로 생성됩니다.");return false;}
  if (!HasAuthority()) return false;
  if (Id.IsNone() || Id.ToString().Len()>64 || Product.IsEmpty() || !FMath::IsFinite(MassKg) || MassKg<.1f || MassKg>10000 ||
      SizeCm.ContainsNaN() || SizeCm.GetMin()<5 || SizeCm.GetMax()>300)
@@ -66,6 +69,7 @@ bool AWarehouseLayoutInventory::CreateHeldCargo(FName Id,FText Product,float Mas
 }
 bool AWarehouseLayoutInventory::DeleteHeldCargo(FName Id)
 {
+ if (AWarehousePlayStage::Find(this)) {LastMessage=TEXT("플레이 모드에서는 물류 데이터를 삭제할 수 없습니다.");return false;}
  if (!HasAuthority()) return false;
  const int32 Index=HeldCargo.IndexOfByPredicate([&](const auto& Row) { return Row.CargoId==Id; });
  if (Index==INDEX_NONE) { LastMessage=TEXT("삭제할 보류 물류가 없습니다.");return false; }
@@ -157,6 +161,25 @@ void AWarehouseLayoutInventory::CapturePrototypes(AWarehouseLayoutEditor* Layout
  for (TActorIterator<AWarehouseInboundZone> It(GetWorld());It;++It)
   for (auto Slot:It->RackSlots) if (IsValid(Slot.Rack) && !RackCatalogue.ContainsByPredicate([&](const auto& Existing) { return Existing.Name==Slot.Name && Existing.Rack==Slot.Rack; }))
   { Slot.Pose=Slot.Pose.GetRelativeTransform(Slot.Rack->GetActorTransform());RackCatalogue.Add(Slot); }
+ // Racks share one storage model. Prefer the complete, registered slot template
+ // instead of whichever frame happens to appear first in the actor iterator.
+ auto RackKey=[](const AActor* A) { const FName Group=GroupTag(A);return Group.IsNone() ? A->GetFName() : Group; };
+ TMap<FName,int32> SlotCounts;
+ for (const auto& Slot:RackCatalogue) if (IsValid(Slot.Rack)) ++SlotCounts.FindOrAdd(RackKey(Slot.Rack));
+ AActor* RackTemplate=nullptr;int32 BestSlotRank=-1,BestModel=-1;FString BestRackKey;
+ for (TActorIterator<AActor> It(GetWorld());It;++It)
+ {
+  AActor* A=*It;if (!A->ActorHasTag(TEXT("LayoutType:Rack")) || A->ActorHasTag(TEXT("LayoutFixed"))) continue;
+  const FName Group=RackKey(A);const int32 Slots=SlotCounts.FindRef(Group);
+  const int32 SlotRank=Slots==4 ? MAX_int32 : Slots;
+  const FString Key=Group.ToString()+TEXT("/")+A->GetActorNameOrLabel();
+  const int32 Model=Group.ToString().StartsWith(TEXT("LayoutGroup:WH_InboundRack_")) ? 2 :
+   Group==TEXT("LayoutGroup:PalletRack_Left_00") ? 1 : 0;
+  if (SlotRank>BestSlotRank || (SlotRank==BestSlotRank && (Model>BestModel || (Model==BestModel && Key<BestRackKey))))
+  { RackTemplate=A;BestSlotRank=SlotRank;BestModel=Model;BestRackKey=Key; }
+ }
+ // Legacy/test maps may have no registered storage slots. Preserve their real
+ // template data rather than inventing load positions from visual bounds.
  for (auto& Zone:Layout->Zones) if (Zone.Name==TEXT("Outbound") && Zone.Destinations.IsEmpty())
   for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) Zone.Destinations=It->OutboundDestinations;
  TSet<FName> Groups;TSet<FString> Singles;
@@ -165,12 +188,14 @@ void AWarehouseLayoutInventory::CapturePrototypes(AWarehouseLayoutEditor* Layout
   AActor* A=*It;EWarehouseLayoutCategory Category=EWarehouseLayoutCategory::Other;
   if (A->IsA<AWarehouseCargo>() || A==this || A==Layout || (A->ActorHasTag(TEXT("LayoutFixed")) && !A->IsA<AWarehouseChargingStation>()) || A->IsA<Amsc_vrCharacter>()) continue;
   if (A->IsA<AWarehouseForklift>()) Category=EWarehouseLayoutCategory::Forklift;
+  else if (A->IsA<AWarehouseConveyor>()) Category=EWarehouseLayoutCategory::Conveyor;
   else if (A->IsA<AWarehouseChargingStation>()) Category=EWarehouseLayoutCategory::Charger;
   else if (A->IsA<AWarehouseWaitingBay>()) Category=EWarehouseLayoutCategory::WaitingBay;
   else if (A->IsA<AWarehousePallet>()) Category=EWarehouseLayoutCategory::Pallet;
   else if (A->IsA<AWarehouseElevator>() || A->IsA<AWarehousePalletLift>() || A->ActorHasTag(TEXT("LayoutType:Elevator"))) Category=EWarehouseLayoutCategory::Elevator;
   else if (A->ActorHasTag(TEXT("LayoutType:Rack"))) Category=EWarehouseLayoutCategory::Rack;
   else if (!A->ActorHasTag(TEXT("LayoutType:Other"))) continue;
+  if (Category==EWarehouseLayoutCategory::Rack && A!=RackTemplate) continue;
   const FName Group=GroupTag(A);TArray<AActor*> Members;
   if (Group!=NAME_None)
   {
@@ -182,11 +207,15 @@ void AWarehouseLayoutInventory::CapturePrototypes(AWarehouseLayoutEditor* Layout
    // Workers can share a class but have different roles; static furniture
    // shares StaticMeshActor but has different meshes. Keep those presets.
    const FString Key=A->GetClass()->GetPathName()+FString::FromInt(int32(Category))+
+    (A->IsA<AWarehouseConveyor>() ? FString::FromInt(int32(Cast<AWarehouseConveyor>(A)->Kind)) : FString())+
     (Category==EWarehouseLayoutCategory::Other ? A->GetActorNameOrLabel() : FString());
    if (Singles.Contains(Key)) continue;Singles.Add(Key);Members.Add(A);
   }
   if (Members.IsEmpty()) continue;
   FVector Origin=A->GetActorLocation();FString Name=A->GetActorNameOrLabel();
+  if (Category==EWarehouseLayoutCategory::Rack) Name=TEXT("팔레트 보관 랙");
+  if (const auto* Conveyor=Cast<AWarehouseConveyor>(A)) Name=Conveyor->Kind==EWarehouseConveyorKind::PalletRoller ? TEXT("팔레트 롤러 컨베이어") :
+   Conveyor->Kind==EWarehouseConveyorKind::RotaryTransfer ? TEXT("90° 회전 이송대") : TEXT("상자 컨베이어");
   if (Category==EWarehouseLayoutCategory::Elevator) for (AActor* Member:Members)
   {
    if (Member->IsA<AWarehouseElevator>()) { Origin=Member->GetActorLocation();Name=TEXT("범용 엘리베이터");break; }
@@ -213,6 +242,17 @@ void AWarehouseLayoutInventory::CapturePrototypes(AWarehouseLayoutEditor* Layout
  AddDefault(AWarehousePallet::StaticClass(),EWarehouseLayoutCategory::Pallet,TEXT("빈 팔레트"));
  AddDefault(AWarehouseElevator::StaticClass(),EWarehouseLayoutCategory::Elevator,TEXT("범용 엘리베이터"));
  AddDefault(AWarehousePalletLift::StaticClass(),EWarehouseLayoutCategory::Elevator,TEXT("화물용 엘리베이터"));
+ for (int32 Kind=0;Kind<3;++Kind)
+ {
+  const FString Name=Kind==0 ? TEXT("팔레트 롤러 컨베이어") : Kind==2 ? TEXT("90° 회전 이송대") : TEXT("상자 컨베이어");
+  if (Prototypes.ContainsByPredicate([&](const auto& P) { return P.Category==EWarehouseLayoutCategory::Conveyor && P.Name==Name; })) continue;
+  FWarehouseLayoutPrototype P;P.Name=Name;P.Category=EWarehouseLayoutCategory::Conveyor;
+  FWarehouseLayoutActorTemplate Item;Item.Class=AWarehouseConveyor::StaticClass();
+  Item.Properties.Add(TEXT("Kind"),Kind==0 ? TEXT("PalletRoller") : Kind==2 ? TEXT("RotaryTransfer") : TEXT("CartonBelt"));
+  if (Kind==1) { Item.Properties.Add(TEXT("WidthCm"),TEXT("80"));Item.Properties.Add(TEXT("RatedMassKg"),TEXT("100")); }
+  if (Kind==2) { Item.Properties.Add(TEXT("LengthCm"),TEXT("200"));Item.Properties.Add(TEXT("WidthCm"),TEXT("200")); }
+  P.Actors.Add(Item);Prototypes.Add(P);
+ }
 }
 TArray<FString> AWarehouseLayoutInventory::Choices(EWarehouseLayoutCategory Category) const
 {
@@ -240,7 +280,7 @@ TArray<AActor*> AWarehouseLayoutInventory::SpawnPrototype(EWarehouseLayoutCatego
    if (auto* Field=Actor->GetClass()->FindPropertyByName(Property.Key)) Field->ImportText_Direct(*Property.Value,Field->ContainerPtrToValuePtr<void>(Actor),Actor,PPF_Copy);
   for (FName Tag:Item.Tags) Actor->Tags.AddUnique(Tag);
   Actor->Tags.RemoveAll([](FName T) { return T.ToString().StartsWith(TEXT("LayoutGroup:")) || T.ToString().StartsWith(TEXT("WarehouseFloor")) || T==TEXT("LayoutFixed"); });
-  Actor->Tags.Add(Group);Actor->Tags.Add(FName(*FString::Printf(TEXT("WarehouseFloor%d"),FMath::Clamp(FMath::FloorToInt((Pose.GetLocation().Z+1)/400.),0,2))));
+  Actor->Tags.Add(Group);Actor->Tags.Add(FName(*FString::Printf(TEXT("WarehouseFloor%d"),FMath::Clamp(FMath::FloorToInt((Pose.GetLocation().Z+1)/400.),0,3))));
   TArray<USceneComponent*> Parts;Actor->GetComponents(Parts);
   for (const auto& Part:Item.Parts)
    if (auto** Found=Parts.FindByPredicate([&](const auto* C) { return C->GetFName()==Part.Name; }))

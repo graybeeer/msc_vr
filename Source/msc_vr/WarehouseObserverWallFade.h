@@ -41,6 +41,8 @@ public:
  UWarehouseObserverWallFade();
  UFUNCTION(BlueprintCallable, Category="Observer") void Update(APlayerController* PC, bool Enabled);
  UFUNCTION(BlueprintCallable, Category="Observer") void Restore();
+ // Initial-condition saves retain the authored wall material, never the temporary camera fade.
+ UMaterialInterface* GetOriginalMaterial(const UMeshComponent* Mesh,int32 Slot) const;
  virtual void EndPlay(const EEndPlayReason::Type Reason) override;
  UPROPERTY(EditAnywhere, Category="Observer") TSoftObjectPtr<UWarehouseObserverWallPalette> PaletteAsset;
 private:

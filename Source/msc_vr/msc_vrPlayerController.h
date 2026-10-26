@@ -18,6 +18,7 @@ class AWarehouseLayoutEditor;
 class AWarehouseSimulationClock;
 class UWarehouseTransportVisualizer;
 class UWarehouseObserverWallFade;
+class UWarehouseConstructionEditor;
 
 /**
  *  Simple first person Player Controller
@@ -36,19 +37,28 @@ public:
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") float MouseSensitivity = 1.f;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") float ViewFOV = 90.f;
 	UFUNCTION(BlueprintCallable, Category="Settings") void ToggleWarehouseMenu();
+	UFUNCTION(BlueprintCallable, Category="Play mode") bool OpenPlayMode(int32 StageIndex);
+	UFUNCTION(BlueprintPure, Category="Play mode") bool IsMainMenu() const;
 	UFUNCTION(BlueprintCallable, Category="Settings") void ToggleObserverView();
 	UFUNCTION(BlueprintCallable, Category="Settings") void FrameWarehouse();
 	UFUNCTION(BlueprintCallable, Category="Settings") void SetObserverFloor(int32 Floor);
 	UFUNCTION(BlueprintCallable, Category="Simulation") bool SetSimulationSpeed(int32 Multiplier);
 	UFUNCTION(BlueprintCallable, Category="Layout") void ToggleLayoutEditing();
+	UFUNCTION(BlueprintCallable, Category="Layout") void SetLayoutEditing(bool Enabled);
+	UFUNCTION(BlueprintPure, Category="Layout") bool IsLayoutEditing() const;
+	UFUNCTION(BlueprintCallable, Category="Building editor") void SetConstructionEditing(bool Enabled);
+	UFUNCTION(BlueprintPure, Category="Building editor") UWarehouseConstructionEditor* GetConstructionEditor() const { return ConstructionEditor; }
 	UFUNCTION(BlueprintCallable, Category="Layout") void SetLayoutCategory(int32 CategoryIndex);
 	UFUNCTION(BlueprintCallable, Category="Layout") void SetLayoutAction(int32 ActionIndex);
 	UFUNCTION(BlueprintCallable, Category="Layout") bool OpenLayoutRotationMenu(FVector2D ScreenPosition);
 	UFUNCTION(BlueprintCallable, Category="Layout") bool RotateLayoutSelection(float DeltaYawDegrees);
 	UFUNCTION(BlueprintCallable, Category="Layout") bool DeleteLayoutSelection();
+	UFUNCTION(BlueprintCallable, Category="Simulation|Experiments") void OpenWarehouseExperiments();
+	UFUNCTION(BlueprintCallable, Category="Simulation|Experiments") void CloseWarehouseExperiments();
+	UFUNCTION(BlueprintCallable, Category="Layout|Conveyor") bool ConfigureLayoutConveyor(int32 Field,float Value);
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Settings") int32 ObserverFloor=-1;
 	UFUNCTION(BlueprintPure, Category="Settings") bool IsObserverView() const { return bObserverView; }
-	UFUNCTION(BlueprintPure, Category="Settings") bool IsWarehouseMenuOpen() const { return MenuWidget.IsValid() || ComputerWidget.IsValid(); }
+	UFUNCTION(BlueprintPure, Category="Settings") bool IsWarehouseMenuOpen() const { return IsMainMenu() || MenuWidget.IsValid() || ComputerWidget.IsValid() || ExperimentWidget.IsValid(); }
 	UFUNCTION(BlueprintCallable, Category="Console") bool OpenWarehouseComputer(AWarehouseComputer* Computer);
 	UFUNCTION(BlueprintCallable, Category="Console") void CloseWarehouseComputer();
 	UFUNCTION(BlueprintPure, Category="Console") bool IsWarehouseComputerOpen() const { return ComputerWidget.IsValid(); }
@@ -113,12 +123,19 @@ protected:
 	double ObserverLastWall=0;
 	TSharedPtr<SWidget> MenuWidget;
 	TSharedPtr<SWidget> ComputerWidget;
+	TSharedPtr<SWidget> ExperimentWidget;
+	TSharedPtr<SWidget> PlayWidget;
 	UPROPERTY(Transient) TObjectPtr<AWarehouseComputer> ActiveComputer;
 	UPROPERTY(Transient) TObjectPtr<ACameraActor> ObserverCamera;
 	UPROPERTY(Transient) TObjectPtr<AWarehouseLayoutEditor> LayoutEditor;
+	UPROPERTY(Transient) TObjectPtr<UWarehouseConstructionEditor> ConstructionEditor;
 	UPROPERTY(Transient) TObjectPtr<AWarehouseSimulationClock> SimulationClock;
 	TSharedPtr<SWidget> LayoutToolbar;
 	TSharedPtr<SWidget> LayoutCanvas;
+	bool bConveyorLiftInfeedDraft=true;
+	int32 ConveyorLiftDestinationDraft=2;
+	int32 LastLayoutFloor=0;
 	bool bObserverView = false;
 	bool bWarehouseInputLocked = false;
+	bool bWarehouseEndingPlay = false;
 };

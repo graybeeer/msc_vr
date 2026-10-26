@@ -106,7 +106,7 @@ def assert_payload():
     assert platform.is_simulating_physics(), 'Carrier stopped being a native body'
     assert platform.get_collision_enabled() == unreal.CollisionEnabled.QUERY_AND_PHYSICS
     assert abs(platform.get_mass()-carrier_mass) < .1
-    for gate, mass in zip(lift.get_editor_property('gates'), gate_masses):
+    for gate, mass in zip(lift.get_editor_property('gates')[:lift.get_editor_property('floor_count')*2], gate_masses):
         assert gate.is_simulating_physics() and abs(gate.get_mass()-mass) < .1
         assert gate.get_collision_enabled() == unreal.CollisionEnabled.QUERY_AND_PHYSICS
 
@@ -217,7 +217,7 @@ def saved_installation():
         part = installed.get_editor_property(field)
         assert part.static_mesh and part.static_mesh.get_name() == name, ('Installed model missing', field)
         assert part.get_collision_enabled() == unreal.CollisionEnabled.QUERY_AND_PHYSICS
-    assert len(installed.get_editor_property('gates')) == 6
+    assert len(installed.get_editor_property('gates')) >= 6 and installed.get_editor_property('floor_count') == 3
     assert all(g.static_mesh and g.static_mesh.get_name() == 'SM_PalletLift_Gate' for g in installed.get_editor_property('gates'))
     mesh_editor = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
     carrier_hulls = mesh_editor.get_convex_collision_count(installed.get_editor_property('platform').static_mesh)
@@ -478,7 +478,7 @@ def layout_checks():
     trace_layout_floors(layout_readded.get_actor_transform(), True)
     assert_layout_state(layout_generic)
     assert layout_readded.get_editor_property('frame').static_mesh == original_frame_mesh
-    assert len(layout_readded.get_editor_property('gates')) == 6
+    assert len(layout_readded.get_editor_property('gates')) == 8 and layout_readded.get_editor_property('floor_count') == 3
     check('layout_pallet_only_prototype_readded_from_third_floor')
     layout_editor.set_editing(False, 2)
     at, phase = unreal.GameplayStatics.get_time_seconds(game), 'layout_resume'
@@ -508,7 +508,7 @@ def layout_tick(dt):
             deck = layout_readded.get_editor_property('platform')
             assert deck.is_simulating_physics() and abs(deck.get_mass()-120) < .1
             assert abs(bounds(deck)[1].z-40) < 1 and deck.get_physics_linear_velocity().length() < 2
-            assert all(g.is_simulating_physics() and abs(g.get_mass()-50) < .1 for g in layout_readded.get_editor_property('gates'))
+            assert all(g.is_simulating_physics() and abs(g.get_mass()-50) < .1 for g in layout_readded.get_editor_property('gates')[:6])
             assert_layout_state(layout_generic)
             trace_layout_floors(layout_readded.get_actor_transform(), True)
             check('layout_readded_native_lock_and_gates_after_real_ticks')
@@ -668,7 +668,7 @@ def tick(dt):
             platform = lift.get_editor_property('platform')
             strength = live['PalletLiftStrength']
             carrier_mass = platform.get_mass()
-            gate_masses = [g.get_mass() for g in lift.get_editor_property('gates')]
+            gate_masses = [g.get_mass() for g in lift.get_editor_property('gates')[:lift.get_editor_property('floor_count')*2]]
             steel = platform.get_editor_property('body_instance').get_editor_property('phys_material_override')
             assert steel, 'Production carrier contact material is missing'
             friction = steel.get_editor_property('friction')

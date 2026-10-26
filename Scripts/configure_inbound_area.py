@@ -114,7 +114,7 @@ def configure_inbound_area():
             deck.static_mesh_component.set_material(0,named['WH_TrainingPallet'].get_component_by_class(unreal.StaticMeshComponent).get_material(0))
             deck.static_mesh_component.set_collision_profile_name('BlockAll')
             fit(deck,(100,250,2),(x,y,z-1));rack_parts.append(deck)
-        rack_spec=unreal.WarehouseStrength(name=label,members=rack_parts,physics_meshes=list(reference.physics_meshes)+[cube,cube],
+        rack_spec=unreal.WarehouseStrength(name=label,members=rack_parts,physics_meshes=list(reference.physics_meshes)[:8]+[cube,cube],
                 failure=unreal.WarehouseFailure.RACK,mass_kg=250,rated_load_kg=reference.rated_load_kg,
                 level_capacity_kg=reference.level_capacity_kg,shelf_heights_cm=[20,140],impact_yield_j=reference.impact_yield_j,
                 impact_failure_j=reference.impact_failure_j,overload_seconds=reference.overload_seconds)

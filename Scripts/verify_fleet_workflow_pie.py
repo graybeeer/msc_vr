@@ -129,7 +129,7 @@ def tick(dt):
             assert not pc.is_move_input_ignored() and pc.get_view_target()==pawn,'Console did not restore player'
             walk([(545,-2200,0),(545,-1880,0),(780,-1200,0)],'observe');return
         if phase=='observe':
-            pc.toggle_observer_view();pc.set_observer_floor(0);enter('jobs');return
+            pc.toggle_observer_view();pc.set_observer_floor(0);pc.set_layout_editing(False);enter('jobs');return
         if phase=='jobs':
             inbound=live['WH_InboundDispatch'].get_editor_property('completed_count')
             outbound=any(job_id in v.get_editor_property('completed_job_ids') for v in fleet)

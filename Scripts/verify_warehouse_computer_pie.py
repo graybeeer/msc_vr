@@ -1,5 +1,5 @@
 """Native console UI/guards on the saved warehouse or actual transport completion in a small fixture. Never saves."""
-import sys,time,traceback
+import json,sys,time,traceback
 from pathlib import Path
 import unreal
 sys.path.insert(0,str(Path(__file__).resolve().parent))
@@ -42,6 +42,9 @@ if not SAVED:
         unreal.load_class(None,'/Game/FirstPerson/Blueprints/BP_FirstPersonGameMode.BP_FirstPersonGameMode_C'))
     floor=spawn(unreal.StaticMeshActor,'ComputerTestFloor',(0,0,-10));floor.static_mesh_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Cube'))
     floor.set_actor_scale3d(unreal.Vector(50,25,.2));floor.static_mesh_component.set_collision_profile_name('BlockAll')
+    # The current perception contract knows architecture only from explicit map data.
+    # Moving stock below stays untagged and must be observed by the vehicle sensors.
+    floor.tags=[unreal.Name('WarehouseMapStructure')]
     spawn(unreal.PlayerStart,'ComputerTestStart',(-950,-700,96.5))
     comp=spawn(unreal.WarehouseComputer,'ComputerTestConsole',(-700,-700,0))
     comp.set_editor_property('outbound_centre',unreal.Vector(1200,0,0));comp.set_editor_property('outbound_half_size',unreal.Vector(150,350,80))
@@ -68,7 +71,9 @@ def enter(value,now):
     phase=value;phase_at=now
 def finish(ok):
     print('WAREHOUSE_COMPUTER_'+('SAVED' if SAVED else 'FIXTURE')+'_PIE_'+('PASSED' if ok else 'FAILED'))
-    unreal.unregister_slate_post_tick_callback(handle);level.editor_request_end_play();unreal.SystemLibrary.quit_editor()
+    unreal.unregister_slate_post_tick_callback(handle);level.editor_request_end_play()
+    if '-keeptesteditoropen' not in unreal.SystemLibrary.get_command_line().lower():
+        unreal.SystemLibrary.quit_editor()
 def tick(dt):
     global live,pc,pawn,comp,vehicle,cargo,job_id,refresh_start,entry_pose,last_log,cancelled_elapsed,completion_refresh
     try:
@@ -91,7 +96,11 @@ def tick(dt):
         if phase=='settle':
             if now<4:return
             inventory=comp.get_editor_property('inventory')
-            assert len(inventory)==(360 if SAVED else 2)
+            eligible={a for a in unreal.GameplayStatics.get_all_actors_of_class(game,unreal.WarehouseCargo)
+                if not a.actor_has_tag('LogisticsInTransit')}
+            assert eligible and {r.cargo for r in inventory}==eligible,'Inventory must contain every eligible carton exactly once'
+            assert len(inventory)==len(eligible),'Inventory contains duplicate cargo actors'
+            if not SAVED:assert len(eligible)==2,'Fixture stock changed'
             assert len({r.cargo_id for r in inventory})==len(inventory)
             row=next(r for r in inventory if r.cargo==cargo);assert row.pallet is not None and row.mass_kg>0
             if SAVED:
@@ -151,8 +160,18 @@ def tick(dt):
                 assert comp.set_vehicle_running(vehicle,False) and not vehicle.get_editor_property('powered')
                 assert comp.set_vehicle_running(vehicle,True) and vehicle.get_editor_property('powered')
                 enter('close',now);return
-            assert comp.issue_outbound(cargo,vehicle,0)
+            # Exercise the new visible dashboard's dispatch callback, then let
+            # the unchanged native AI perform the complete physical transport.
+            row=next(r for r in comp.get_editor_property('inventory') if r.cargo==cargo)
+            state_path=Path(unreal.Paths.project_saved_dir())/'Testing/ComputerDashboard/State.json'
+            unreal.SystemLibrary.execute_console_command(game,'Warehouse.Computer.Test select '+row.cargo_id,pc)
+            ui_state=json.loads(state_path.read_text(encoding='utf-8-sig'))
+            assert ui_state['accepted'] and ui_state['actionsEnabled']['dispatch'],ui_state
+            unreal.SystemLibrary.execute_console_command(game,'Warehouse.Computer.Test click dispatch',pc)
+            ui_state=json.loads(state_path.read_text(encoding='utf-8-sig'))
+            assert ui_state['accepted'],ui_state
             job_id=next(j.job_id for j in vehicle.get_editor_property('pending_jobs') if j.source_system=='FMS-COMPUTER')
+            print('WAREHOUSE_COMPUTER_DASHBOARD_DISPATCH_PASSED',job_id)
             enter('transport',now);return
         if phase=='transport':
             assert not vehicle.get_editor_property('mechanical_failure')

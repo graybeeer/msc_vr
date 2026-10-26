@@ -425,11 +425,18 @@ def drag(actor, point, delta, commit):
 def find_accepted(actor, point, snapshot, candidates):
     for x, y in candidates:
         delta = unreal.Vector(x, y, 0)
-        if drag(actor, point, delta, True):
+        accepted = drag(actor, point, delta, True)
+        status = str(layout.get_editor_property('status'))
+        report.setdefault('candidateAttempts', []).append(dict(
+            actor=actor.get_actor_label() if actor else 'zone',
+            category=str(layout.get_editor_property('category')),
+            origin_cm=[point.x, point.y, point.z],
+            offset_cm=[x, y, 0], accepted=bool(accepted), status=status))
+        if accepted:
             translated(snapshot, delta)
             restored(snapshot)
             return delta
-        print('LAYOUT_REJECTED_CANDIDATE',actor.get_actor_label() if actor else 'zone',delta,str(layout.get_editor_property('status')))
+        print('LAYOUT_REJECTED_CANDIDATE',actor.get_actor_label() if actor else 'zone',delta,status)
         translated(snapshot, unreal.Vector())
         restored(snapshot)
     raise AssertionError(('No safe layout commit in candidate positions', actor.get_actor_label() if actor else 'zone', str(layout.get_editor_property('status'))))
@@ -1039,7 +1046,16 @@ def tick(dt):
             print('LAYOUT_ELEVATOR_ALL_LEVELS_PASSED', 'clear commit' if accepted else 'unsafe geometry rejected', len(members))
             # Moving the shaft must also move its supported opening on all
             # floors. A preview-only cancellation cannot satisfy this feature.
-            delta = find_accepted(elevator, point, snapshot, [(0, -250), (0, 250), (-250, 0), (250, 0), (0, -500)])
+            # The saved art has real wider door rails and separate call stands.
+            # Probe nearby grid positions as well as the former 2.5/5m offsets;
+            # every candidate must pass the unchanged native slab/support and
+            # full physical overlap transaction. Never clear surrounding art.
+            delta = find_accepted(elevator, point, snapshot, [
+                (0, -50), (0, 50), (-50, 0), (50, 0),
+                (0, -100), (0, 100), (-100, 0), (100, 0),
+                (0, -150), (0, 150), (-150, 0), (150, 0),
+                (0, -250), (0, 250), (-250, 0), (250, 0),
+                (0, -300), (0, -350), (0, -400), (0, -500)])
             translated(unrelated_goods, unreal.Vector())
             for floor, (waiting, boarding) in enumerate(portals):
                 assert (elevator.waiting_pose(floor).translation - waiting - delta).length() < .1, ('Common elevator waiting position did not move on floor', floor)

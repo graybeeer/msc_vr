@@ -32,7 +32,11 @@ def configure_cargo_variety():
         support_label=None
         if group.startswith('WH_Cargo_'):support_label=group.replace('WH_Cargo_','WH_Pallet_',1)
         elif group.startswith('WH_Stock_'):support_label='WH_DispatchPallet_'+group.split('_')[2]
-        elif group.startswith(('WH_MediumStock_','WH_LightStock_')):support_label=group.replace('Stock_','Shelf_')
+        elif group.startswith(('WH_MediumStock_','WH_LightStock_')):
+            if stack[0][1].actor_has_tag('UnifiedRackCargo'):
+                match=re.fullmatch(r'WH_(Medium|Light)Stock_(\d+)_(\d+)',group)
+                support_label=f'WH_{match[1]}Rack_{match[2]}_Deck_{140 if match[3]=="2" else 20}'
+            else:support_label=group.replace('Stock_','Shelf_')
         elif group in ('WH_Pickup_Box','WH_Drop_Box'):support_label=group.replace('_Box','_Pallet')
         elif group.startswith('MZ_Cargo_'):support_label=group.replace('MZ_Cargo_','MZ_Pallet_',1)
         elif group=='MZ_TransferCargo':support_label='WH_TrainingPallet'
@@ -46,7 +50,7 @@ def configure_cargo_variety():
                 if group=='WH_Stock_5_0_0':
                     # This small footprint needs the actual frame/board intersection.
                     center=unreal.Vector(support_center.x,support_center.y-50,center.z)
-            else:
+            elif not stack[0][1].actor_has_tag('UnifiedRackCargo'):
                 center=unreal.Vector(support_center.x,support_center.y,center.z)
         maximum=(60,40,38) if group.startswith('WH_Cargo_') else (30,20,25) if group.startswith('WH_LightStock_') else (40,30,28)
         footprint=maximum[:2]

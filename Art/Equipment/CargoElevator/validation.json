@@ -1,0 +1,12 @@
+{
+  "date": "2026-10-21",
+  "assembly_mesh_count": 20,
+  "expected_mesh_count": 20,
+  "max_assembly_error_cm": 2.288818359375e-05,
+  "assembly_dimensions_and_pivots": true,
+  "broad_wing_plates_removed": true,
+  "floor_anchored_independent_stands": 3,
+  "stands_outside_door_sweep_and_vehicle_lane": true,
+  "assembly_sha256": "a202461899f9e336d20efec6097cc2cd2acc6d34ecd555c7dce633727a607f37",
+  "runtime_results": "../../../Saved/Testing/CargoElevator/CallStandRevisionReport.json"
+}

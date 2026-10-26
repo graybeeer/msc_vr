@@ -2,6 +2,7 @@
 #include "HAL/IConsoleManager.h"
 #include "WarehousePhysics.h"
 #include "WarehousePerformance.h"
+#include "WarehouseExperimentMetrics.h"
 #include "WarehouseFleetCoordinator.h"
 #include "WarehousePallet.h"
 #include "WarehouseDamageSystem.h"
@@ -266,9 +267,11 @@ void AWarehouseForklift::Tick(float DeltaSeconds)
   LiftOffset=GetActorTransform().InverseTransformPosition(Carriage->GetComponentLocation()).Z;
  }
  BrakeDrive();
+ bExperimentSensorWaiting=false;
  UpdateSensorSnapshot();
  AdvanceSimulation(DeltaSeconds);
  UpdatePhysicalRig(FMath::Clamp(DeltaSeconds,0.f,.133333f));
+ FWarehouseExperimentMetrics::NotifyVehicleTick(this);
 }
 bool AWarehouseForklift::RefreshObstacleChecks()
 {
@@ -363,6 +366,12 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
    (Part==CarriageBody || Part->GetName().StartsWith(TEXT("Fork"))) && (AIState==EWarehouseAIState::InsertFork ||
    AIState==EWarehouseAIState::CorrectFork || AIState==EWarehouseAIState::VerifyInsertion ||
    AIState==EWarehouseAIState::WithdrawFork ||
+   // A grounded handoff clears bSupportingPallet before the tines finish
+   // lowering. Their intended target contact is still mechanical; cached
+   // pallet surfaces must not be mistaken for a new obstacle during release.
+   // A servo settled below its release setpoint may correct upwards within
+   // the existing 2mm mechanical contact tolerance. Native contacts remain active.
+   (AIState==EWarehouseAIState::LowerLoad && LiftOnly && bPalletReleased && Delta.Z<=.2f) ||
    AIState==EWarehouseAIState::RecoverLower || AIState==EWarehouseAIState::RecoverWithdraw);
   if (SensorDriven)
   {
@@ -394,6 +403,11 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
     (Hit.bStartPenetrating || Hit.Distance<=.2f);
    if (SensorDriven && !SensorKit->IsKnownComponent(Hit.GetComponent()) &&
        !MechanicalTargetContact) continue;
+   // A PLC-certified lift gap produces a sloped tyre/edge normal and a small
+   // physical sag. It must be tested before the flat-ground normal filter;
+   // this narrow check still requires two actual aligned bearing surfaces.
+   if (!LiftOnly && Wheels.Contains(Part) && PartDelta.Z>=-.001f &&
+       IsValid(Elevator) && Elevator->IsCertifiedLandingSeam(this,Part,Hit)) continue;
    // A rolling tyre's convex sweep can return a slightly tilted wheel normal
    // against a flat floor. Confirm its actual bearing surface instead of
    // treating that ordinary rolling contact as an inward obstacle.
@@ -478,7 +492,7 @@ bool AWarehouseForklift::MoveLift(float Height)
 bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt,float ArrivalTolerance)
 {
  const FVector Offset=Destination-GetActorLocation();
- const bool ElevatorLine=IsValid(Elevator) && (AIState==EWarehouseAIState::ElevatorBoard || AIState==EWarehouseAIState::ElevatorExit);
+ const bool ElevatorLine=IsValid(Elevator) && (AIState==EWarehouseAIState::ElevatorCall || AIState==EWarehouseAIState::ElevatorBoard || AIState==EWarehouseAIState::ElevatorExit);
  const float LateralLimit=AIState==EWarehouseAIState::DockCharge ? ChargingDockLateralLimitCm : AIState==EWarehouseAIState::AlignUnload ? 15.f : 5.f;
  // A long straight boarding line magnifies a small heading error. Measure
  // corridor departure against the shaft, then steer onto that same line.

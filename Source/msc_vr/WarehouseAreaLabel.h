@@ -12,7 +12,7 @@ class MSC_VR_API AWarehouseAreaLabel : public AActor
 public:
  AWarehouseAreaLabel();
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Area") FText AreaName;
- UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Area", meta=(ClampMin="0",ClampMax="2")) int32 FloorIndex=0;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Area", meta=(ClampMin="0",ClampMax="3")) int32 FloorIndex=0;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Area", meta=(ClampMin="100")) float ViewDistanceCm=2500.f;
  virtual void BeginPlay() override;
  virtual void Tick(float DeltaSeconds) override;

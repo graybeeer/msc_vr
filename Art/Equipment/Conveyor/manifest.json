@@ -1,0 +1,109 @@
+{
+  "date": "2026-10-20",
+  "authoring": "Original Blender roller conveyor; no proprietary CAD",
+  "frame_reference_cm": {
+    "length": 300,
+    "roller_width": 125,
+    "surface_height": 40,
+    "origin": "floor at machine centre"
+  },
+  "roller_reference_cm": {
+    "diameter": 100,
+    "length": 100,
+    "axis": "local Z",
+    "runtime_scale": "X/Y=diameter/100, Z=width/100, Roll=90deg"
+  },
+  "materials": {
+    "Lift_GalvanizedSteel": {
+      "color": [
+        0.48,
+        0.52,
+        0.56
+      ],
+      "metallic": 0.95,
+      "roughness": 0.36
+    },
+    "Lift_MachinedSteel": {
+      "color": [
+        0.64,
+        0.67,
+        0.7
+      ],
+      "metallic": 0.97,
+      "roughness": 0.24
+    },
+    "Lift_Graphite": {
+      "color": [
+        0.028,
+        0.034,
+        0.041
+      ],
+      "metallic": 0.5,
+      "roughness": 0.48
+    },
+    "Lift_SafetyYellow": {
+      "color": [
+        0.95,
+        0.55,
+        0.012
+      ],
+      "metallic": 0.24,
+      "roughness": 0.39
+    },
+    "Lift_Rubber": {
+      "color": [
+        0.014,
+        0.018,
+        0.021
+      ],
+      "metallic": 0.03,
+      "roughness": 0.72
+    },
+    "Lift_RedPowderCoat": {
+      "color": [
+        0.58,
+        0.013,
+        0.018
+      ],
+      "metallic": 0.48,
+      "roughness": 0.34
+    }
+  },
+  "files": {
+    "SM_Conveyor_Frame": "UnrealParts/SM_Conveyor_Frame.fbx",
+    "SM_Conveyor_Roller": "UnrealParts/SM_Conveyor_Roller.fbx",
+    "SM_Conveyor_TurntableBase": "UnrealParts/SM_Conveyor_TurntableBase.fbx",
+    "SM_Conveyor_TurntableRotor": "UnrealParts/SM_Conveyor_TurntableRotor.fbx"
+  },
+  "collision": {
+    "SM_Conveyor_Frame": 25,
+    "SM_Conveyor_Roller": 1,
+    "SM_Conveyor_TurntableBase": 71,
+    "SM_Conveyor_TurntableRotor": 46
+  },
+  "physics": "No deck carrying-plane collider. Separate finite-torque driven roller bodies supply contact.",
+  "turntable_reference_cm": {
+    "date": "2026-10-21",
+    "roller_diameter": 200,
+    "base_outer_diameter": 230,
+    "surface_height": 40,
+    "base_origin": "floor at rotary centre",
+    "rotor_origin": "mechanical axis, component at Z35cm",
+    "base_pedestal_top": 22,
+    "rotor_low_hub_bottom": 25,
+    "rotor_disc_top": 30,
+    "saddle_top": 33.5,
+    "roller_count": 21,
+    "roller_radius": 3,
+    "roller_centre_z": 37,
+    "roller_pitch": 9.5,
+    "roller_width": "2*sqrt(10000-(abs(x)+3)^2)-4 cm; x=-95..95 cm",
+    "rotor_mass_kg": 80,
+    "roller_mass_kg": 8,
+    "contact": "Cargo contacts native rollers; low rotor and base do not cover the carrying plane"
+  },
+  "frame_photoeye_x_cm": [
+    -100,
+    100
+  ]
+}

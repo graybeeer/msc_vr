@@ -61,7 +61,7 @@ AWarehouseChargingStation::AWarehouseChargingStation()
 
 bool AWarehouseChargingStation::IsDocked(const AWarehouseForklift* Vehicle) const
 {
- return IsValid(Vehicle) && FVector::Dist(Vehicle->GetActorLocation(),GetActorLocation())<=1.f &&
+ return IsValid(Vehicle) && FVector::Dist(Vehicle->GetActorLocation(),GetActorLocation())<=FMath::Clamp(DockPositionToleranceCm,.1f,5.f) &&
   Vehicle->GetActorUpVector().Z>.999f && GetActorUpVector().Z>.999f &&
   FVector::DotProduct(Vehicle->GetActorForwardVector(),GetActorForwardVector())>=FMath::Cos(FMath::DegreesToRadians(.5f));
 }

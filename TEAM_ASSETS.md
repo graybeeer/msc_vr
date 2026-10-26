@@ -143,6 +143,7 @@ C++ 빌드 후 일반 Unreal Editor의 **Tools → Execute Python Script...**에
 | 게임용 수정 지게차 메시·재질 | `Content/Warehouse/AGV/`의 최종 에셋을 Git으로 받음. 다른 지게차 팩 다운로드 불필요 |
 | 플레이어·작업자 기본 캐릭터, 맵, 코드, 복층·승강기 구성 | 프로젝트 Git에 포함됨 |
 | 자체 제작 팔레트 전용 승강기 | `Art/Equipment/PalletLift/`의 Blender 원본·부품 FBX와 `Content/Warehouse/PalletLift/`의 최종 메시·재질. 추가 Fab 다운로드 불필요 |
+| 자체 제작 컨베이어·회전 이송대·4층 화물 승강기 확장 | `Art/Equipment/Conveyor/`, `Art/Equipment/PalletLiftExtensions/` 원본·FBX와 `Content/Warehouse/Conveyor/`, `Content/Warehouse/PalletLift/Meshes/`의 완성 메시. 추가 외부 다운로드 불필요 |
 | 기존 Poly Haven 상자·크레이트 | `Content/Warehouse/Cargo/PolyHaven/`가 Git에 포함됨. 현재 배치 화물은 위의 Fab 상자 팩을 사용 |
 | 충돌 복사본, 파손용 물리 메시, 열린 트럭 파생 메시 | 위 4절의 스크립트로 로컬 생성. 별도 구매할 에셋이 아님 |
 | 기둥·보·난간 후보로 전에 검색했던 다른 팩 | 현재 맵의 필수 다운로드 목록에 포함되지 않음 |
@@ -166,6 +167,21 @@ C++ 빌드 후 일반 Unreal Editor의 **Tools → Execute Python Script...**에
 일반 설치는 Git의 완성 에셋을 사용한다. 모델 수정 시 Blender5.2의 전용 백그라운드 프로세스에서 `Scripts/build_pallet_lift.py`를 실행하면 `Art/Equipment/PalletLift/`에 원본·FBX·재질 명세·미리보기가 생성된다. 이 스크립트는 해당 프로세스의 장면을 초기화하므로 사용자가 편집 중인 Blender 장면에서 실행하지 않는다.
 
 그다음 C++ 빌드를 마친 프로젝트의 Unreal Python에서 `Scripts/apply_pallet_lift.py`를 실행한다. 자체 PBR 재질과 세 부품을 임포트하고 기존 범용 승강기의 자세·부품을 비교해 보존하면서 별도 화물용을 배치한다. 준비된 메시를 재사용하므로 FBX 자체를 수정했으면 에디터 실행 인수 `-PalletLiftReimport`를 지정한다. 새 샤프트에 걸치는 바닥만 실제로 분할 저장하며 재실행은 설치된 위치를 유지한다. 새 위치에서의 실험은 게임의 배치 모드를 사용한다. 동적 적재대·문은 FBX에 포함된 개별 볼록 충돌체, 정적 프레임은 삼각형 충돌을 사용한다. 장비 사용·규격·검증 범위는 [MEZZANINE.md](MEZZANINE.md)가 담당한다.
+
+## 컨베이어·4층 화물 승강기 확장 재생성
+
+일반 설치는 Git의 완성 메시를 사용한다. 원본을 수정할 때는 전용 백그라운드 Blender5.2에서 `Scripts/build_conveyor_model.py`를 실행한다. `Scripts/build_pallet_lift.py`의 `--transport-extensions --skip-render` 인수는 기존 3층 모델을 덮어쓰지 않고 별도 `PalletLiftExtensions` 폴더에 4층 프레임과 구동 롤러용 캐리어를 만든다.
+
+컨베이어 제작 스크립트의 `--turntable-only`는 `SM_Conveyor_TurntableBase.fbx`·`SM_Conveyor_TurntableRotor.fbx`, 별도 `conveyor_turntable.blend`와 `Conveyor_Turntable_Preview.png`만 생성하고 기존 직선 모델을 유지한다. `--frame-only --skip-render`는 직선 프레임만 다시 내보내며 롤러 FBX를 유지한다. 두 경로 모두 `manifest.json`의 다른 모델 항목을 보존한다. 일반 직선 원본은 `conveyor.blend`, 미리보기는 `Conveyor_Preview.png`다. 이 스크립트도 사용자가 편집 중인 Blender 장면에서 실행하지 않는다.
+
+컨베이어 포트와 문턱의 실제 간섭을 해소한 전용 샤프트는 `SM_PalletLift_FramePowered3.fbx`·`SM_PalletLift_FramePowered4.fbx`다. `PalletLiftExtensions` 폴더에 별도로 생성하며 기존 프레임·캐리어·문 출력은 유지한다. 프로젝트 루트에서 다음 두 명령을 각각 실행한다. 물리적 간격의 기준은 [PHYSICS.md](PHYSICS.md#자동-컨베이어와-승강기-롤러의-가정)에 둔다.
+
+```powershell
+& 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' --background --factory-startup --python .\Scripts\build_pallet_lift.py -- --powered-shaft-only --floors=3 --skip-render
+& 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' --background --factory-startup --python .\Scripts\build_pallet_lift.py -- --powered-shaft-only --floors=4 --skip-render
+```
+
+프로젝트 C++ 빌드 후 PIE가 꺼진 Unreal Python에서 `Scripts/install_warehouse_transport_lab.py`를 실행하면 확장 메시를 임포트하고 별도 실험 맵만 저장한다. FBX 수정 후 재임포트하려면 에디터 시작 인수 `-TransportModelReimport`를 추가한다. 기본 맵·시작 설정·기존 3층 메시를 저장하거나 재생성하지 않는다. 조작·연결 한계·실험 맵 위치는 [창고 안내](WAREHOUSE.md#자동-컨베이어)를 따른다.
 
 ## Game Animation Sample 설치
 

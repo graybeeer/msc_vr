@@ -4,6 +4,7 @@
 #include "WarehouseElevator.generated.h"
 
 class AWarehouseForklift;
+class UStaticMesh;
 class UStaticMeshComponent;
 class UTextRenderComponent;
 class UPhysicsConstraintComponent;
@@ -22,12 +23,19 @@ class MSC_VR_API AWarehouseElevator : public AActor
  GENERATED_BODY()
 public:
  AWarehouseElevator();
+ virtual void OnConstruction(const FTransform& Transform) override;
+ // Model replacement is an editor operation; live guides keep their native bodies.
+ UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Elevator|Model") bool bUseCargoModel=false;
+ UFUNCTION(BlueprintCallable, CallInEditor, Category="Elevator|Model") void ApplyCargoModel();
+ UFUNCTION(BlueprintCallable, Category="Elevator|Model") static void ConfigureModelCollision(UStaticMesh* Mesh,FName Part);
  virtual void BeginPlay() override;
  virtual void Tick(float DeltaSeconds) override;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator") bool bPowerAvailable=true;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator") bool bEStopReleased=true;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator") bool bDoorSensorsHealthy=true;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator") bool bLevelSensorHealthy=true;
+ UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Elevator", meta=(ClampMin="1",ClampMax="4")) int32 FloorCount=3;
+ UFUNCTION(BlueprintCallable, Category="Elevator") bool SetFloorCount(int32 Count);
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator", meta=(ClampMin="1",ClampMax="2000")) float RatedMassKg=2000;
  // Project assumption; actual manufacturer speed depends on the supplied configuration.
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Elevator", meta=(ClampMin="1",ClampMax="50")) float TravelSpeedCm=35;
@@ -48,8 +56,10 @@ public:
  UFUNCTION(BlueprintPure, Category="Elevator") FString CheckInterlocks() const;
  UFUNCTION(BlueprintPure, Category="Elevator") bool CanEnter(AWarehouseForklift* Vehicle) const;
  UFUNCTION(BlueprintPure, Category="Elevator") bool CanExit(AWarehouseForklift* Vehicle) const;
+ UFUNCTION(BlueprintPure, Category="Elevator") bool AreLandingDoorsClosed() const;
  // PLC-authorized deck support only; never a world/unknown-ground query.
  bool TraceCertifiedPlatformSupport(AWarehouseForklift* Vehicle,FVector Point,FHitResult& Support) const;
+ bool IsCertifiedLandingSeam(AWarehouseForklift* Vehicle,const UStaticMeshComponent* Wheel,const FHitResult& Contact) const;
  UFUNCTION(BlueprintCallable, Category="Elevator") bool RequestTransfer(AWarehouseForklift* Vehicle,int32 FromFloor,int32 ToFloor);
  UFUNCTION(BlueprintCallable, Category="Elevator") bool ConfirmBoarded(AWarehouseForklift* Vehicle);
  UFUNCTION(BlueprintCallable, Category="Elevator") bool ConfirmExited(AWarehouseForklift* Vehicle);
@@ -58,6 +68,10 @@ private:
  UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> Platform;
  UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UStaticMeshComponent>> Gates;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UTextRenderComponent> Display;
+ UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UStaticMeshComponent>> CargoParts;
+ UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> CargoCabin;
+ UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> CargoDeckVisual;
+ UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UStaticMeshComponent>> CargoDeckSupports;
  UPROPERTY(Transient) TObjectPtr<UPhysicsConstraintComponent> PlatformJoint;
  UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> GuideAnchor;
  UPROPERTY(Transient) TArray<TObjectPtr<UPhysicsConstraintComponent>> DoorJoints;
@@ -66,6 +80,10 @@ private:
  float DoorOpening=0;
  int32 EntryFloor=0;
  bool bBoarded=false;
+ bool bCargoModelApplied=false;
+ void UpdateCargoModelFloors();
+ void ConfigureFloors();
+ float StrokeHalfHeight() const { return (FloorCount-1)*200.f; }
  bool PortalClear() const;
  bool CabinClear() const;
  bool FitsInside(AWarehouseForklift* Vehicle) const;

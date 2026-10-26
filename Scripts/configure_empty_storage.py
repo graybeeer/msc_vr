@@ -44,7 +44,7 @@ def configure_empty_storage():
             members.append(actor)
         if prefix not in profile_names:
             specs.append(unreal.WarehouseStrength(name=prefix,members=members,
-                physics_meshes=list(reference.physics_meshes),failure=unreal.WarehouseFailure.RACK,
+                physics_meshes=list(reference.physics_meshes)[:8],failure=unreal.WarehouseFailure.RACK,
                 mass_kg=reference.mass_kg,rated_load_kg=reference.rated_load_kg,
                 level_capacity_kg=reference.level_capacity_kg,
                 impact_yield_j=reference.impact_yield_j,impact_failure_j=reference.impact_failure_j,
@@ -67,6 +67,8 @@ def configure_empty_storage():
                     impact_yield_j=120.,impact_failure_j=900.,overload_seconds=10.))
     system.modify()
     system.set_editor_property('objects',specs)
+    from configure_unified_racks import configure_unified_racks
+    configure_unified_racks()
     print('EMPTY_STORAGE_CONFIGURED',len(RACKS),'empty bays;',len(STACKS)*STACK_HEIGHT,'empty pallets')
     return named
 

@@ -35,6 +35,8 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Inbound") FString Status;
  UFUNCTION(BlueprintCallable, Category="Inbound") void ScanInbound();
  UFUNCTION(BlueprintPure, Category="Inbound") bool ContainsPallet(const AWarehousePallet* Pallet) const;
+ // Repeat experiments supply the orders; receiving inspection and wrapping still run normally.
+ bool bExternalDispatchOnly=false;
 private:
  struct FReservation
  {

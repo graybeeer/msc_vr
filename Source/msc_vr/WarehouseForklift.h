@@ -84,7 +84,7 @@ public:
  UFUNCTION(BlueprintPure, Category="Autonomy") bool IsFloorFootprintValid(AWarehousePallet* Pallet,const FTransform& Reference,bool Refresh=true) const;
  UFUNCTION(BlueprintPure, Category="Autonomy") bool IsFloorPlacementValid(AWarehousePallet* Pallet,const FTransform& Destination,bool bForksStillInserted=false,bool Refresh=true) const;
  UFUNCTION(BlueprintCallable, Category="Autonomy") bool PlanAutonomousRoute(const FTransform& Goal);
- UFUNCTION(BlueprintCallable, Category="Layout") void RefreshAfterLayout();
+ UFUNCTION(BlueprintCallable, Category="Layout") void RefreshAfterLayout(bool PublishTaskLocation=true);
  UFUNCTION(BlueprintPure, Category="Autonomy") FString CheckSystems(bool bIncludeAutonomySensors=true) const;
  UFUNCTION(BlueprintPure, Category="Perception") bool NavigationClearForDiagnostics(const FTransform& Pose) const;
  UFUNCTION(BlueprintPure, Category="Perception") bool IsSensorSamplingSuppressed() const;
@@ -151,6 +151,9 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Traffic") bool bTrafficYielding=false;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Traffic") FString TrafficStatus;
 private:
+ friend class FWarehouseExperimentMetrics;
+ // Observation only: set by the existing gate; never used to decide motion.
+ bool bExperimentSensorWaiting=false;
  friend class AWarehouseFleetCoordinator;
  friend class AWarehouseLayoutEditor;
  UPROPERTY(Transient) TObjectPtr<UAgvShadowSensorsComponent> SensorKit;

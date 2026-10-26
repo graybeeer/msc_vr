@@ -126,6 +126,7 @@ def tick(dt):
             pc.toggle_warehouse_menu();assert pc.is_warehouse_menu_open() and pc.is_move_input_ignored()
             pc.toggle_warehouse_menu();assert not pc.is_warehouse_menu_open() and not pc.is_move_input_ignored()
             pc.toggle_observer_view();assert pc.is_observer_view() and pc.is_move_input_ignored()
+            pc.set_layout_editing(False)
             assert pc.get_view_target()!=char and pc.get_controlled_pawn()==char,'Observer took over character'
             assert (char.get_actor_location()-original).length()<.1,'Observer moved character'
             pc.toggle_observer_view();assert pc.get_view_target()==char and not pc.is_move_input_ignored()

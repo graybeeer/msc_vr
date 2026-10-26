@@ -10,6 +10,7 @@
 #include "WarehouseChargingStation.h"
 #include "WarehouseWaitingBay.h"
 #include "WarehouseElevator.h"
+#include "WarehouseConveyor.h"
 #include "WarehouseLogisticsTruck.h"
 #include "Components/PrimitiveComponent.h"
 #include "EngineUtils.h"
@@ -75,8 +76,11 @@ bool UAgvShadowSensorsComponent::BuildSensors()
 
 bool UAgvShadowSensorsComponent::IsBuildingMapComponent(const UPrimitiveComponent* Component)
 {
-	if (!WarehousePhysics::IsPhysicalContact(Component) || !Component->IsQueryCollisionEnabled() || Component->IsSimulatingPhysics()) return false;
+	if (!WarehousePhysics::IsPhysicalContact(Component) || !Component->IsQueryCollisionEnabled()) return false;
 	const AActor* Actor = Component->GetOwner();
+	// A conveyor roller rotates on a fixed machine axle. Its mounted envelope
+	// belongs to the facility map; independent cargo never inherits that owner.
+	if (Component->IsSimulatingPhysics() && (!Actor || !Actor->IsA<AWarehouseConveyor>())) return false;
 	if (!Actor || (!Actor->ActorHasTag(TEXT("WarehouseMapStructure")) && !Component->ComponentHasTag(TEXT("WarehouseMapStructure")) &&
 		!Actor->ActorHasTag(TEXT("LayoutType:Rack")))) return false;
 	if (Actor->IsA<APawn>() || Actor->IsA<AWarehouseWorker>() || Actor->IsA<AWarehouseCargo>() ||

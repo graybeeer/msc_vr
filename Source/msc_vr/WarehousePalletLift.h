@@ -22,12 +22,19 @@ class MSC_VR_API AWarehousePalletLift : public AActor
  GENERATED_BODY()
 public:
  AWarehousePalletLift();
+ virtual void OnConstruction(const FTransform& Transform) override;
  virtual void BeginPlay() override;
  virtual void Tick(float DeltaSeconds) override;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Pallet Lift") bool bPowerAvailable=true;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Pallet Lift") bool bEStopReleased=true;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Pallet Lift") bool bDoorSensorsHealthy=true;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Pallet Lift") bool bLevelSensorHealthy=true;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Pallet Lift",meta=(ClampMin="1",ClampMax="4")) int32 FloorCount=3;
+ UFUNCTION(BlueprintCallable,Category="Pallet Lift") bool SetFloorCount(int32 Count);
+ // Opt-in powered roller carrier; legacy manually loaded lifts keep their original mesh/physics.
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Pallet Lift|Conveyor") bool bPoweredConveyor=false;
+ UFUNCTION(BlueprintCallable,Category="Pallet Lift|Conveyor") bool SetPoweredConveyor(bool Enabled);
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Pallet Lift|Conveyor") TObjectPtr<AActor> ReservedConveyor;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Pallet Lift",meta=(ClampMin="1",ClampMax="2000")) float RatedMassKg=2000.f;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Pallet Lift",meta=(ClampMin="1",ClampMax="50")) float TravelSpeedCm=35.f;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Pallet Lift") float ConveyorHeightCm=40.f;
@@ -53,6 +60,14 @@ public:
  UFUNCTION(BlueprintCallable,Category="Pallet Lift") bool RequestTransfer(AWarehousePallet* Pallet,int32 FromFloor,int32 ToFloor);
  UFUNCTION(BlueprintCallable,Category="Pallet Lift") bool CallToFloor(int32 Floor);
  UFUNCTION(BlueprintCallable,Category="Pallet Lift") bool TryInteract(int32 PlayerFloor);
+ UFUNCTION(BlueprintPure,Category="Pallet Lift|Conveyor") bool IsLandingOpen(int32 Floor) const;
+ // Actual deck/roller bearing, shared with the independent infeed controller.
+ bool HasPlatformSupport(AWarehousePallet* Pallet) const;
+ UFUNCTION(BlueprintCallable,Category="Pallet Lift|Conveyor") bool ReserveConveyor(AActor* Requester);
+ UFUNCTION(BlueprintCallable,Category="Pallet Lift|Conveyor") void ReleaseConveyor(AActor* Requester);
+ UFUNCTION(BlueprintCallable,Category="Pallet Lift|Conveyor") bool CallForConveyor(AActor* Requester,int32 Floor);
+ UFUNCTION(BlueprintCallable,Category="Pallet Lift|Conveyor") bool RequestConveyorTransfer(AActor* Requester,AWarehousePallet* Pallet,int32 FromFloor,int32 ToFloor);
+ UFUNCTION(BlueprintCallable,Category="Pallet Lift|Conveyor") bool CommandCarrierConveyor(AActor* Requester,float SpeedCm);
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Pallet Lift") TObjectPtr<UStaticMeshComponent> Frame;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Pallet Lift") TObjectPtr<UStaticMeshComponent> Platform;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Pallet Lift") TArray<TObjectPtr<UStaticMeshComponent>> Gates;
@@ -62,6 +77,11 @@ private:
  UPROPERTY(Transient) TArray<TObjectPtr<UPhysicsConstraintComponent>> GateJoints;
  UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> GuideAnchor;
  UPROPERTY(Transient) TArray<TObjectPtr<AActor>> Payload;
+ UPROPERTY(Transient) TArray<TObjectPtr<UStaticMeshComponent>> CarrierRollers;
+ UPROPERTY(Transient) TArray<TObjectPtr<UPhysicsConstraintComponent>> CarrierRollerJoints;
+ float CarrierCommandCm=0.f;
+ float CarrierRampedCm=0.f;
+ float CarrierCommandAge=1.f;
  float PlatformTopOffsetCm=5.f;
  float PlatformHeightCm=40.f;
  float PlatformTargetCm=40.f;
@@ -71,7 +91,6 @@ private:
  bool bLoadedTransfer=false;
  FString LoadInterlock;
  FString ValidateLoad(AWarehousePallet* Pallet,TArray<AActor*>& Loads,float& MassKg) const;
- bool HasPlatformSupport(AWarehousePallet* Pallet) const;
  bool PortalClear() const;
  bool CabinFreeOfPeopleAndVehicles() const;
  bool AllDoorsClosed() const;
@@ -82,4 +101,12 @@ private:
  void SetState(EWarehousePalletLiftState Next,const FString& Message);
  void ShowStatus(const FString& Message);
  FString CheckInterlocks() const;
+ bool AcceptTransfer(AWarehousePallet* Pallet,int32 FromFloor,int32 ToFloor);
+ bool CallEmpty(int32 Floor);
+ void ConfigureTower();
+ void ConfigureCarrierRollers();
+ void ConfigureGateGuides();
+ void DriveCarrierRollers(float Dt);
+ int32 ActiveGateCount() const { return FMath::Min(Gates.Num(),FloorCount*2); }
+ float StrokeHalfHeight() const { return (FloorCount-1)*200.f; }
 };

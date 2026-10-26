@@ -1,5 +1,6 @@
 #include "WarehouseComputer.h"
 #include "WarehousePerformance.h"
+#include "WarehouseExperimentMetrics.h"
 #include "WarehouseCargo.h"
 #include "WarehousePallet.h"
 #include "WarehouseForklift.h"
@@ -361,6 +362,7 @@ bool AWarehouseComputer::CancelQueuedJob(const FString& JobId)
    Task->State=TEXT("취소됨");Task->bCancelled=true;Task->FinishedSimulationSeconds=GetWorld()->GetTimeSeconds();
    Task->ElapsedSimulationSeconds=GetTaskElapsedSeconds(JobId);
   }
+  FWarehouseExperimentMetrics::NotifyCancelled(GetWorld(),JobId);
   LastMessage=TEXT("대기 작업을 취소했습니다.");RefreshState();return true;
  }
  LastMessage=TEXT("관제 컴퓨터의 대기 작업만 취소할 수 있습니다. 진행 중이면 차량을 일시정지하세요.");return false;

@@ -44,7 +44,7 @@ def tick(dt):
             assert len(initial)==311
             parts=[named['MZ_L2_Deck_Right'],named['MZ_L3_Deck_Right'],named['WH_Roof']]
             states=[render_state(a) for a in parts]
-            pc=unreal.GameplayStatics.get_player_controller(game,0);pc.toggle_observer_view()
+            pc=unreal.GameplayStatics.get_player_controller(game,0);pc.toggle_observer_view();pc.set_layout_editing(False)
             shot=named['MezzaninePreview'].get_component_by_class(unreal.SceneCaptureComponent2D)
             unreal.RenderingLibrary.export_render_target(game,shot.texture_target,'C:/msc_UnrealProject/msc_vr/Saved','MezzanineInterior.png')
             shot.set_editor_property('capture_every_frame',False)
@@ -83,6 +83,7 @@ def tick(dt):
             pc.toggle_observer_view();assert not pc.is_observer_view()
             assert states==[render_state(a) for a in parts]
             pc.set_observer_floor(-1)
+            pc.set_layout_editing(False)
             unstable=[a.get_actor_label() for a,c in initial.items() if (a.get_actor_bounds(False)[0]-c).length()>12]
             assert not unstable,('Unstable initial cargo',[(a.get_actor_label(),initial[a],a.get_actor_bounds(False)[0]) for a in initial if a.get_actor_label() in unstable])
             failed=[s.name for s in system.get_editor_property('objects') if s.get_editor_property('failed')]

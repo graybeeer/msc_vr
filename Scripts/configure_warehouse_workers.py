@@ -6,7 +6,8 @@ PLAYER='/Game/FirstPerson/Blueprints/BP_FirstPersonCharacter.BP_FirstPersonChara
 # Positions are feet positions in centimetres. Keep the central and right AGV lanes clear.
 WORKERS=(
     ('Receiving','입고·검수',(760,1500,0),180),
-    ('Picking','피킹',(-1030,-700,0),180),
+    # Picking is planned; preserve the saved worker key while showing its current role.
+    ('Picking','보관·보충',(-1030,-700,0),180),
     ('Packing','포장·출고 준비',(-720,-1390,0),130),
     ('Loading','상하차 담당',(-450,-2280,0),-90),
     ('Control','운영·관제',(-1280,1600,0),45),

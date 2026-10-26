@@ -133,7 +133,7 @@ def tick(dt):
             assert blocked.get_editor_property('bEmergencyBlocked'),blocked.status
             if alert_stage==0 and 'Blocked' in pc.get_editor_property('EmergencyAlertText'):
                 assert pc.get_editor_property('EmergencyAlarmCount')>=1
-                pc.toggle_observer_view();pc.toggle_warehouse_menu()
+                pc.toggle_observer_view();pc.set_layout_editing(False);pc.toggle_warehouse_menu()
                 alert_stage=1;alert_at=now
                 if CAPTURE:
                     unreal.SystemLibrary.execute_console_command(game,'Shot showui -nosuffix filename=C:/msc_UnrealProject/msc_vr/Saved/Testing/ForkliftEmergencyAlert.png')
