@@ -631,7 +631,9 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  // the insertion window (VerifyInsertion still checks the exact fit).
  const bool IntermediatePivot=CVarOptIntermediatePivot.GetValueOnGameThread()!=0 && SegmentEnd+1<PlannedRoute.Num()-1 && PlannedRoute[SegmentEnd+1].bPivot;
  const bool RelaxedAlign=CVarOptAlign.GetValueOnGameThread()!=0 && AIState==EWarehouseAIState::AlignVehicle;
- const float PositionTolerance=ChargingAlignment && SegmentEnd==PlannedRoute.Num()-1 ? .5f : AIState==EWarehouseAIState::AlignUnload ? 1.5f : RelaxedAlign ? 7.f : IntermediatePivot ? 12.f : (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery) ? FMath::Max(5.f,CVarOptArrivalTol.GetValueOnGameThread()) : 5.f;
+ // AGV localization: the vehicle reaches fork alignment from a slightly different place; a 7cm alignment then left
+ // more than the insertion line's 5cm lateral limit (ROUTE MISALIGNED loop, 2026-10-27), so it aligns within 4cm.
+ const float PositionTolerance=ChargingAlignment && SegmentEnd==PlannedRoute.Num()-1 ? .5f : AIState==EWarehouseAIState::AlignUnload ? 1.5f : RelaxedAlign ? (bUseAgvLocalization ? 4.f : 7.f) : IntermediatePivot ? 12.f : (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery) ? FMath::Max(5.f,CVarOptArrivalTol.GetValueOnGameThread()) : 5.f;
  // Inside the charging capture region align to its fixed line heading before
  // handing off. Chasing a sub-centimetre point bearing repeatedly slews the
  // real steering spindle and can drift out of the docking lateral envelope.
