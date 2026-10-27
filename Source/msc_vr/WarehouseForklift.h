@@ -81,6 +81,8 @@ public:
  UFUNCTION(BlueprintPure, Category="AGV Localization") FTransform NavigationTransform() const;
  /** True when bUseAgvLocalization and the estimate is lost or not yet available (OutReason says which). */
  bool AgvLocalizationBlocked(FString& OutReason) const;
+ /** True when route travel actually runs on the estimate (switch on and a map to localize against). */
+ bool AgvEstimateInUse() const;
  // Read-only presentation of the remaining plan; does not plan, sense or command motion.
  UFUNCTION(BlueprintPure, Category="Warehouse|Display") TArray<FVector> GetDisplayRoute() const;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") TArray<FWarehouseJobReport> JobReports;

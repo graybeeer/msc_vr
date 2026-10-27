@@ -636,7 +636,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  // heading window as well made the second inbound job end in RECOVERY WITHDRAW BLOCKED; the heading stays at 1.5.
  // Lane corners likewise: arriving from the estimate 8-12cm off the line, a 12cm hand-over left the pivot beside a rack
  // (OBSTACLE / TURN CLEARANCE x3), so the corner is finished within 6cm on the exact pose.
- const float PositionTolerance=ChargingAlignment && SegmentEnd==PlannedRoute.Num()-1 ? .5f : AIState==EWarehouseAIState::AlignUnload ? 1.5f : RelaxedAlign ? (bUseAgvLocalization ? 4.f : 7.f) : IntermediatePivot ? (bUseAgvLocalization ? 6.f : 12.f) : (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery) ? FMath::Max(5.f,CVarOptArrivalTol.GetValueOnGameThread()) : 5.f;
+ const float PositionTolerance=ChargingAlignment && SegmentEnd==PlannedRoute.Num()-1 ? .5f : AIState==EWarehouseAIState::AlignUnload ? 1.5f : RelaxedAlign ? (AgvEstimateInUse() ? 4.f : 7.f) : IntermediatePivot ? (AgvEstimateInUse() ? 6.f : 12.f) : (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery) ? FMath::Max(5.f,CVarOptArrivalTol.GetValueOnGameThread()) : 5.f;
  // Inside the charging capture region align to its fixed line heading before
  // handing off. Chasing a sub-centimetre point bearing repeatedly slews the
  // real steering spindle and can drift out of the docking lateral envelope.

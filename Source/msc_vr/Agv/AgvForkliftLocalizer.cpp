@@ -926,6 +926,12 @@ FTransform AWarehouseForklift::NavigationTransform() const
 	return Localizer && Localizer->GetEstimatedActorTransform(Estimated, true) ? Estimated : GetActorTransform();
 }
 
+bool AWarehouseForklift::AgvEstimateInUse() const
+{
+	const UAgvForkliftLocalizerComponent* Localizer = bUseAgvLocalization ? FindComponentByClass<UAgvForkliftLocalizerComponent>() : nullptr;
+	return Localizer && !Localizer->HasNoMap();
+}
+
 bool AWarehouseForklift::AgvLocalizationBlocked(FString& OutReason) const
 {
 	const UAgvForkliftLocalizerComponent* Localizer = bUseAgvLocalization ? FindComponentByClass<UAgvForkliftLocalizerComponent>() : nullptr;
