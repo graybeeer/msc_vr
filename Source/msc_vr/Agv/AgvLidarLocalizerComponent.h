@@ -2,25 +2,11 @@
 
 #include "CoreMinimal.h"
 #include "AgvLocalizerComponent.h"
+#include "AgvScanMatching.h"
 #include "AgvLidarLocalizerComponent.generated.h"
 
 class UAgvLidarComponent;
 class UAgvTricycleDriveComponent;
-
-/** 2D map the vehicle localizes against: distance (cm) from each cell to the nearest obstacle, capped. */
-struct FAgvDistanceMap
-{
-	FVector2D Origin = FVector2D::ZeroVector; // world position of cell (0, 0)'s corner
-	double CellCm = 5.0;
-	int32 Width = 0;
-	int32 Height = 0;
-	double CapCm = 50.0;
-	int32 OccupiedCells = 0;
-	TArray<float> Distance;
-
-	/** Bilinear distance at a world point; CapCm outside the map. */
-	double Sample(const FVector2D& Point) const;
-};
 
 /**
  * Pose from what a real AGV has: wheel odometry (drive wheel encoder + steering encoder, with calibration errors and
