@@ -364,6 +364,8 @@ bool UAgvForkliftLocalizerComponent::EnsureMap()
 		}
 		if (!Extent.bIsValid)
 		{
+			// Nothing to localize against (e.g. a test scene with only a floor slab): every match is rejected.
+			UE_LOG(LogAgvForkliftLoc, Warning, TEXT("AGV_LOC_MAP_EMPTY %s no known structure between %.0f and %.0f cm"), *Forklift->GetName(), Low, High);
 			return Built;
 		}
 		const double Cell = Built->CellCm;
