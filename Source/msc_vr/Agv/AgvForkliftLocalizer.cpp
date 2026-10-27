@@ -363,6 +363,39 @@ void UAgvForkliftLocalizerComponent::StepOdometry(float Dt)
 	SideSlipResidualCm = (float)FMath::Sqrt(SideResidualSquared);
 }
 
+bool UAgvForkliftLocalizerComponent::EnsureLocalizationScanners()
+{
+	if (!LocalizationScanners.IsEmpty())
+	{
+		return true;
+	}
+	// Copies of the side safety scanners (same mount, model, field and noise model; own noise seeds).
+	for (const UAgvLidarComponent* Source : SensorKit->Lidars)
+	{
+		if (!Source || (Source->GetName() != TEXT("AgvShadowScannerL") && Source->GetName() != TEXT("AgvShadowScannerR")))
+		{
+			continue;
+		}
+		UAgvLidarComponent* Scanner = NewObject<UAgvLidarComponent>(Forklift, *(Source->GetName().Replace(TEXT("AgvShadow"), TEXT("AgvLocalization"))));
+		Scanner->SetupAttachment(Source->GetAttachParent());
+		Scanner->SetRelativeTransform(Source->GetRelativeTransform());
+		Scanner->bUseForLocalization = false;
+		Scanner->HorizontalFovDeg = Source->HorizontalFovDeg;
+		Scanner->HorizontalResolutionDeg = Source->HorizontalResolutionDeg;
+		Scanner->Channels = Source->Channels;
+		Scanner->VerticalMinDeg = Source->VerticalMinDeg;
+		Scanner->VerticalMaxDeg = Source->VerticalMaxDeg;
+		Scanner->MinRangeCm = Source->MinRangeCm;
+		Scanner->MaxRangeCm = Source->MaxRangeCm;
+		Scanner->RangeNoiseCm = Source->RangeNoiseCm;
+		Scanner->DropoutProbability = Source->DropoutProbability;
+		Scanner->NoiseSeed = Source->NoiseSeed + 1000;
+		Scanner->RegisterComponent();
+		LocalizationScanners.Add(Scanner);
+	}
+	return !LocalizationScanners.IsEmpty();
+}
+
 bool UAgvForkliftLocalizerComponent::EnsureMap()
 {
 	if (Map && SensorKit->MapRevision == SeenMapRevision)
@@ -477,11 +510,41 @@ bool UAgvForkliftLocalizerComponent::EnsureMap()
 
 void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 {
-	if (!SensorKit || !SensorKit->bSnapshotValid || SensorKit->SnapshotCount == SeenSnapshot)
+	// Scans come from the vehicle's one-second observation snapshot (all five LiDARs) and, in between, from the two side
+	// safety scanners at LocalizationScanHz, as real AGVs localize with their safety scanners many times a second.
+	// Both pause while the observation frame is suspended (remote control, elevator ride, power, scanner fault).
+	if (!SensorKit || !SensorKit->bSnapshotValid)
 	{
 		return;
 	}
-	SeenSnapshot = SensorKit->SnapshotCount;
+	TArray<const UAgvLidarComponent*> Sources;
+	if (SensorKit->SnapshotCount != SeenSnapshot)
+	{
+		SeenSnapshot = SensorKit->SnapshotCount;
+		LocalizationScanClock = 0.0;
+		Sources.Append(SensorKit->Lidars);
+	}
+	else if (LocalizationScanHz > 0.f && Forklift->bSafetyScannerHealthy)
+	{
+		LocalizationScanClock += LastDt;
+		if (LocalizationScanClock < 1.0 / LocalizationScanHz || !EnsureLocalizationScanners())
+		{
+			return;
+		}
+		LocalizationScanClock = 0.0;
+		const double ScanStart = FPlatformTime::Seconds();
+		for (UAgvLidarComponent* Scanner : LocalizationScanners)
+		{
+			Scanner->CaptureSnapshot();
+			Sources.Add(Scanner);
+		}
+		LocalizationScanMilliseconds = (float)((FPlatformTime::Seconds() - ScanStart) * 1000.0);
+		++LocalizationScans;
+	}
+	if (Sources.IsEmpty())
+	{
+		return;
+	}
 	const double Start = FPlatformTime::Seconds();
 	const bool bHadNoMap = bNoMap;
 	const bool bHaveMap = EnsureMap();
@@ -507,9 +570,10 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	// The snapshot was taken in the vehicle's tick this frame, at the pose the odometry has now. Only range, beam
 	// angle and the fixed mount are used; the height band uses the floor the vehicle stands on.
 	const FTransform Actor = Forklift->GetActorTransform();
-	const double Low = SensorKit->SnapshotFloorZCm + MapMinZCm, High = SensorKit->SnapshotFloorZCm + MapMaxZCm;
+	// Points from low on the structure count too (the side scanners sweep 27 cm above the floor across rack posts).
+	const double Low = SensorKit->SnapshotFloorZCm + PointMinZCm, High = SensorKit->SnapshotFloorZCm + MapMaxZCm;
 	TArray<FVector2D> ScanPoints;
-	for (const UAgvLidarComponent* Lidar : SensorKit->Lidars)
+	for (const UAgvLidarComponent* Lidar : Sources)
 	{
 		if (!Lidar)
 		{
@@ -682,10 +746,10 @@ void UAgvForkliftLocalizerComponent::ResetStatistics()
 FString UAgvForkliftLocalizerComponent::Summary() const
 {
 	const int32 Matches = AcceptedMatches + RejectedMatches;
-	return FString::Printf(TEXT("%s %s: error mean %.1f p95 %.1f max %.1f cm, heading max %.2f deg (%d frames); matches %d/%d accepted, %d recovered, %.1f ms mean; lost %d (%d frames); reinit %d; encoder scale %.3f; side slip scale %.2f residual %.0f cm; map %d builds, last %.0f ms"),
+	return FString::Printf(TEXT("%s %s: error mean %.1f p95 %.1f max %.1f cm, heading max %.2f deg (%d frames); matches %d/%d accepted, %d recovered, %.1f ms mean; lost %d (%d frames); reinit %d; encoder scale %.3f; side slip scale %.2f residual %.0f cm; localization scans %d (last %.1f ms); map %d builds, last %.0f ms"),
 		Forklift ? *Forklift->GetName() : TEXT("?"), *StatusText, MeanErrorCm, P95ErrorCm, MaxErrorCm, MaxHeadingErrorDeg, ErrorSamples,
 		AcceptedMatches, Matches, RecoveredMatches, Matches ? MatchMillisecondsSum / Matches : 0.0, LostEvents, LostFrames, Reinitializations,
-		EncoderScale, SideSlipScale, SideSlipResidualCm, MapBuilds, MapBuildMilliseconds);
+		EncoderScale, SideSlipScale, SideSlipResidualCm, LocalizationScans, LocalizationScanMilliseconds, MapBuilds, MapBuildMilliseconds);
 }
 
 // --- Subsystem ----------------------------------------------------------------------------------------------------

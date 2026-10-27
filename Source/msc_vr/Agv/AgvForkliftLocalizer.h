@@ -8,6 +8,7 @@
 
 class AWarehouseForklift;
 class UAgvShadowSensorsComponent;
+class UAgvLidarComponent;
 class UPrimitiveComponent;
 class UCanvas;
 class APlayerController;
@@ -92,6 +93,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Odometry")
 	int32 NoiseSeed = 11;
 
+	/**
+	 * Localization scans per simulated second from the two side safety scanners, between the one-second observation
+	 * snapshots (0 = the snapshots only). One scan a second left 6-26 cm of odometry drift while accelerating and
+	 * braking (wheel spin and skid); the observation frame for obstacles stays at one second.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Localization", meta=(ClampMin="0"))
+	float LocalizationScanHz = 5.f;
+
+	/** Lowest return used for matching, above the floor (the side scanners sweep at 27 cm). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Map")
+	float PointMinZCm = 10.f;
+
 	// Map: known structure between these heights above the floor.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Map", meta=(ClampMin="1"))
 	float MapCellCm = 5.f;
@@ -175,6 +188,12 @@ public:
 	float TravelSinceMatchCm = 0.f;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
+	int32 LocalizationScans = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
+	float LocalizationScanMilliseconds = 0.f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
 	int32 MapBuilds = 0;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
@@ -229,6 +248,7 @@ private:
 	void StepOdometry(float Dt);
 	void CollectAndMatchScan();
 	bool EnsureMap();
+	bool EnsureLocalizationScanners();
 	void Measure();
 	void ToMap(const FVector2D& Position, double Yaw, FVector2D& OutPosition, double& OutYaw) const;
 	void SlewDrivingCorrection(float Dt);
@@ -238,6 +258,8 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UPrimitiveComponent> Body;
 	UPROPERTY(Transient) TObjectPtr<UPrimitiveComponent> DriveWheel;
 	UPROPERTY(Transient) TObjectPtr<UAgvShadowSensorsComponent> SensorKit;
+	UPROPERTY(Transient) TArray<TObjectPtr<UAgvLidarComponent>> LocalizationScanners;
+	double LocalizationScanClock = 0.0;
 
 	TSharedPtr<const FAgvDistanceMap> Map;
 	uint64 MapKey = 0;
