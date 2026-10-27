@@ -135,9 +135,19 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="3"))
 	int32 MinMatchPoints = 50;
 
-	/** A side-scanner-only match that would move the estimate farther than this is ignored (the full scans decide). */
+	/**
+	 * Side-scanner-only matches. Their 27 cm sweep meets pallet faces standing proud of the rack posts, which are not
+	 * on the map and pulled the estimate 3-5 cm sideways, scan after scan, up to 17 cm (2026-10-27): they count only
+	 * when they fit cleanly, at a reduced share, and never move the estimate far. The full one-second scans decide.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="1"))
-	float MaxPartialCorrectionCm = 30.f;
+	float MaxPartialCorrectionCm = 15.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="0", ClampMax="1"))
+	float MinPartialInlierRatio = 0.85f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="0.05", ClampMax="1"))
+	float PartialCorrectionGain = 0.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="1"))
 	int32 MatchIterations = 20;

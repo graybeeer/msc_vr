@@ -644,7 +644,7 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 		double NowYaw;
 		ToMap(OdomPosition, OdomYaw, Now, NowYaw);
 		const FVector2D Matched = AgvMath::Rotate(Th, OdomPosition) + FVector2D(Tx, Ty);
-		if (FVector2D::Distance(Now, Matched) > MaxPartialCorrectionCm)
+		if (Ratio < MinPartialInlierRatio || FVector2D::Distance(Now, Matched) > MaxPartialCorrectionCm)
 		{
 			Ratio = 0.0;
 			LastInlierRatio = 0.f;
@@ -655,8 +655,9 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 		FVector2D Before, After;
 		double BeforeYaw, AfterYaw;
 		ToMap(OdomPosition, OdomYaw, Before, BeforeYaw);
-		CorrectionOffset += (FVector2D(Tx, Ty) - CorrectionOffset) * CorrectionGain;
-		CorrectionYaw += AgvMath::Wrap(Th - CorrectionYaw) * CorrectionGain;
+		const double Gain = bPartialScan ? PartialCorrectionGain : CorrectionGain;
+		CorrectionOffset += (FVector2D(Tx, Ty) - CorrectionOffset) * Gain;
+		CorrectionYaw += AgvMath::Wrap(Th - CorrectionYaw) * Gain;
 		ToMap(OdomPosition, OdomYaw, After, AfterYaw);
 		LastCorrectionCm = (float)FVector2D::Distance(Before, After);
 		TravelSinceMatchCm = 0.f;
