@@ -634,7 +634,9 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  // AGV localization: the vehicle reaches fork alignment from a slightly different place; a 7cm alignment then left
  // more than the insertion line's 5cm lateral limit (ROUTE MISALIGNED loop, 2026-10-27), so it aligns within 4cm. A 0.8 degree
  // heading window as well made the second inbound job end in RECOVERY WITHDRAW BLOCKED; the heading stays at 1.5.
- const float PositionTolerance=ChargingAlignment && SegmentEnd==PlannedRoute.Num()-1 ? .5f : AIState==EWarehouseAIState::AlignUnload ? 1.5f : RelaxedAlign ? (bUseAgvLocalization ? 4.f : 7.f) : IntermediatePivot ? 12.f : (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery) ? FMath::Max(5.f,CVarOptArrivalTol.GetValueOnGameThread()) : 5.f;
+ // Lane corners likewise: arriving from the estimate 8-12cm off the line, a 12cm hand-over left the pivot beside a rack
+ // (OBSTACLE / TURN CLEARANCE x3), so the corner is finished within 6cm on the exact pose.
+ const float PositionTolerance=ChargingAlignment && SegmentEnd==PlannedRoute.Num()-1 ? .5f : AIState==EWarehouseAIState::AlignUnload ? 1.5f : RelaxedAlign ? (bUseAgvLocalization ? 4.f : 7.f) : IntermediatePivot ? (bUseAgvLocalization ? 6.f : 12.f) : (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery) ? FMath::Max(5.f,CVarOptArrivalTol.GetValueOnGameThread()) : 5.f;
  // Inside the charging capture region align to its fixed line heading before
  // handing off. Chasing a sub-centimetre point bearing repeatedly slews the
  // real steering spindle and can drift out of the docking lateral envelope.
