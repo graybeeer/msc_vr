@@ -586,7 +586,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  // a charging trip. It must not use the electrical approach's precision phase.
  const bool ChargingAlignment=!bTrafficYielding &&
   (AIState==EWarehouseAIState::NavigateCharge || (AIState==EWarehouseAIState::DockCharge && bDockPullout));
- const float HeadingTolerance=FMath::DegreesToRadians(ChargingAlignment && RouteIndex>=PlannedRoute.Num()-1 ? .2f : AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::ElevatorApproach ? .5f : (CVarOptAlign.GetValueOnGameThread()!=0 && AIState==EWarehouseAIState::AlignVehicle) ? 1.5f : 1.f);
+ const float HeadingTolerance=FMath::DegreesToRadians(ChargingAlignment && RouteIndex>=PlannedRoute.Num()-1 ? .2f : AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::ElevatorApproach ? .5f : (CVarOptAlign.GetValueOnGameThread()!=0 && AIState==EWarehouseAIState::AlignVehicle) ? (bUseAgvLocalization ? .8f : 1.5f) : 1.f);
  auto PivotRate=[&](float Error,float OldCap) { const bool Fast=CVarOptPivotRate.GetValueOnGameThread()!=0 && HeadingTolerance>=FMath::DegreesToRadians(1.f)-1e-4f &&
    (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery || AIState==EWarehouseAIState::NavigateParking); return FMath::Clamp(FMath::Abs(Error)*2.f,.02f,Fast ? (bSupportingPallet ? .3f : .4f) : OldCap); };
  if (FleetCoordinator && !FleetCoordinator->Permit(this)) return false;
@@ -632,7 +632,8 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  const bool IntermediatePivot=CVarOptIntermediatePivot.GetValueOnGameThread()!=0 && SegmentEnd+1<PlannedRoute.Num()-1 && PlannedRoute[SegmentEnd+1].bPivot;
  const bool RelaxedAlign=CVarOptAlign.GetValueOnGameThread()!=0 && AIState==EWarehouseAIState::AlignVehicle;
  // AGV localization: the vehicle reaches fork alignment from a slightly different place; a 7cm alignment then left
- // more than the insertion line's 5cm lateral limit (ROUTE MISALIGNED loop, 2026-10-27), so it aligns within 4cm.
+ // more than the insertion line's 5cm lateral limit (ROUTE MISALIGNED loop, 2026-10-27), so it aligns within 4cm and
+ // 0.8 degrees (1.5 degrees over the 1-1.5m creep alone adds 2.6-3.9cm sideways).
  const float PositionTolerance=ChargingAlignment && SegmentEnd==PlannedRoute.Num()-1 ? .5f : AIState==EWarehouseAIState::AlignUnload ? 1.5f : RelaxedAlign ? (bUseAgvLocalization ? 4.f : 7.f) : IntermediatePivot ? 12.f : (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery) ? FMath::Max(5.f,CVarOptArrivalTol.GetValueOnGameThread()) : 5.f;
  // Inside the charging capture region align to its fixed line heading before
  // handing off. Chasing a sub-centimetre point bearing repeatedly slews the
