@@ -114,6 +114,52 @@
 - 주행 시험 뒤 원격 분실 수정은 빌드만 확인했다.
 - 기본값은 아직 꺼짐이다. 켜면 빈 시험 장면(Entry)을 쓰는 팀원 회귀 시험이 지도 없음으로 분실 고장을 낸다(8절).
 
+### 9-1. 기본값 켬과 기존 움직임 전체 점검 (2026-10-27 오후)
+사용자 결정: 기본값을 켠다(`bUseAgvLocalization = true`). 기본 시험(저장 맵 지게차 1·2, 관제 모니터로 랙 팔레트 출고)과 다중 AGV·양보 동작이 추정 위치로 모두 동작하는지 점검한다. 지도 구조물이 하나도 없는 시험 장면(Entry)은 1안으로 처리한다.
+
+점검 중 고친 것(모두 로컬 커밋, 순서대로):
+| 커밋 | 문제(확인 근거) | 조치 |
+| --- | --- | --- |
+| `eb0bb893` | 시험 중에 생긴 차량에 위치 추정이 붙지 않아 조용히 정확한 위치로 주행 | `OnActorSpawned`로 자동 부착, 기본값 켬 |
+| `821fdf29` | Entry 장면은 지도가 비어 분실 고장, 공유 충전 실패(`LocDefault_shared_charging`) | **1안**: 지도 구조물이 없으면 `AGV_LOC_NO_MAP` 경고 후 정확한 위치로 주행. 지도가 있는데 정합이 안 맞으면 그대로 분실. 비교용 `-AgvLocOff` 추가 |
+| `2477c632` | 1초 스캔에 보정 이득 0.5라 오차가 남음 | 이득 1.0, 주행 반영 50cm/s·3°/s |
+| `1832d3b3` | 커브에서 1초에 최대 20cm 옆 미끄러짐 | 구동 바퀴 굴림 방향과 자이로로 하중 바퀴 축의 옆 이동 계산(`bModelSideSlip`, 측정/실제 비 0.9~1.0) |
+| `d51b0c56`, `ddc3d17a`, `01db1ca8` | 정합 직후 오차는 2.6cm 이하로 정확. 문제는 스캔 사이 오도메트리 | 측면 안전 스캐너 사본으로 초당 5회 위치 추정 스캔(`LocalizationScanHz`). 27cm 높이 측면 스캔이 랙보다 튀어나온 팔레트 앞면에 끌려 3~5cm(연속 시 17cm) 치우쳐서, 측면 스캔은 일치율 0.85 이상·이득 0.5·15cm 한도로만 반영 |
+| `34bd2c39` | 구동 바퀴가 가속 때 헛돌고 제동 때 잠겨 스캔 사이 6~26cm 오차 | **이동 거리를 자유 회전 하중 바퀴(`LoadWheelL/R`) 엔코더로**(`bLoadWheelEncoders`). 최대 오차 25~36cm → 7~15cm |
+| `7b41c0c4` | 정밀 상태에서 경로 계획 출발점만 추정 위치였음 | 정밀 상태 판정을 `NavigationTransform()` 안으로 옮김(계획과 추종이 같은 기준) |
+| `d8391763` | 팔레트 정렬 7cm > 포크 삽입 옆 한도 5cm라 `ROUTE MISALIGNED` 반복(켬에서만, 결정적 재현) | 추정 위치 주행 시 정렬 위치 허용치 4cm. 방향 0.8°도 시도했으나 두 번째 입고가 `RECOVERY WITHDRAW BLOCKED`로 악화되어 되돌림(`6043732a`) |
+| `8bb58334` | 감속 중 오차가 남은 채 중간 회전 지점 12cm 허용치 안에 랙 쪽으로 붙어 도착해 `TURN CLEARANCE`×3 고장 | 추정 위치 주행 시 중간 회전 지점 허용치 6cm |
+| `af70416f` | 위 허용치들이 지도 없는 Entry 장면에도 적용됨 | 조건을 `AgvEstimateInUse()`(스위치 켬이고 지도가 있을 때)로 바꿈. Entry 시험은 위치 추정 작업 전과 같은 허용치 |
+
+팀원 파일 수정은 사용자 승인 범위(이 브랜치 안, main 병합 계획 없음)다. 최종 수정 내용:
+- `WarehouseForklift.h`: 선언 4개(`bUseAgvLocalization`, `NavigationTransform`, `AgvLocalizationBlocked`, `AgvEstimateInUse`).
+- `WarehouseForkliftAI.cpp`: 계획 출발 자세, `FollowRoute` 추정 위치, 정렬 위치 허용치(4/7cm)와 중간 회전 지점 허용치(6/12cm) 각 1곳.
+
+최종 회귀 (2026-10-27 `af70416f`, NullRHI, 결과 `Saved/Testing/LocSuite_20261027.txt`, 로그 `Saved/Logs/LocSuite_<시험>_on.log`):
+| 시험 | 장면 | 위치 | 결과 |
+| --- | --- | --- | --- |
+| `two_jobs`(Saved/AgvHarness) | 저장 맵, 입고 2·출고 1, 4배속 | 추정 | 완료 3, 고장 0, 분실 0. 오차 평균 2.4/1.7cm, 95% 5.5/4.5cm, 최대 11.5/15.1cm, 방향 최대 0.72° |
+| `scen.py three` | 저장 맵, 두 대 이동 | 추정 | 완료 3, 고장 0, 두 대 모두 대기 자리 복귀. 최대 12.7/15.1cm |
+| `layout_editor -LayoutPhysicalOnly`, `warehouse_experiments`, `layout_inventory` | 저장 맵 | 추정 | 통과 |
+| `shared_charging`, `fleet_traffic`, `obstacle_interval`, `native_forklift_motion`, `remote_drive_continuity`, `elevator_route_visuals` | Entry | 정확(1안) | 통과 |
+
+위치 추정과 무관하게 실패하는 시험(같은 빌드에서 `-AgvLocOff`로도 같은 지점에서 실패 확인):
+- `forklift_sensors`: 시험용 랙 원형이 없음.
+- `forklift_recovery`: 기대 문구가 다름.
+- `native_charger_layout`: 4.5초에 `RECOVERY FLOOR UNSUPPORTED`.
+- `dual_forklifts_remote`: 원격 단계에서 "선택하지 않은 차량이 원격 입력에 반응". 켬에서도 운반 2건을 마친 뒤 같은 지점에서 실패한다(`34bd2c39` 이후).
+- `fleet_workflow`: 재고 기대값이 맞지 않음.
+- `layout_editor`를 화면 투영 검사까지 돌리면 NullRHI에서 실패한다.
+- `scen.py block`: 지게차 1의 `NO CONNECTED ROUTE AFTER LAYOUT CHANGE`는 끔에서도 같다. 켬에서는 이어서 지게차 2가 멈춘 지게차 1에 막혀 `TRAFFIC NO SAFE ESCAPE`가 났다.
+
+남은 한계와 할 일:
+- 위치 추정 복구(`ROUTE MISALIGNED`, `TURN CLEARANCE`)가 시험마다 1~2회 남는다. 모두 스스로 회복했다. 정확한 위치로 주행할 때는 이 첫 입고 작업에서 복구가 없었다.
+- 방향 반전(도리도리)이 두 방식 모두 많다(55~70회). 이번 변경 전부터 있던 문제다.
+- 오차 10cm 초과 구간이 시험당 10~13회 남는다(대부분 고속에서 감속하는 구간, 측면 스캔이 거부되는 곳).
+- 저장 맵 승강기 층 이동과 플레이 모드 맵은 측정하지 않았다(사용자 결정으로 승강기 보류).
+- 팀원 문서 `AUTONOMY.md`·`PROJECT_STRUCTURE.md`에는 아직 "위치 추정 미연결"로 적혀 있다. 팀원 문서라 고치지 않았고, 사용자가 팀원과 협의한다.
+- 측면 스캐너 사본으로 추가 광선은 차량당 약 540개×초당 5회이고, 1회 스캔에 약 1ms 걸린다. 화면 렌더링 상태의 프레임 비용은 재지 않았다.
+
 ## 10. 제안하는 첫 단계 (2026-10-27 이전 제안)
 1. 이 문서와 [FORKLIFT_NAVIGATION.md](FORKLIFT_NAVIGATION.md)를 읽고, 사용자와 단계 (2)부터 갈지 범위를 확인한다.
 2. `UAgvLocalizerComponent`를 운용 차량에 붙이고 주입 오차 모델로 `FollowRoute` 이동 구간만 추정 위치를 쓰게 한다(정렬·도킹은 정확한 위치 유지).
