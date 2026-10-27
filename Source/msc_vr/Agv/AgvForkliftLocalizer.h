@@ -46,7 +46,9 @@ public:
 	 */
 	bool GetEstimatedActorTransform(FTransform& Out, bool bEvenIfLost = false) const;
 
-	bool IsLost() const { return bInitialized && (bLost || !bAvailable); }
+	bool IsLost() const { return bInitialized && !bNoMap && (bLost || !bAvailable); }
+	/** No known structure to localize against (only in test scenes): travel falls back to the exact pose. */
+	bool HasNoMap() const { return bNoMap; }
 
 	UFUNCTION(BlueprintPure, Category="AGV|Localization")
 	FString Summary() const;
@@ -235,6 +237,7 @@ private:
 	/** A match ran this frame; its log line is written after the error is measured. */
 	bool bMatchToLog = false;
 	bool bHighErrorLogged = false;
+	bool bNoMap = false;
 	float LastDt = 0.f;
 	double WheelRadiusCm = 15.f;
 

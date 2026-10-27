@@ -288,7 +288,7 @@ void UAgvForkliftLocalizerComponent::TickComponent(float DeltaTime, ELevelTick T
 			CollectAndMatchScan();
 			SlewDrivingCorrection(LastDt);
 		}
-		if (Forklift->IsRemoteControlled())
+		if (Forklift->IsRemoteControlled() || bNoMap)
 		{
 			// Manual driving switches the scans off by design: the odometry keeps the estimate and the first scans after
 			// the session decide again, instead of a fault the moment the vehicle returns to autonomous work.
@@ -300,7 +300,7 @@ void UAgvForkliftLocalizerComponent::TickComponent(float DeltaTime, ELevelTick T
 			bLost = true;
 			++LostEvents;
 		}
-		StatusText = bLost ? TEXT("LOST") : TravelSinceMatchCm > 200.f ? TEXT("ODOMETRY ONLY") : TEXT("LIDAR");
+		StatusText = bNoMap ? TEXT("NO MAP - EXACT POSE") : bLost ? TEXT("LOST") : TravelSinceMatchCm > 200.f ? TEXT("ODOMETRY ONLY") : TEXT("LIDAR");
 		Measure();
 		if (bMatchToLog)
 		{
@@ -471,7 +471,22 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	}
 	SeenSnapshot = SensorKit->SnapshotCount;
 	const double Start = FPlatformTime::Seconds();
-	if (!EnsureMap())
+	const bool bHadNoMap = bNoMap;
+	const bool bHaveMap = EnsureMap();
+	// No known structure at all (a test scene with only a floor slab): there is nothing to localize against, so the
+	// estimate is unavailable rather than lost and travel uses the exact pose. A map that exists but does not match
+	// is still lost.
+	bNoMap = !bHaveMap;
+	if (bNoMap != bHadNoMap)
+	{
+		UE_LOG(LogAgvForkliftLoc, Warning, TEXT("AGV_LOC_NO_MAP %s %s"), *Forklift->GetName(), bNoMap ? TEXT("no known structure: travel on the exact pose") : TEXT("map available again: travel on the estimate"));
+		bLost = false;
+		if (!bNoMap)
+		{
+			InitializePose();
+		}
+	}
+	if (!bHaveMap)
 	{
 		++RejectedMatches;
 		return;
@@ -659,6 +674,18 @@ void UAgvLocalizationSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	Super::OnWorldBeginPlay(InWorld);
 	// Vehicles spawned later (tests copy rigs into new scenes, the layout editor adds vehicles) are checked too.
 	SpawnHandle = InWorld.AddOnActorSpawnedHandler(FOnActorSpawned::FDelegate::CreateUObject(this, &UAgvLocalizationSubsystem::OnActorSpawned));
+	if (FParse::Param(FCommandLine::Get(), TEXT("AgvLocOff")))
+	{
+		// A/B runs: every vehicle on the exact pose, nothing attached, as before the localization work.
+		bDriveOverride = true;
+		bDriveOnEstimate = false;
+		for (TActorIterator<AWarehouseForklift> It(&InWorld); It; ++It)
+		{
+			It->bUseAgvLocalization = false;
+		}
+		UE_LOG(LogAgvForkliftLoc, Log, TEXT("AGV_LOC off (-AgvLocOff)"));
+		return;
+	}
 	if (FParse::Param(FCommandLine::Get(), TEXT("AgvLocDrive")))
 	{
 		SetDriveOnEstimate(true);
@@ -709,10 +736,14 @@ void UAgvLocalizationSubsystem::Enable()
 
 void UAgvLocalizationSubsystem::OnActorSpawned(AActor* Actor)
 {
-	const AWarehouseForklift* Forklift = Cast<AWarehouseForklift>(Actor);
+	AWarehouseForklift* Forklift = Cast<AWarehouseForklift>(Actor);
 	if (!Forklift)
 	{
 		return;
+	}
+	if (bDriveOverride)
+	{
+		Forklift->bUseAgvLocalization = bDriveOnEstimate;
 	}
 	if (bEnabled)
 	{
@@ -757,6 +788,10 @@ FTransform AWarehouseForklift::NavigationTransform() const
 {
 	FTransform Estimated;
 	const UAgvForkliftLocalizerComponent* Localizer = bUseAgvLocalization ? FindComponentByClass<UAgvForkliftLocalizerComponent>() : nullptr;
+	if (Localizer && Localizer->HasNoMap())
+	{
+		return GetActorTransform();
+	}
 	// When lost, travel stops (AgvLocalizationBlocked); planning a stop still gets the dead-reckoned guess, never the truth.
 	return Localizer && Localizer->GetEstimatedActorTransform(Estimated, true) ? Estimated : GetActorTransform();
 }
