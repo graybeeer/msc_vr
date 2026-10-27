@@ -120,16 +120,19 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="1"))
 	int32 MatchIterations = 20;
 
-	/** Share of each accepted match applied at once (1 = jump to the match). */
+	/**
+	 * Share of each accepted match applied at once (1 = take the match). With one scan a second, 0.5 left about the
+	 * odometry drift of a second uncorrected and doubled the >10 cm episodes when driving on the estimate (2026-10-27).
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="0.05", ClampMax="1"))
-	float CorrectionGain = 0.5f;
+	float CorrectionGain = 1.f;
 
 	/** How fast an accepted scan correction reaches the driving estimate (cm/s, deg/s of simulated time). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="1"))
-	float CorrectionRateCmS = 25.f;
+	float CorrectionRateCmS = 50.f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="0.1"))
-	float CorrectionRateDegS = 2.f;
+	float CorrectionRateDegS = 3.f;
 
 	/** Distance driven without an accepted match after which the estimate is declared lost. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="1"))
