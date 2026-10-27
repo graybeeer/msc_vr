@@ -891,6 +891,15 @@ void UAgvLocalizationSubsystem::SetDriveOnEstimate(bool bOn)
 
 FTransform AWarehouseForklift::NavigationTransform() const
 {
+	// Precise alignment, docking and elevator approach use the exact pose (the vehicle's precise docking and fork
+	// sensors), for following and for planning alike (FollowRoute keeps the same list).
+	const bool bChargingAlignment = !bTrafficYielding &&
+		(AIState == EWarehouseAIState::NavigateCharge || (AIState == EWarehouseAIState::DockCharge && bDockPullout));
+	if (bChargingAlignment || AIState == EWarehouseAIState::AlignUnload || AIState == EWarehouseAIState::AlignVehicle ||
+		AIState == EWarehouseAIState::ElevatorApproach)
+	{
+		return GetActorTransform();
+	}
 	FTransform Estimated;
 	const UAgvForkliftLocalizerComponent* Localizer = bUseAgvLocalization ? FindComponentByClass<UAgvForkliftLocalizerComponent>() : nullptr;
 	if (Localizer && Localizer->HasNoMap())
