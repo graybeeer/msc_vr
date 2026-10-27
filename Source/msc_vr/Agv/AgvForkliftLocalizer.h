@@ -9,6 +9,9 @@
 class AWarehouseForklift;
 class UAgvShadowSensorsComponent;
 class UPrimitiveComponent;
+class UCanvas;
+class APlayerController;
+class UTexture2D;
 
 /**
  * LiDAR localization for the main warehouse forklift (2026-10-27, stage 1: shadow mode). It reads only what the
@@ -41,6 +44,15 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="AGV|Localization")
 	FString Summary() const;
+
+	// What the vehicle believes, for the view panel.
+	TSharedPtr<const FAgvDistanceMap> GetMap() const { return Map; }
+	/** Last matched snapshot's points placed with the estimate (map frame, cm) and whether each lies on the map. */
+	const TArray<FVector2D>& GetLastScanInMap() const { return LastScanInMap; }
+	const TArray<bool>& GetLastScanMapped() const { return LastScanMapped; }
+	/** The vehicle body's outline in the actor frame (cm). */
+	const FBox2D& GetVehicleBox() const { return VehicleBox; }
+	AWarehouseForklift* GetForklift() const { return Forklift; }
 
 	UFUNCTION(BlueprintCallable, Category="AGV|Localization")
 	void ResetStatistics();
@@ -208,6 +220,7 @@ private:
 	bool bRiding = false;
 	/** A match ran this frame; its log line is written after the error is measured. */
 	bool bMatchToLog = false;
+	bool bHighErrorLogged = false;
 	float LastDt = 0.f;
 	double WheelRadiusCm = 15.f;
 
@@ -215,6 +228,9 @@ private:
 	FVector2D ReferenceOffset = FVector2D::ZeroVector;
 	/** Vehicle-frame box (cm) whose returns are the vehicle itself or its load. */
 	FBox2D SelfFilter = FBox2D(ForceInit);
+	FBox2D VehicleBox = FBox2D(ForceInit);
+	TArray<FVector2D> LastScanInMap;
+	TArray<bool> LastScanMapped;
 
 	// Odometry: reference-point pose in the odometry frame (cm, rad).
 	FVector2D OdomPosition = FVector2D::ZeroVector;
@@ -254,13 +270,26 @@ public:
 	/** A map for this key, building it when no vehicle has built it yet. */
 	TSharedPtr<const FAgvDistanceMap> FindOrBuildMap(uint64 Key, TFunctionRef<TSharedPtr<const FAgvDistanceMap>()> Build);
 
+	/** The top-left view of what forklift 1 believes (map, scan, route, estimated and actual outline). */
+	void SetPanelVisible(bool bVisible) { bShowPanel = bVisible; }
+	bool IsPanelVisible() const { return bShowPanel; }
+
 protected:
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
 
 private:
 	void Attach(AActor* Actor);
+	void DrawPanel(UCanvas* Canvas, APlayerController* Player);
+	UAgvForkliftLocalizerComponent* FindPanelVehicle() const;
+	void UpdateMapTexture(const TSharedPtr<const FAgvDistanceMap>& Map);
 
 	bool bEnabled = false;
+	bool bShowPanel = true;
 	FDelegateHandle SpawnHandle;
+	FDelegateHandle DrawHandle;
 	TMap<uint64, TSharedPtr<const FAgvDistanceMap>> Maps;
+
+	UPROPERTY(Transient) TObjectPtr<UTexture2D> MapTexture;
+	/** Held so the texture is never matched to a different map at the same address. */
+	TSharedPtr<const FAgvDistanceMap> TextureMap;
 };

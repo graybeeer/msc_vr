@@ -4,8 +4,15 @@
 #include "AgvShadowSensors.h"
 #include "WarehouseForklift.h"
 #include "WarehouseAutonomyTypes.h"
+#include "CanvasItem.h"
 #include "Components/PrimitiveComponent.h"
+#include "Debug/DebugDrawService.h"
+#include "Engine/Canvas.h"
+#include "Engine/Engine.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
+#include "TextureResource.h"
 #include "EngineUtils.h"
 #include "Hash/CityHash.h"
 #include "HAL/IConsoleManager.h"
@@ -24,12 +31,18 @@ namespace AgvForkliftLoc
 	static FAutoConsoleCommandWithWorldAndArgs Command(
 		TEXT("agv.loc"),
 		TEXT("agv.loc: LiDAR localization in shadow mode on every main warehouse forklift (measures the estimate against "
-			"the exact pose; travel still uses the exact pose). Again = log the results. agv.loc reset = clear the statistics."),
+			"the exact pose; travel still uses the exact pose). Again = log the results. agv.loc reset = clear the statistics. "
+			"agv.loc view = show/hide the top-left panel of what forklift 1 believes."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
 		{
 			UAgvLocalizationSubsystem* Subsystem = World ? World->GetSubsystem<UAgvLocalizationSubsystem>() : nullptr;
 			if (!Subsystem)
 			{
+				return;
+			}
+			if (Args.Contains(TEXT("view")))
+			{
+				Subsystem->SetPanelVisible(!Subsystem->IsPanelVisible());
 				return;
 			}
 			if (Args.Contains(TEXT("reset")))
@@ -121,6 +134,7 @@ bool UAgvForkliftLocalizerComponent::ResolveParts()
 		WheelRadiusCm = FMath::Max(1.0, (double)DriveWheel->Bounds.BoxExtent.Z);
 		// The vehicle with a pallet on its forks: forward by about a pallet's overhang, sideways by its extra width.
 		const FBox Local = Forklift->CalculateComponentsBoundingBoxInLocalSpace(false);
+		VehicleBox = FBox2D(FVector2D(Local.Min), FVector2D(Local.Max));
 		SelfFilter = FBox2D(FVector2D(Local.Min.X - 10.0, Local.Min.Y - 20.0), FVector2D(Local.Max.X + 40.0, Local.Max.Y + 20.0));
 		UE_LOG(LogAgvForkliftLoc, Log, TEXT("AGV_LOC_PARTS %s reference=%s wheel radius=%.1f self=%s"), *Forklift->GetName(),
 			*ReferenceOffset.ToString(), WheelRadiusCm, *SelfFilter.ToString());
@@ -496,6 +510,15 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	{
 		++RejectedMatches;
 	}
+	// The scan as the vehicle now places it: on the map where it believes it stands.
+	LastScanInMap.Reset(Points.Num());
+	LastScanMapped.Reset(Points.Num());
+	for (const FVector2D& Point : Points)
+	{
+		const FVector2D Placed = AgvMath::Rotate(CorrectionYaw, Point) + CorrectionOffset;
+		LastScanInMap.Add(Placed);
+		LastScanMapped.Add(Map->Sample(Placed) <= InlierDistanceCm);
+	}
 	LastMatchMilliseconds = (float)((FPlatformTime::Seconds() - Start) * 1000.0);
 	MatchMillisecondsSum += LastMatchMilliseconds;
 	bMatchToLog = bLogMatches;
@@ -512,6 +535,20 @@ void UAgvForkliftLocalizerComponent::Measure()
 	const FTransform Actual = Forklift->GetActorTransform();
 	ErrorCm = (float)FVector2D::Distance(FVector2D(Estimated.GetLocation()), FVector2D(Actual.GetLocation()));
 	HeadingErrorDeg = (float)FMath::Abs(FMath::FindDeltaAngleDegrees(Estimated.Rotator().Yaw, Actual.Rotator().Yaw));
+	// Diagnostic: once per episode of a large error, what the vehicle was doing.
+	if (ErrorCm > 10.f && !bHighErrorLogged)
+	{
+		bHighErrorLogged = true;
+		const FVector Velocity = Body->GetPhysicsLinearVelocity();
+		UE_LOG(LogAgvForkliftLoc, Warning, TEXT("AGV_LOC_HIGH_ERROR %s t=%.2f err=%.1fcm yaw=%.2fdeg state=%d speed=%.0f lateral=%.0f yawrate=%.1f since_match=%.0fcm dt=%.4f status=%s"),
+			*Forklift->GetName(), GetWorld()->GetTimeSeconds(), ErrorCm, HeadingErrorDeg, (int32)Forklift->AIState,
+			FVector::DotProduct(Velocity, Actual.GetUnitAxis(EAxis::X)), FVector::DotProduct(Velocity, Actual.GetUnitAxis(EAxis::Y)),
+			Body->GetPhysicsAngularVelocityInDegrees().Z, TravelSinceMatchCm, LastDt, *Forklift->Status.Replace(TEXT("\n"), TEXT(" ")));
+	}
+	else if (ErrorCm < 5.f)
+	{
+		bHighErrorLogged = false;
+	}
 	++ErrorSamples;
 	ErrorSum += ErrorCm;
 	MeanErrorCm = (float)(ErrorSum / ErrorSamples);
@@ -576,7 +613,13 @@ void UAgvLocalizationSubsystem::Deinitialize()
 	{
 		World->RemoveOnActorSpawnedHandler(SpawnHandle);
 	}
+	if (DrawHandle.IsValid())
+	{
+		UDebugDrawService::Unregister(DrawHandle);
+		DrawHandle.Reset();
+	}
 	Maps.Reset();
+	TextureMap.Reset();
 	Super::Deinitialize();
 }
 
@@ -593,6 +636,7 @@ void UAgvLocalizationSubsystem::Enable()
 		Attach(*It);
 	}
 	SpawnHandle = World->AddOnActorSpawnedHandler(FOnActorSpawned::FDelegate::CreateUObject(this, &UAgvLocalizationSubsystem::Attach));
+	DrawHandle = UDebugDrawService::Register(TEXT("Game"), FDebugDrawDelegate::CreateUObject(this, &UAgvLocalizationSubsystem::DrawPanel));
 	UE_LOG(LogAgvForkliftLoc, Log, TEXT("AGV_LOC shadow localization ON"));
 }
 
@@ -632,4 +676,217 @@ TSharedPtr<const FAgvDistanceMap> UAgvLocalizationSubsystem::FindOrBuildMap(uint
 		Maps.Reset();
 	}
 	return Maps.Add(Key, Build());
+}
+
+// --- View panel ---------------------------------------------------------------------------------------------------
+
+namespace AgvForkliftLoc
+{
+	/** Clips a segment to the rectangle [Min, Max] (Liang-Barsky). False when nothing is left. */
+	static bool ClipSegment(FVector2D& A, FVector2D& B, const FVector2D& Min, const FVector2D& Max)
+	{
+		const FVector2D D = B - A;
+		double T0 = 0.0, T1 = 1.0;
+		const double P[4] = { -D.X, D.X, -D.Y, D.Y };
+		const double Q[4] = { A.X - Min.X, Max.X - A.X, A.Y - Min.Y, Max.Y - A.Y };
+		for (int32 I = 0; I < 4; ++I)
+		{
+			if (FMath::IsNearlyZero(P[I]))
+			{
+				if (Q[I] < 0.0)
+				{
+					return false;
+				}
+				continue;
+			}
+			const double T = Q[I] / P[I];
+			if (P[I] < 0.0)
+			{
+				T0 = FMath::Max(T0, T);
+			}
+			else
+			{
+				T1 = FMath::Min(T1, T);
+			}
+			if (T0 > T1)
+			{
+				return false;
+			}
+		}
+		B = A + D * T1;
+		A = A + D * T0;
+		return true;
+	}
+}
+
+UAgvForkliftLocalizerComponent* UAgvLocalizationSubsystem::FindPanelVehicle() const
+{
+	// Forklift 1: the vehicle named with "1", otherwise the first by name.
+	UAgvForkliftLocalizerComponent* Best = nullptr;
+	FString BestName;
+	for (TActorIterator<AWarehouseForklift> It(GetWorld()); It; ++It)
+	{
+		UAgvForkliftLocalizerComponent* Localizer = It->FindComponentByClass<UAgvForkliftLocalizerComponent>();
+		if (!Localizer)
+		{
+			continue;
+		}
+		if (It->VehicleName.Contains(TEXT("1")))
+		{
+			return Localizer;
+		}
+		const FString Name = It->GetActorNameOrLabel();
+		if (!Best || Name < BestName)
+		{
+			Best = Localizer;
+			BestName = Name;
+		}
+	}
+	return Best;
+}
+
+void UAgvLocalizationSubsystem::UpdateMapTexture(const TSharedPtr<const FAgvDistanceMap>& Map)
+{
+	if (MapTexture && TextureMap == Map)
+	{
+		return;
+	}
+	TextureMap = Map;
+	MapTexture = nullptr;
+	if (!Map || Map->Width <= 0 || Map->Width > 16384 || Map->Height > 16384)
+	{
+		return;
+	}
+	UTexture2D* Texture = UTexture2D::CreateTransient(Map->Width, Map->Height, PF_B8G8R8A8);
+	if (!Texture)
+	{
+		return;
+	}
+	Texture->Filter = TF_Nearest;
+	Texture->AddressX = TA_Clamp;
+	Texture->AddressY = TA_Clamp;
+	FTexture2DMipMap& Mip = Texture->GetPlatformData()->Mips[0];
+	FColor* Pixels = static_cast<FColor*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
+	for (int32 Index = 0; Index < Map->Width * Map->Height; ++Index)
+	{
+		// Mapped structure solid, its edge faint, free space clear.
+		const float Distance = Map->Distance[Index];
+		Pixels[Index] = Distance <= 0.f ? FColor(205, 210, 215, 255) : Distance < Map->CellCm ? FColor(205, 210, 215, 90) : FColor(0, 0, 0, 0);
+	}
+	Mip.BulkData.Unlock();
+	Texture->UpdateResource();
+	MapTexture = Texture;
+}
+
+void UAgvLocalizationSubsystem::DrawPanel(UCanvas* Canvas, APlayerController* Player)
+{
+	if (!bShowPanel || !Canvas || !Canvas->Canvas || !Player || Player->GetWorld() != GetWorld())
+	{
+		return;
+	}
+	UAgvForkliftLocalizerComponent* Vehicle = FindPanelVehicle();
+	AWarehouseForklift* Forklift = Vehicle ? Vehicle->GetForklift() : nullptr;
+	if (!Forklift)
+	{
+		return;
+	}
+
+	// A top view (world X right, Y down, as in the editor top view) centred on where the vehicle believes it is.
+	const double Size = FMath::Clamp(Canvas->ClipY * 0.36, 220.0, 420.0);
+	const FVector2D Panel(16.0, 16.0);
+	const FVector2D PanelMax = Panel + FVector2D(Size);
+	const double SpanCm = 2400.0, Scale = Size / SpanCm;
+	FTransform Estimated;
+	const bool bEstimate = Vehicle->GetEstimatedActorTransform(Estimated);
+	const FTransform Actual = Forklift->GetActorTransform();
+	const FVector2D Centre(bEstimate ? Estimated.GetLocation() : Actual.GetLocation());
+	auto ToScreen = [&](const FVector2D& World) { return Panel + (World - Centre + FVector2D(SpanCm * 0.5)) * Scale; };
+	auto Line = [&](FVector2D A, FVector2D B, const FLinearColor& Color, float Thickness)
+	{
+		if (AgvForkliftLoc::ClipSegment(A, B, Panel, PanelMax))
+		{
+			FCanvasLineItem Item(A, B);
+			Item.SetColor(Color);
+			Item.LineThickness = Thickness;
+			Canvas->DrawItem(Item);
+		}
+	};
+	auto Outline = [&](const FTransform& Pose, const FLinearColor& Color, float Thickness)
+	{
+		const FBox2D& Box = Vehicle->GetVehicleBox();
+		const FVector2D Local[4] = { Box.Min, FVector2D(Box.Max.X, Box.Min.Y), Box.Max, FVector2D(Box.Min.X, Box.Max.Y) };
+		for (int32 I = 0; I < 4; ++I)
+		{
+			Line(ToScreen(FVector2D(Pose.TransformPosition(FVector(Local[I], 0.0)))), ToScreen(FVector2D(Pose.TransformPosition(FVector(Local[(I + 1) % 4], 0.0)))), Color, Thickness);
+		}
+		Line(ToScreen(FVector2D(Pose.GetLocation())), ToScreen(FVector2D(Pose.TransformPosition(FVector(Box.Max.X + 120.0, 0.0, 0.0)))), Color, Thickness);
+	};
+
+	FCanvasTileItem Back(Panel, FVector2D(Size), FLinearColor(0.02f, 0.03f, 0.05f, 0.78f));
+	Back.BlendMode = SE_BLEND_Translucent;
+	Canvas->DrawItem(Back);
+
+	// The map it localizes against.
+	const TSharedPtr<const FAgvDistanceMap> Map = Vehicle->GetMap();
+	UpdateMapTexture(Map);
+	if (Map && MapTexture && MapTexture->GetResource())
+	{
+		const double Width = Map->Width * Map->CellCm, Height = Map->Height * Map->CellCm;
+		const FVector2D Min = Centre - FVector2D(SpanCm * 0.5);
+		const FVector2D UV0((Min.X - Map->Origin.X) / Width, (Min.Y - Map->Origin.Y) / Height);
+		const FVector2D UV1(UV0.X + SpanCm / Width, UV0.Y + SpanCm / Height);
+		FCanvasTileItem Tile(Panel, MapTexture->GetResource(), FVector2D(Size), UV0, UV1, FLinearColor::White);
+		Tile.BlendMode = SE_BLEND_Translucent;
+		Canvas->DrawItem(Tile);
+	}
+
+	// The route it follows.
+	FVector2D Previous = ToScreen(FVector2D(Actual.GetLocation()));
+	for (const FWarehouseRoutePoint& Point : Forklift->PlannedRoute)
+	{
+		const FVector2D Next = ToScreen(FVector2D(Point.Pose.GetLocation()));
+		Line(Previous, Next, FLinearColor(0.25f, 0.55f, 1.f, 0.9f), 2.f);
+		Previous = Next;
+	}
+
+	// The last scan where it believes the points are: on the map (green) or unmapped things (orange).
+	const TArray<FVector2D>& Scan = Vehicle->GetLastScanInMap();
+	const TArray<bool>& Mapped = Vehicle->GetLastScanMapped();
+	for (int32 Index = 0; Index < Scan.Num(); ++Index)
+	{
+		const FVector2D Screen = ToScreen(Scan[Index]);
+		if (Screen.X < Panel.X || Screen.Y < Panel.Y || Screen.X > PanelMax.X - 3.0 || Screen.Y > PanelMax.Y - 3.0)
+		{
+			continue;
+		}
+		FCanvasTileItem Dot(Screen - FVector2D(1.0), FVector2D(3.0), Mapped.IsValidIndex(Index) && Mapped[Index] ? FLinearColor(0.3f, 1.f, 0.4f, 1.f) : FLinearColor(1.f, 0.55f, 0.1f, 1.f));
+		Canvas->DrawItem(Dot);
+	}
+
+	// Actual pose (white) under the estimate (yellow): the gap is the localization error.
+	Outline(Actual, FLinearColor(1.f, 1.f, 1.f, 0.6f), 1.f);
+	if (bEstimate)
+	{
+		Outline(Estimated, FLinearColor(1.f, 0.85f, 0.1f, 1.f), 2.f);
+	}
+	const FLinearColor Frame(0.6f, 0.65f, 0.7f, 1.f);
+	Line(Panel, FVector2D(PanelMax.X, Panel.Y), Frame, 1.f);
+	Line(FVector2D(PanelMax.X, Panel.Y), PanelMax, Frame, 1.f);
+	Line(PanelMax, FVector2D(Panel.X, PanelMax.Y), Frame, 1.f);
+	Line(FVector2D(Panel.X, PanelMax.Y), Panel, Frame, 1.f);
+
+	UFont* Font = GEngine ? GEngine->GetSmallFont() : nullptr;
+	if (Font)
+	{
+		auto Text = [&](const FString& Value, double Y, const FLinearColor& Color)
+		{
+			FCanvasTextItem Item(FVector2D(Panel.X + 6.0, Y), FText::FromString(Value), Font, Color);
+			Item.EnableShadow(FLinearColor::Black);
+			Canvas->DrawItem(Item);
+		};
+		Text(TEXT("FORKLIFT 1 - AI WORLD (24 m)"), Panel.Y + 4.0, FLinearColor::White);
+		Text(FString::Printf(TEXT("%s  err %.1f cm  match %.2f  pts %d"), *Vehicle->StatusText, Vehicle->ErrorCm, Vehicle->LastInlierRatio, Vehicle->LastMatchPoints),
+			PanelMax.Y + 4.0, FLinearColor::White);
+		Text(TEXT("map grey | scan on map green | unmapped orange | route blue | estimate yellow | actual white"), PanelMax.Y + 20.0, FLinearColor(0.75f, 0.78f, 0.8f, 1.f));
+	}
 }
