@@ -81,6 +81,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Odometry", meta=(ClampMin="0"))
 	float GyroNoiseDegSqrtS = 0.02f;
 
+	/** Side slip of the load-wheel axle from drive wheel heading and gyro (off = the axle never slips sideways). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Odometry")
+	bool bModelSideSlip = true;
+
 	/** Zero-velocity update: no encoder travel and a gyro reading below this (deg/s) holds the heading. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Odometry", meta=(ClampMin="0"))
 	float StandstillGyroDegS = 0.3f;
@@ -213,6 +217,13 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Error")
 	float EncoderScale = 0.f;
 
+	/** Modelled / actual side travel of the axle (least squares) and the accumulated root-sum-square difference (cm). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Error")
+	float SideSlipScale = 0.f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Error")
+	float SideSlipResidualCm = 0.f;
+
 private:
 	bool ResolveParts();
 	void StepOdometry(float Dt);
@@ -268,6 +279,11 @@ private:
 	TArray<int32> ErrorHistogram;
 	double EncoderMeasuredTrue = 0.0;
 	double EncoderTrueSquared = 0.0;
+	double SideMeasuredTrue = 0.0;
+	double SideTrueSquared = 0.0;
+	double SideResidualSquared = 0.0;
+	/** Load-wheel axle to drive wheel along the vehicle (cm, positive). */
+	double DriveWheelbaseCm = 0.0;
 	double MatchMillisecondsSum = 0.0;
 };
 

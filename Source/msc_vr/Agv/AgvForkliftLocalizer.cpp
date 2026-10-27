@@ -135,6 +135,7 @@ bool UAgvForkliftLocalizerComponent::ResolveParts()
 		DriveWheel = FoundWheel;
 		const FTransform Actor = Forklift->GetActorTransform();
 		ReferenceOffset = FVector2D((Actor.InverseTransformPosition(LoadLeft->GetComponentLocation()) + Actor.InverseTransformPosition(LoadRight->GetComponentLocation())) * 0.5);
+		DriveWheelbaseCm = ReferenceOffset.X - Actor.InverseTransformPosition(DriveWheel->GetComponentLocation()).X;
 		// A steered wheel's world box keeps its radius as half height.
 		WheelRadiusCm = FMath::Max(1.0, (double)DriveWheel->Bounds.BoxExtent.Z);
 		// The vehicle with a pallet on its forks: forward by about a pallet's overhang, sideways by its extra width.
@@ -329,7 +330,7 @@ void UAgvForkliftLocalizerComponent::StepOdometry(float Dt)
 	// Steering encoder: the rolling direction in the vehicle frame (0 = straight ahead, 90 deg = turning on the spot).
 	const double Steer = FMath::Atan2(FVector::DotProduct(Roll, Right), FVector::DotProduct(Roll, Forward)) + FMath::DegreesToRadians((double)SteerOffsetDeg);
 	const double Rim = Spin * WheelRadiusCm * Dt * (1.0 + WheelRadiusErrorPercent / 100.0) * (1.0 + Gauss() * EncoderNoisePercent / 100.0);
-	// The fixed load-wheel axle moves straight ahead only: the drive wheel's forward share is its travel.
+	// The drive wheel's forward share is the travel of the load-wheel axle.
 	const double Measured = Rim * FMath::Cos(Steer);
 
 	// Yaw-rate gyro with bias and angle random walk; held at standstill (zero-velocity update).
@@ -339,9 +340,13 @@ void UAgvForkliftLocalizerComponent::StepOdometry(float Dt)
 	{
 		TurnRad = 0.0;
 	}
-	OdomPosition += AgvMath::Dir(OdomYaw + TurnRad * 0.5) * Measured;
+	// Side slip of the load-wheel axle from the same sensors: the drive wheel rolls along its heading, so the axle
+	// moves sideways by the wheel's side share minus what the yaw (gyro) explains over the wheelbase. Assuming no side
+	// slip there drifted the estimate up to 20 cm between one-second scans in curves (2026-10-27).
+	const double Side = bModelSideSlip ? Rim * FMath::Sin(Steer) + TurnRad * DriveWheelbaseCm : 0.0;
+	OdomPosition += AgvMath::Rotate(OdomYaw + TurnRad * 0.5, FVector2D(Measured, Side));
 	OdomYaw += TurnRad;
-	TravelSinceMatchCm += (float)FMath::Abs(Measured);
+	TravelSinceMatchCm += (float)FVector2D(Measured, Side).Size();
 
 	// Diagnostic: measured against the actual travel of the reference point (sign and scale of the encoder model).
 	const FVector ReferenceWorld = Actor.TransformPosition(FVector(ReferenceOffset, 0.0));
@@ -349,6 +354,12 @@ void UAgvForkliftLocalizerComponent::StepOdometry(float Dt)
 	EncoderMeasuredTrue += Measured * TrueTravel;
 	EncoderTrueSquared += TrueTravel * TrueTravel;
 	EncoderScale = EncoderTrueSquared > 1.0 ? (float)(EncoderMeasuredTrue / EncoderTrueSquared) : 0.f;
+	const double TrueSide = FVector::DotProduct(Body->GetPhysicsLinearVelocityAtPoint(ReferenceWorld), Right) * Dt;
+	SideMeasuredTrue += Side * TrueSide;
+	SideTrueSquared += TrueSide * TrueSide;
+	SideSlipScale = SideTrueSquared > 1.0 ? (float)(SideMeasuredTrue / SideTrueSquared) : 0.f;
+	SideResidualSquared += FMath::Square(Side - TrueSide);
+	SideSlipResidualCm = (float)FMath::Sqrt(SideResidualSquared);
 }
 
 bool UAgvForkliftLocalizerComponent::EnsureMap()
@@ -650,16 +661,18 @@ void UAgvForkliftLocalizerComponent::ResetStatistics()
 	MeanErrorCm = MaxErrorCm = P95ErrorCm = MaxHeadingErrorDeg = 0.f;
 	EncoderMeasuredTrue = EncoderTrueSquared = 0.0;
 	EncoderScale = 0.f;
+	SideMeasuredTrue = SideTrueSquared = SideResidualSquared = 0.0;
+	SideSlipScale = SideSlipResidualCm = 0.f;
 	ErrorHistogram.Init(0, AgvForkliftLoc::Bins);
 }
 
 FString UAgvForkliftLocalizerComponent::Summary() const
 {
 	const int32 Matches = AcceptedMatches + RejectedMatches;
-	return FString::Printf(TEXT("%s %s: error mean %.1f p95 %.1f max %.1f cm, heading max %.2f deg (%d frames); matches %d/%d accepted, %d recovered, %.1f ms mean; lost %d (%d frames); reinit %d; encoder scale %.3f; map %d builds, last %.0f ms"),
+	return FString::Printf(TEXT("%s %s: error mean %.1f p95 %.1f max %.1f cm, heading max %.2f deg (%d frames); matches %d/%d accepted, %d recovered, %.1f ms mean; lost %d (%d frames); reinit %d; encoder scale %.3f; side slip scale %.2f residual %.0f cm; map %d builds, last %.0f ms"),
 		Forklift ? *Forklift->GetName() : TEXT("?"), *StatusText, MeanErrorCm, P95ErrorCm, MaxErrorCm, MaxHeadingErrorDeg, ErrorSamples,
 		AcceptedMatches, Matches, RecoveredMatches, Matches ? MatchMillisecondsSum / Matches : 0.0, LostEvents, LostFrames, Reinitializations,
-		EncoderScale, MapBuilds, MapBuildMilliseconds);
+		EncoderScale, SideSlipScale, SideSlipResidualCm, MapBuilds, MapBuildMilliseconds);
 }
 
 // --- Subsystem ----------------------------------------------------------------------------------------------------
