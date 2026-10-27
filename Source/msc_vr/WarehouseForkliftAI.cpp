@@ -171,6 +171,42 @@ void AWarehouseForklift::RefreshAfterLayout(bool PublishTaskLocation)
  }
  else if (bChargePending && bPowered && !bFloorTransfer) TransitionAI(EWarehouseAIState::PlanCharge,TEXT("LAYOUT UPDATED / CHARGER REPLAN"));
 }
+void AWarehouseForklift::SuspendForBuildingEdit(const TArray<AActor*>& Removed)
+{
+ auto UsesRemoved=[&](const FWarehouseWorkOrder& Job)
+ { return Removed.Contains(Job.Pallet.Get()) || Removed.Contains(Job.DestinationResource.Get()); };
+ const bool WasRunning=bPowered || IsRemoteControlled();
+ bool Cancelled=false;
+ auto Cancel=[&](const FWarehouseWorkOrder& Job)
+ {
+  const auto Previous=ActiveJob;ActiveJob=Job;
+  ReportJob(TEXT("CANCELLED"),TEXT("건물 편집으로 작업 대상/보관 랙이 제거되었습니다. 물류는 보류 목록을 확인하세요."));
+  ActiveJob=Previous;WorkOrderSourcePoses.Remove(Job.JobId);Cancelled=true;
+ };
+ const auto PreviousQueue=PendingJobs;PendingJobs.RemoveAll(UsesRemoved);
+ for (const auto& Job:PreviousQueue) if (UsesRemoved(Job)) Cancel(Job);
+ if (!ActiveJob.JobId.IsEmpty() && UsesRemoved(ActiveJob)) { Cancel(ActiveJob);ActiveJob=FWarehouseWorkOrder(); }
+ if (Removed.Contains(TargetPallet.Get())) { bSupportingPallet=false;TargetPallet=nullptr;CarriedCargo.Reset(); }
+ else CarriedCargo.RemoveAll([&](AActor* Cargo) { return Removed.Contains(Cargo); });
+ if (Removed.Contains(Elevator.Get())) { bFloorTransfer=false;Elevator=nullptr; }
+ // Editing is a paused administrative transaction, not a driving controller.
+ // Restore physical joints first, then discard the pre-edit motion on commit.
+ BrakeDrive();CurrentSpeedCm=0;
+ TArray<AActor*> Stopped{this};Stopped.Append(GetPhysicalLoads());
+ for (AActor* Actor:Stopped) if (IsValid(Actor))
+ {
+  TArray<UPrimitiveComponent*> Parts;Actor->GetComponents(Parts);
+  for (auto* Part:Parts) if (Part->IsSimulatingPhysics())
+  { Part->SetPhysicsLinearVelocity(FVector::ZeroVector);Part->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector); }
+ }
+ if (!WasRunning && !Cancelled) return;
+ if (IsRemoteControlled()) EndRemoteControl(RemoteOperator);
+ bPowered=false;BrakeDrive();
+ if (bMechanicalFailure || AIState==EWarehouseAIState::Fault) return;
+ ResumeAI=ActiveJob.JobId.IsEmpty() ? EWarehouseAIState::Ready : bSupportingPallet ? EWarehouseAIState::PlanDelivery : EWarehouseAIState::PlanPickup;
+ bResumeAfterCheck=true;
+ TransitionAI(EWarehouseAIState::Paused,TEXT("건물 변경으로 일시정지 · E로 재점검 후 작업 재개"));
+}
 FTransform AWarehouseForklift::PalletApproach(const FTransform& Pose,float Distance) const
 {
  const FRotator Rotation(0,Pose.Rotator().Yaw,0);
@@ -1618,6 +1654,9 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   break;
  case EWarehouseAIState::ElevatorRide:
   if (Elevator->CanExit(this)) Next(EWarehouseAIState::ElevatorExit,TEXT("DESTINATION FLOOR / DOOR OPEN - EXIT"));
+  // A human-requested stop is a normal part of the shared trip, not failed
+  // vehicle motion. Keep the default brake and exclude its open-door dwell.
+  else if (Elevator->State==EWarehouseElevatorState::AwaitExit && Elevator->CurrentFloor!=TransferToFloor) AIElapsed-=Dt;
   else if (AIElapsed>180.f) FaultAI(TEXT("ELEVATOR TRANSFER TIMEOUT"));
   break;
  case EWarehouseAIState::ElevatorExit:

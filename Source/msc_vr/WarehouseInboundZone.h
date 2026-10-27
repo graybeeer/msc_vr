@@ -35,6 +35,7 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Inbound") FString Status;
  UFUNCTION(BlueprintCallable, Category="Inbound") void ScanInbound();
  UFUNCTION(BlueprintPure, Category="Inbound") bool ContainsPallet(const AWarehousePallet* Pallet) const;
+ void RecordInboundConfirmed(AWarehousePallet* Pallet);
  // Repeat experiments supply the orders; receiving inspection and wrapping still run normally.
  bool bExternalDispatchOnly=false;
 private:
@@ -52,6 +53,7 @@ private:
   double Since=0;
   FTransform Pallet;
   TMap<TWeakObjectPtr<AActor>,FTransform> Cargo;
+  bool bWrapping=false;
  };
  TMap<TWeakObjectPtr<AWarehousePallet>, FStableLoad> StableLoads;
  bool SlotClear(int32 Index, AWarehousePallet* Pallet, const TArray<AActor*>& Loads, float Height, float Mass) const;

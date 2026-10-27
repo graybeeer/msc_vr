@@ -4,7 +4,7 @@ Unreal Engine 5.8 기반 PC 프로젝트다. 물류창고에서 무인 지게차
 
 ## 시작하기
 
-1. 팀원은 [에셋 설치 안내](TEAM_ASSETS.md)에 따라 외부 에셋을 준비한다.
+1. 공개 저장소는 코드·자체 제작물·문서를 공유한다. 팀원은 [팀원 에셋 받기 안내](TEAM_ASSETS.md)에 따라 외부 팩6개를 별도로 확보하고 필요한 파생 에셋·사용 모션을 로컬에서 준비한다. Git/LFS만 받아서는 외부 에셋이 설치되지 않는다.
 2. `msc_vr.uproject`를 열고 기본 메인 메뉴에서 플레이한다. **관리자 모드**는 기존 창고, **플레이 모드**는 예산과 해금이 있는 3개 프로토타입 맵이다. [모드·스테이지 안내](PLAY_MODE.md)를 참고한다.
 3. 현재 맵과 조작은 [창고 안내](WAREHOUSE.md), 수정할 파일은 [구조 요약](PROJECT_STRUCTURE.md)을 확인한다.
 
@@ -25,7 +25,8 @@ Unreal Engine 5.8 기반 PC 프로젝트다. 물류창고에서 무인 지게차
 | [MEZZANINE.md](MEZZANINE.md) | 기본3층·실험용 최대4층 복층, 범용/화물용 승강기·층간 이동 인터록 |
 | [ELEVATOR_MODEL.md](ELEVATOR_MODEL.md) | 범용 승강기 외형·층별 호출대·팀원 모델 통합·파생4층 부품과 검증 |
 | [CARGO_RULES.md](CARGO_RULES.md) | 상품 특성·상자 크기·밀도·무게 생성 규칙 |
-| [TEAM_ASSETS.md](TEAM_ASSETS.md) | 팀원용 외부 에셋 설치·로컬 재생성·Git 제외 |
+| [TEAM_ASSETS.md](TEAM_ASSETS.md) | 공개 저장소 수신·외부 팩6개 설치·누락 파생 에셋과 사용 모션 준비 |
+| [RUNTIME_ASSETS.md](RUNTIME_ASSETS.md) | 게임 사용 에셋의 이름·출처·용도·경로와 공개 Git 포함/제외 기준. 사용 목록 전체가 Git에 포함된다는 뜻은 아님 |
 | [MCP_SETUP.md](MCP_SETUP.md) | Unreal·Blender·Photoshop MCP 연결 설정과 실제 연결 검증 |
 | [TRUCK_LOGISTICS_DESIGN.md](TRUCK_LOGISTICS_DESIGN.md) | 팔레트 배송편·트럭 양방향 상하차·출차 연출, 검증 상태와 남은 자동 교대 계획 |
 | [FORKLIFT_NAVIGATION.md](Source/msc_vr/Agv/FORKLIFT_NAVIGATION.md) | 별도 개발 중인 동역학·LiDAR·내비게이션 모듈 |

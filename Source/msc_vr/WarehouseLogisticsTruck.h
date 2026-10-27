@@ -7,6 +7,8 @@
 class AWarehousePallet;
 class UPrimitiveComponent;
 class UPhysicsConstraintComponent;
+class ACharacter;
+class UPoseableMeshComponent;
 
 UENUM(BlueprintType)
 enum class EWarehouseTruckState : uint8 { AtDock, Loading, Departing, Departed, Unavailable };
@@ -18,11 +20,21 @@ class MSC_VR_API AWarehouseLogisticsTruck : public AActor
  GENERATED_BODY()
 public:
  AWarehouseLogisticsTruck();
+ virtual void OnConstruction(const FTransform& Transform) override;
  virtual void BeginPlay() override;
  virtual void Tick(float DeltaSeconds) override;
  virtual void EndPlay(const EEndPlayReason::Type Reason) override;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Logistics") FString TruckId;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Logistics") FString DockId;
+ // Presentation only: seat origin is the driver's pelvis, +X faces forward.
+ // Empty class uses this world's player character, with the project BP fallback.
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Logistics|Driver") bool bShowDriver=true;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Logistics|Driver") TSubclassOf<ACharacter> DriverCharacterClass;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Logistics|Driver") FTransform DriverSeatPose=FTransform(FVector(235,-55,140));
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Logistics|Driver") FVector DriverSteeringWheelCentreCm=FVector(42,0,35);
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Logistics|Driver") bool bDriverPoseReady=false;
+ UFUNCTION(BlueprintCallable,Category="Logistics|Driver") void UpdateDriverPresentation();
+ UFUNCTION(BlueprintPure,Category="Logistics|Driver") UPoseableMeshComponent* GetDriverMesh() const { return DriverMesh; }
  // Chassis, panels, open doors and work lights; never include the fixed dock leveller.
  UPROPERTY(EditInstanceOnly,BlueprintReadWrite,Category="Logistics") TArray<TObjectPtr<AActor>> TruckParts;
  UPROPERTY(EditInstanceOnly,BlueprintReadWrite,Category="Logistics") TObjectPtr<AActor> DockAnchor;
@@ -48,6 +60,7 @@ public:
  UFUNCTION(BlueprintPure,Category="Logistics") bool IsManifestReady() const { return InitialManifest.IsEmpty() && !bInitialManifestError; }
  UFUNCTION(BlueprintCallable,Category="Logistics") bool RetryInitialManifest();
 private:
+ UPROPERTY(VisibleAnywhere,Category="Logistics|Driver") TObjectPtr<UPoseableMeshComponent> DriverMesh;
  struct FBodyState
  {
   TWeakObjectPtr<UPrimitiveComponent> Body;

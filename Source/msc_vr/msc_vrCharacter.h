@@ -114,16 +114,22 @@ protected:
 	UPROPERTY(EditAnywhere, Category="Human Physics") float HumanMassKg=80.f;
 	bool bPhysicalRagdoll=false, bPhysicalSprint=false, bPhysicalGround=false, bPhysicalCrouchRequested=false;
 	float JumpSupportDelay=0.f, GripSlipTime=0.f;
+	float BalanceLostSeconds=0.f,RagdollElapsed=0.f,RagdollStableSeconds=0.f,RagdollRetrySeconds=0.f;
+	bool bGetUpRequested=false;
+	FTransform StandingMeshRelative;
 	FVector GripBodyOffset=FVector::ZeroVector;
 	void UpdatePhysicalMovement(float DeltaSeconds);
 	void UpdateGripTarget(const FTransform& Pose);
 	void UpdateLocomotion();
+	void UpdateRagdollRecovery(float DeltaSeconds);
+	bool TryRecoverFromRagdoll();
 	bool FindPlacement(AWarehousePallet* Pallet, const FVector& Aim, FTransform& Target) const;
 	
 public:
 	Amsc_vrCharacter();
 	virtual void Tick(float DeltaSeconds) override;
 	virtual FVector GetVelocity() const override;
+	virtual void CalcCamera(float DeltaSeconds,FMinimalViewInfo& OutResult) override;
 	UFUNCTION(BlueprintPure, Category="Carry") AActor* GetHeldCargo() const { return HeldCargo; }
 	UFUNCTION(BlueprintPure, Category="Carry") bool IsPlacingCargo() const { return PlacementTime>=0.f; }
 	UFUNCTION(BlueprintPure, Category="Human Physics") bool IsPhysicalRagdoll() const { return bPhysicalRagdoll; }

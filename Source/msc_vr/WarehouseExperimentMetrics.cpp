@@ -257,9 +257,14 @@ void FWarehouseExperimentMetrics::NotifyReport(AWarehouseForklift* V,const FWare
  // at the world's native precision to avoid repeated rounded timestamp intervals.
  const double At=Collector->Now();
  Collector->CaptureVehicle(V,At);
- const auto* Index=Collector->JobLookup.Find(Report.JobId);if (!Index) return;
- auto& Job=Collector->Jobs[*Index];if (Job.IsTerminal()) return;
- if (Report.Result==TEXT("COMPLETED")) Collector->CompleteJob(*Index,At,TEXT("completed"),Report.Detail);
+ Collector->RecordReport(Report,At);
+}
+void FWarehouseExperimentMetrics::RecordReport(const FWarehouseJobReport& Report,double At)
+{
+ const auto* Index=JobLookup.Find(Report.JobId);if (!Index) return;
+ auto& Job=Jobs[*Index];if (Job.IsTerminal()) return;
+ if (Report.Result==TEXT("COMPLETED")) CompleteJob(*Index,At,TEXT("completed"),Report.Detail);
+ else if (Report.Result==TEXT("CANCELLED")) CompleteJob(*Index,At,TEXT("cancelled"),Report.Detail);
  else if (Report.Result==TEXT("ACCEPTED"))
  { if (Job.StartedSeconds<0) Job.StartedSeconds=At;Job.Result=TEXT("active"); }
  else if (Report.Result==TEXT("FAULT"))
@@ -510,7 +515,11 @@ bool FWarehouseExperimentAccountingTest::RunTest(const FString& Parameters)
  TestEqual(TEXT("Exclusive phases sum to elapsed"),PhaseSum,M.Jobs[0].ElapsedSeconds);
 
  M.RegisterJob(TEXT("B"),TEXT("cancelled-order"),2);M.AccountJob(1,5);
- M.CompleteJob(1,7,TEXT("cancelled"),TEXT("cancel"));
+ FWarehouseJobReport Cancel;Cancel.JobId=TEXT("B");Cancel.Result=TEXT("CANCELLED");Cancel.Detail=TEXT("building edit");
+ M.RecordReport(Cancel,7);
+ Cancel.Result=TEXT("COMPLETED");M.RecordReport(Cancel,100);
+ TestEqual(TEXT("Cancelled report is terminal despite late completion"),M.Jobs[1].Result,FString(TEXT("cancelled")));
+ TestEqual(TEXT("Cancelled report freezes exact end time"),M.Jobs[1].FinishedSeconds,7.);
  M.RegisterJob(TEXT("C"),TEXT("recoverable-fault"),0);
  M.JobObservations[2].Phase=EWarehouseExperimentPhase::Fault;M.Jobs[2].FaultEvents=1;
  M.AccountJob(2,13);

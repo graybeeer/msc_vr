@@ -23,6 +23,7 @@
 #include "WarehouseCargo.h"
 #include "WarehouseForklift.h"
 #include "WarehousePalletLift.h"
+#include "WarehouseElevator.h"
 #include "WarehouseComputer.h"
 #include "WarehouseExperimentUI.h"
 #include "WarehouseExperimentSubsystem.h"
@@ -914,6 +915,9 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
   if (!bObserverView)
    if (Cast<AWarehouseComputer>(OperatorCharacter->GetInteractionTarget()))
     return FText::FromString(TEXT("E : 관제 컴퓨터 접속\n실시간 재고 · 운반 작업 · 지게차 관리"));
+  if (!bObserverView)
+   if (auto* Elevator=Cast<AWarehouseElevator>(OperatorCharacter->GetInteractionTarget()))
+    return FText::FromString(Elevator->GetHumanInteractionText(OperatorCharacter));
   if (!bObserverView)
    if (auto* Lift=Cast<AWarehousePalletLift>(OperatorCharacter->GetInteractionTarget()))
     return Lift->GetInteractionText(FMath::Clamp(FMath::FloorToInt((OperatorCharacter->GetActorLocation().Z-Lift->GetActorLocation().Z)/400.f),0,Lift->FloorCount-1));

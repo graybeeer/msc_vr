@@ -75,6 +75,8 @@ public:
  void MouseTick(class APlayerController* PC);
  virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 private:
+ friend class AWarehouseBuildingLayout;
+ void CaptureMoving(const TArray<AActor*>& Members);
  struct FPart
  {
   TWeakObjectPtr<class USceneComponent> Component;

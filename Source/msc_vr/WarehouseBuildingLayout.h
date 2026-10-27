@@ -7,6 +7,7 @@
 class AStaticMeshActor;
 class UMaterialInterface;
 class UStaticMesh;
+class AWarehouseForklift;
 
 USTRUCT(BlueprintType)
 struct FWarehouseMezzanineSettings
@@ -94,6 +95,7 @@ private:
  TArray<FExteriorContact> ExteriorContacts;
  FBox2D CapturedFootprint=FBox2D(FVector2D(-2400,-2000),FVector2D(2400,2000));
  bool bCaptured=false;
+ bool ValidateSettingsInternal(const FWarehouseBuildingSettings& Proposed,FString& Reason,TArray<AActor*>& Remove,TArray<AWarehouseForklift*>& Relocate) const;
  bool ExteriorActuallyOverlaps(const AStaticMeshActor* Source,const AActor* Other,const FBox& ProposedWorld) const;
  bool PreservesExistingExteriorContact(const AStaticMeshActor* Source,const AActor* Other,const FBox& ProposedWorld,const FBox& OtherWorld) const;
  void HideOriginalStructure();

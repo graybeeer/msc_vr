@@ -19,7 +19,7 @@ void UWarehouseConstructionEditor::SetTarget(EWarehouseConstructionTarget Value)
  if (Value>=EWarehouseConstructionTarget::Floor2 && Value<=EWarehouseConstructionTarget::Floor4) StairFloor=int32(Value);
  Status=Value==EWarehouseConstructionTarget::Building ? TEXT("건물 외곽의 네모 손잡이를 드래그하세요. 최대 96 × 80m, 높이 20m입니다.") :
   Value==EWarehouseConstructionTarget::Stairs ? TEXT("계단 범위를 잡아 이동하세요. 선택층의 계단만 이동하며 회전 버튼으로 방향을 바꿉니다.") :
-  TEXT("복층 바닥 안쪽은 이동, 외곽 네모 손잡이는 크기 조절입니다. 내부 화물·시설의 지지가 사라지는 변경은 차단됩니다.");
+  TEXT("복층 바닥 안쪽은 이동, 외곽 손잡이는 크기 조절입니다. 간섭 물류는 보류하고 설비는 정리하며 지게차는 안전한 바닥으로 옮깁니다.");
 }
 void UWarehouseConstructionEditor::SetStairFloor(int32 Floor)
 { EndGesture(false);StairFloor=FMath::Clamp(Floor,1,3);RefreshDraft(); }

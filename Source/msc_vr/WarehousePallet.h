@@ -7,6 +7,7 @@ class AWarehouseCargo;
 class UPhysicsConstraintComponent;
 class USplineMeshComponent;
 class UMaterialInterface;
+class AWarehouseInboundZone;
 
 UENUM(BlueprintType)
 enum class EWarehouseReceiptState : uint8 { Pending, Confirmed, WrapTorn };
@@ -26,6 +27,11 @@ public:
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Inbound|Wrap",meta=(ClampMin="1")) float WrapBreakForceN=1500;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Inbound|Wrap",meta=(ClampMin="1")) float WrapBreakTorqueNm=250;
  UPROPERTY(EditAnywhere,Category="Inbound|Wrap") TSoftObjectPtr<UMaterialInterface> WrapMaterial;
+ UPROPERTY(EditAnywhere,Category="Inbound|Wrap") TSoftObjectPtr<UMaterialInterface> WrappingHighlightMaterial;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Inbound|Wrap") bool bWrapping=false;
+ UFUNCTION(BlueprintPure,Category="Inbound|Wrap") float GetWrappingRemainingSeconds() const;
+ bool BeginInboundWrapping(const TArray<AActor*>& Loads,AWarehouseInboundZone* Zone);
+ UFUNCTION(BlueprintCallable,Category="Inbound|Wrap") void CancelInboundWrapping();
  UFUNCTION(BlueprintPure,Category="Inbound") FText GetReceiptDescription() const;
  UFUNCTION(BlueprintPure,Category="Inbound") TArray<AWarehouseCargo*> GetWrappedCargo() const;
  bool ConfirmInbound(const TArray<AActor*>& Loads);
@@ -45,6 +51,14 @@ private:
  UPROPERTY(Transient) TArray<TObjectPtr<AWarehouseCargo>> WrappedCargo;
  UPROPERTY(Transient) TArray<TObjectPtr<UPhysicsConstraintComponent>> WrapJoints;
  UPROPERTY(Transient) TArray<TObjectPtr<USplineMeshComponent>> WrapFilm;
+ UPROPERTY(Transient) TArray<TObjectPtr<AWarehouseCargo>> WrappingCargo;
+ UPROPERTY(Transient) TArray<TObjectPtr<class UStaticMeshComponent>> WrappingParts;
+ UPROPERTY(Transient) TArray<TObjectPtr<UMaterialInterface>> WrappingPreviousOverlays;
+ TArray<bool> WrappingPreviousForceDisableNanite;
+ TArray<FTransform> WrappingPoses;
+ TWeakObjectPtr<AWarehouseInboundZone> WrappingZone;
+ double WrappingStartedSeconds=-1;
+ bool GetWrappableCargo(const TArray<AActor*>& Loads,TArray<AWarehouseCargo*>& Cargo);
  bool bWrapBreakPending=false;
  UFUNCTION() void OnWrapJointBroken(int32 ConstraintIndex);
  void BuildWrapFilm();

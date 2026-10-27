@@ -8,6 +8,12 @@
 #include "Components/SceneComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/PoseableMeshComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
+#include "GameFramework/GameModeBase.h"
+#include "GameFramework/WorldSettings.h"
+#include "TwoBoneIK.h"
 #include "EngineUtils.h"
 #include "Engine/World.h"
 #include "Engine/StaticMesh.h"
@@ -50,11 +56,79 @@ AWarehouseLogisticsTruck::AWarehouseLogisticsTruck()
 {
  PrimaryActorTick.bCanEverTick=true;
  RootComponent=CreateDefaultSubobject<USceneComponent>(TEXT("TruckFrame"));
+ DriverMesh=CreateDefaultSubobject<UPoseableMeshComponent>(TEXT("TruckDriverVisual"));
+ DriverMesh->SetupAttachment(RootComponent);DriverMesh->SetMobility(EComponentMobility::Movable);
+ DriverMesh->SetCollisionProfileName(TEXT("NoCollision"));DriverMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
+ DriverMesh->SetGenerateOverlapEvents(false);DriverMesh->SetCanEverAffectNavigation(false);
+ DriverMesh->SetComponentTickEnabled(false);DriverMesh->ComponentTags.Add(TEXT("WarehouseCinematicVisual"));
+}
+void AWarehouseLogisticsTruck::OnConstruction(const FTransform& Transform)
+{
+ Super::OnConstruction(Transform);UpdateDriverPresentation();
+}
+void AWarehouseLogisticsTruck::UpdateDriverPresentation()
+{
+ bDriverPoseReady=false;
+ DriverMesh->SetVisibility(false);DriverMesh->SetHiddenInGame(true);
+ if (!bShowDriver || DriverSeatPose.ContainsNaN() || DriverSteeringWheelCentreCm.ContainsNaN()) return;
+ UClass* Appearance=DriverCharacterClass.Get();
+ if (!Appearance && GetWorld())
+ {
+  const AGameModeBase* Mode=GetWorld()->GetAuthGameMode();
+  if (!Mode && GetWorld()->GetWorldSettings()->DefaultGameMode) Mode=GetWorld()->GetWorldSettings()->DefaultGameMode->GetDefaultObject<AGameModeBase>();
+  if (Mode) Appearance=Mode->DefaultPawnClass.Get();
+ }
+ if (!Appearance || !Appearance->IsChildOf(ACharacter::StaticClass()))
+  Appearance=LoadClass<ACharacter>(nullptr,TEXT("/Game/FirstPerson/Blueprints/BP_FirstPersonCharacter.BP_FirstPersonCharacter_C"));
+ const auto* Character=Appearance ? Appearance->GetDefaultObject<ACharacter>() : nullptr;
+ const auto* Source=Character ? Character->GetMesh() : nullptr;
+ auto* Mesh=Source ? Source->GetSkeletalMeshAsset() : nullptr;
+ if (!Mesh) return;
+ DriverMesh->SetSkinnedAssetAndUpdate(Mesh);
+ DriverMesh->EmptyOverrideMaterials();
+ for (int32 I=0;I<Source->GetNumMaterials();++I) DriverMesh->SetMaterial(I,Source->GetMaterial(I));
+ const FTransform Alignment(Source->GetRelativeRotation(),FVector::ZeroVector,Source->GetRelativeScale3D());
+ DriverMesh->SetRelativeTransform(Alignment*DriverSeatPose);
+ const FReferenceSkeleton& Ref=Mesh->GetRefSkeleton();
+ TArray<FTransform> Local=Ref.GetRefBonePose(),Component;
+ const int32 Pelvis=Ref.FindBoneIndex(TEXT("pelvis"));
+ if (Pelvis==INDEX_NONE) return;
+ Local[Pelvis].SetTranslation(FVector::ZeroVector);
+ auto Rebuild=[&]()
+ {
+  Component=Local;
+  for (int32 I=1;I<Component.Num();++I) Component[I]=Local[I]*Component[Ref.GetParentIndex(I)];
+ };
+ Rebuild();
+ auto Limb=[&](const TCHAR* UpperName,const TCHAR* LowerName,const TCHAR* EndName,FVector Goal,FVector Pole)
+ {
+  const int32 Upper=Ref.FindBoneIndex(UpperName),Lower=Ref.FindBoneIndex(LowerName),End=Ref.FindBoneIndex(EndName);
+  if (Upper==INDEX_NONE || Lower==INDEX_NONE || End==INDEX_NONE || Ref.GetParentIndex(Lower)!=Upper || Ref.GetParentIndex(End)!=Lower) return false;
+  FTransform A=Component[Upper],B=Component[Lower],C=Component[End];
+  AnimationCore::SolveTwoBoneIK(A,B,C,Alignment.InverseTransformPosition(Pole),Alignment.InverseTransformPosition(Goal),false,1.,1.);
+  Local[Upper]=A.GetRelativeTransform(Component[Ref.GetParentIndex(Upper)]);
+  Local[Lower]=B.GetRelativeTransform(A);Local[End]=C.GetRelativeTransform(B);Rebuild();return true;
+ };
+ // Fixed seat/steering pose, preserving the mannequin's actual limb lengths.
+ // It has no capsule, AI, physical mass or world collision of its own.
+ for (const TCHAR* Suffix:{TEXT("_l"),TEXT("_r")})
+ {
+  const FName Thigh(*(FString(TEXT("thigh"))+Suffix));
+  const int32 Index=Ref.FindBoneIndex(Thigh);
+  if (Index==INDEX_NONE) return;
+  const float Side=Alignment.TransformPosition(Component[Index].GetLocation()).Y<0 ? -1.f : 1.f;
+  const FString S(Suffix);
+  if (!Limb(*(TEXT("thigh")+S),*(TEXT("calf")+S),*(TEXT("foot")+S),FVector(45,Side*14,-40),FVector(75,Side*18,0)) ||
+      !Limb(*(TEXT("upperarm")+S),*(TEXT("lowerarm")+S),*(TEXT("hand")+S),DriverSteeringWheelCentreCm+FVector(0,Side*17,0),FVector(12,Side*55,25))) return;
+ }
+ DriverMesh->BoneSpaceTransforms=MoveTemp(Local);
+ DriverMesh->MarkRefreshTransformDirty();DriverMesh->RefreshBoneTransforms();DriverMesh->UpdateBounds();DriverMesh->MarkRenderTransformDirty();
+ bDriverPoseReady=true;DriverMesh->SetVisibility(true);DriverMesh->SetHiddenInGame(State==EWarehouseTruckState::Departed);
 }
 
 void AWarehouseLogisticsTruck::BeginPlay()
 {
- Super::BeginPlay();LastPose=GetActorTransform();
+ Super::BeginPlay();LastPose=GetActorTransform();UpdateDriverPresentation();
  for (AWarehousePallet* Pallet:InitialPallets) InitialManifest.Add(Pallet);
  ManifestPallets.Reset();
  for (AActor* Part:TruckParts) if (IsValid(Part)) DockParts.Add({Part,Part->GetActorTransform().GetRelativeTransform(GetActorTransform())});
@@ -299,6 +373,7 @@ bool AWarehouseLogisticsTruck::RetryInitialManifest()
 void AWarehouseLogisticsTruck::Tick(float DeltaSeconds)
 {
  Super::Tick(DeltaSeconds);
+ if (DriverMesh) DriverMesh->SetHiddenInGame(!bShowDriver || !bDriverPoseReady || State==EWarehouseTruckState::Departed);
  MeasuredSpeedCm=DeltaSeconds>0 ? FVector::Dist(LastPose.GetLocation(),GetActorLocation())/DeltaSeconds:0;
  LastPose=GetActorTransform();
  if (!HasAuthority() || State==EWarehouseTruckState::Departed) return;
@@ -351,6 +426,7 @@ void AWarehouseLogisticsTruck::Tick(float DeltaSeconds)
  for (auto& Unit:Units) MoveUnit(Unit,Unit.LocalPalletPose*GetActorTransform());
  if (RouteIndex<DepartureRoute.Num()) return;
  State=EWarehouseTruckState::Departed;Status=TEXT("출차 완료 · 운송 기록 보존");
+ DriverMesh->SetHiddenInGame(true);
  for (const auto& Part:DepartureParts) if (auto* Actor=Part.Actor.Get()) { Actor->SetActorHiddenInGame(true);Actor->SetActorEnableCollision(false); }
  for (const auto& Unit:Units) for (const auto& Member:Unit.Members) if (auto* Actor=Member.Actor.Get())
  { Actor->SetActorHiddenInGame(true);Actor->SetActorEnableCollision(false); }

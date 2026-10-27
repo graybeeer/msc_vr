@@ -26,6 +26,7 @@
 #include "Engine/Engine.h"
 #include "WarehouseChargingStation.h"
 #include "WarehousePalletLift.h"
+#include "WarehouseElevator.h"
 #include "WarehouseComputer.h"
 #include "WarehouseCarryAnimInstance.h"
 #include "WarehouseWorker.h"
@@ -130,7 +131,7 @@ Amsc_vrCharacter::Amsc_vrCharacter()
 
 	// Create the Camera Component	
 	FirstPersonCameraComponent = CreateDefaultSubobject<UCameraComponent>(TEXT("First Person Camera"));
-	FirstPersonCameraComponent->SetupAttachment(FirstPersonMesh, FName("head"));
+	FirstPersonCameraComponent->SetupAttachment(GetMesh(), FName("head"));
 	FirstPersonCameraComponent->SetRelativeLocationAndRotation(FVector(-2.8f, 5.89f, 0.0f), FRotator(0.0f, 90.0f, -90.0f));
 	FirstPersonCameraComponent->bUsePawnControlRotation = true;
 	FirstPersonCameraComponent->bEnableFirstPersonFieldOfView = true;
@@ -214,9 +215,20 @@ void Amsc_vrCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void Amsc_vrCharacter::ToggleCarry()
 {
-	if (IsValid(RemoteForklift)) return;
+	if (bPhysicalRagdoll || IsValid(RemoteForklift)) return;
 	if (Controller && Controller->IsMoveInputIgnored()) return;
 	if (PlacementTime >= 0.f) { CancelCarryAction(TEXT("놓기를 취소했습니다.")); return; }
+	AActor* Target=GetInteractionTarget();
+	if (auto* Lift=Cast<AWarehouseElevator>(Target))
+	{
+		if (Lift->IsHumanInside(this) && Lift->CanUseHumanPanel(this))
+		{
+			const int32 Floor=Lift->HumanButtonAtSight(this);
+			if (Floor!=INDEX_NONE) Lift->RequestHumanDestination(this,Floor);
+		}
+		else if (const int32 Floor=Lift->HumanLandingFloor(this);Floor!=INDEX_NONE) Lift->RequestHumanCall(this,Floor);
+		return;
+	}
 	if (IsValid(HeldCargo))
 	{
 		const FVector Eye=FirstPersonCameraComponent->GetComponentLocation();
@@ -245,7 +257,6 @@ void Amsc_vrCharacter::ToggleCarry()
 		return;
 	}
 
-	AActor* Target=GetInteractionTarget();
 	if (auto* Computer=Cast<AWarehouseComputer>(Target))
 	{
 		if (auto* PC=Cast<Amsc_vrPlayerController>(Controller)) PC->OpenWarehouseComputer(Computer);
@@ -279,11 +290,14 @@ void Amsc_vrCharacter::ToggleCarry()
 
 AActor* Amsc_vrCharacter::GetInteractionTarget(float RangeCm) const
 {
+ if (bPhysicalRagdoll) return nullptr;
  const FVector Eye=FirstPersonCameraComponent->GetComponentLocation();
  const FVector End=Eye+FirstPersonCameraComponent->GetForwardVector()*FMath::Clamp(RangeCm,0.f,400.f);
  FCollisionQueryParams Params(SCENE_QUERY_STAT(WarehouseInteraction),false,this);
  FHitResult Hit;
  const bool Blocking=GetWorld()->LineTraceSingleByChannel(Hit,Eye,End,ECC_Visibility,Params);
+ if (Blocking) if (auto* Lift=Cast<AWarehouseElevator>(Hit.GetActor()))
+  return Lift->HumanLandingFloor(this)!=INDEX_NONE || Lift->CanUseHumanPanel(this) ? Lift : nullptr;
  if (Blocking && (Cast<AWarehouseForklift>(Hit.GetActor()) || Cast<AWarehouseCargo>(Hit.GetActor()) ||
      Cast<AWarehousePallet>(Hit.GetActor()) || Cast<AWarehouseChargingStation>(Hit.GetActor()) || Cast<AWarehouseComputer>(Hit.GetActor()) || Cast<AWarehousePalletLift>(Hit.GetActor()))) return Hit.GetActor();
  // A forklift's visible outline includes gaps between the mast and sensor
@@ -331,6 +345,10 @@ void Amsc_vrCharacter::BeginPlay()
 	bUseControllerRotationYaw=false; bUseControllerRotationPitch=false; bUseControllerRotationRoll=false;
 	Tags.AddUnique(TEXT("WarehousePhysicalHuman"));
 	GetCapsuleComponent()->SetCapsuleSize(30.f,96.f);
+	StandingMeshRelative=GetMesh()->GetRelativeTransform();
+	// The first-person render copy has template head stabilization. Its socket
+	// must not keep the eyes at standing height while the real body crouches.
+	FirstPersonCameraComponent->AttachToComponent(GetMesh(),FAttachmentTransformRules::KeepRelativeTransform,TEXT("head"));
 	auto* Movement=GetCharacterMovement();
 	Movement->bEnablePhysicsInteraction=false;
 	Movement->SetComponentTickEnabled(false);
@@ -355,7 +373,7 @@ FVector Amsc_vrCharacter::GetVelocity() const
 
 void Amsc_vrCharacter::UpdatePhysicalMovement(float DeltaSeconds)
 {
-	if (bPhysicalRagdoll) return;
+	if (bPhysicalRagdoll) { UpdateRagdollRecovery(DeltaSeconds);return; }
 	JumpSupportDelay=FMath::Max(0.f,JumpSupportDelay-DeltaSeconds);
 	FVector Input=ConsumeMovementInputVector().GetClampedToMaxSize(1.f);
 	if (IsValid(RemoteForklift) || bObserverPresentation || (Controller && Controller->IsMoveInputIgnored())) Input=FVector::ZeroVector;
@@ -373,18 +391,23 @@ void Amsc_vrCharacter::UpdatePhysicalMovement(float DeltaSeconds)
 	Movement->MaxWalkSpeed=Speed;
 	const float CurrentHalf=GetCapsuleComponent()->GetUnscaledCapsuleHalfHeight();
 	float ClearHalf=DesiredHalf;
-	if (DesiredHalf>CurrentHalf && GroundDistance>=0.f)
-		// Landing compression may delay standing growth, but must never shrink it.
+	if (GroundDistance<0.f) ClearHalf=CurrentHalf; // Defer stance geometry changes while truly airborne.
+	else if (DesiredHalf>CurrentHalf)
 		ClearHalf=FMath::Min(DesiredHalf,FMath::Max(CurrentHalf,GroundDistance-1.f));
+	else if (DesiredHalf<CurrentHalf)
+		// Lower the physical centre with gravity before shortening its feet. Shrinking
+		// ahead of it lost floor support and played a fall/landing in the crouch.
+		ClearHalf=FMath::Max(DesiredHalf,FMath::Min(CurrentHalf,GroundDistance-FMath::Clamp(DeltaSeconds*150.f+1.f,1.f,6.f)));
 	const float Half=FMath::FInterpConstantTo(CurrentHalf,ClearHalf,DeltaSeconds,150.f);
 	// Resizing rewrites Chaos geometry and contacts. Preserve them when unchanged.
 	if (Half!=CurrentHalf)
 	{
 		GetCapsuleComponent()->SetCapsuleHalfHeight(Half,true);
-		// The physical capsule changes height without CharacterMovement's crouch
-		// callbacks. Keep the animation root at the soles instead of below the floor.
-		GetMesh()->AddLocalOffset(FVector(0,0,CurrentHalf-Half));
 	}
+	// During a stance change the capsule may have a small support gap. Keep the
+	// visual soles on the same physical floor, not floating at the shortened shape.
+	const float FeetHeight=bPhysicalGround ? GroundDistance-1.f : Half;
+	GetMesh()->SetRelativeLocation(StandingMeshRelative.GetLocation()+FVector(0,0,96.f-FeetHeight));
 	SetIsCrouched(bPhysicalCrouchRequested || Half<95.f);
 	if (IsValid(HeldCargo) && (bPickupPending || PlacementTime>=0.f))
 	{
@@ -394,12 +417,101 @@ void Amsc_vrCharacter::UpdatePhysicalMovement(float DeltaSeconds)
 		if (Upright<.75f || (Upright<.94f && (Confined || CarryStallTime>.15f)))
 			CancelCarryAction(TEXT("무리하게 당겨 균형을 잃기 전에 동작을 취소했습니다."));
 	}
-	if (GetCapsuleComponent()->GetUpVector().Z<.5f || GetVelocity().Size()>650.f)
+	const bool LostBalance=GetCapsuleComponent()->GetUpVector().Z<.5f ||
+		(GetVelocity().Size()>650.f && (bPhysicalGround || GetVelocity().Size2D()>650.f));
+	BalanceLostSeconds=LostBalance ? BalanceLostSeconds+DeltaSeconds : 0.f;
+	if (BalanceLostSeconds>.12f)
 	{
 		DropCargo(); EndRemoteControl();
 		WarehouseHumanPhysics::StartRagdoll(this,HumanMassKg);
 		bPhysicalRagdoll=GetMesh()->IsSimulatingPhysics();
+		if (bPhysicalRagdoll)
+		{
+			RagdollElapsed=RagdollStableSeconds=RagdollRetrySeconds=0.f;bGetUpRequested=false;
+			FirstPersonMesh->SetHiddenInGame(true,true);GetMesh()->SetOwnerNoSee(false);
+			GetMesh()->FirstPersonPrimitiveType=EFirstPersonPrimitiveType::None;GetMesh()->MarkRenderStateDirty();
+			if (GEngine) GEngine->AddOnScreenDebugMessage(43,4.f,FColor::Yellow,TEXT("넘어졌습니다. 안전한 공간에서 자동으로 일어납니다. Space로 다시 시도할 수 있습니다."));
+		}
 	}
+}
+
+void Amsc_vrCharacter::CalcCamera(float DeltaSeconds,FMinimalViewInfo& OutResult)
+{
+	if (!bPhysicalRagdoll) { Super::CalcCamera(DeltaSeconds,OutResult);return; }
+	FirstPersonCameraComponent->GetCameraView(DeltaSeconds,OutResult);
+	// Sweep from the physical pelvis, not an elevated pivot that can already be
+	// inside a low ceiling. Prefer the rear view, then a level view with headroom.
+	const FVector Aim=GetMesh()->GetSocketLocation(TEXT("pelvis"));
+	const FRotator Heading(-20,GetControlRotation().Yaw,0);
+	FCollisionQueryParams Query(SCENE_QUERY_STAT(FallenPlayerCamera),false,this);
+	auto ClearEye=[&](const FVector& Desired)
+	{
+		FHitResult Hit;
+		return GetWorld()->SweepSingleByChannel(Hit,Aim,Desired,FQuat::Identity,ECC_Visibility,FCollisionShape::MakeSphere(12),Query) ? Hit.Location+Hit.Normal*2.f : Desired;
+	};
+	FVector Eye=ClearEye(Aim-Heading.Vector()*260.f);
+	if (FVector::DistSquared(Eye,Aim)<FMath::Square(60.f))
+		for (const float Side : {0.f,90.f,-90.f,180.f})
+		{
+			const FVector Candidate=ClearEye(Aim-FRotator(0,Heading.Yaw+Side,0).Vector()*180.f);
+			if (FVector::DistSquared(Candidate,Aim)>FVector::DistSquared(Eye,Aim)) Eye=Candidate;
+			if (FVector::DistSquared(Eye,Aim)>=FMath::Square(60.f)) break;
+		}
+	// If the whole body is confined, hide only its owner's render copy rather
+	// than showing its interior; physical bodies and other viewers are unchanged.
+	GetMesh()->SetOwnerNoSee(FVector::DistSquared(Eye,Aim)<FMath::Square(45.f));
+	OutResult.Location=Eye;OutResult.Rotation=(Aim-Eye).Rotation();OutResult.bUseFirstPersonParameters=false;
+}
+
+void Amsc_vrCharacter::UpdateRagdollRecovery(float DeltaSeconds)
+{
+	RagdollElapsed+=DeltaSeconds;RagdollRetrySeconds-=DeltaSeconds;
+	const bool Settled=GetMesh()->GetPhysicsLinearVelocity(TEXT("pelvis")).Size()<80.f &&
+		GetMesh()->GetPhysicsAngularVelocityInRadians(TEXT("pelvis")).Size()<1.5f;
+	RagdollStableSeconds=Settled ? RagdollStableSeconds+DeltaSeconds : 0.f;
+	if (auto* PC=Cast<APlayerController>(Controller);PC && PC->IsInputKeyDown(EKeys::SpaceBar)) bGetUpRequested=true;
+	if ((RagdollElapsed<1.5f && !bGetUpRequested) || RagdollStableSeconds<.4f || RagdollRetrySeconds>0.f) return;
+	RagdollRetrySeconds=1.f;
+	if (!TryRecoverFromRagdoll() && GEngine)
+		GEngine->AddOnScreenDebugMessage(43,2.f,FColor::Yellow,TEXT("일어날 바닥이나 머리 위 공간이 없습니다. 주변 공간을 확보하면 다시 시도합니다. Space: 일어서기 재시도"));
+}
+
+bool Amsc_vrCharacter::TryRecoverFromRagdoll()
+{
+	const FVector Pelvis=GetMesh()->GetSocketLocation(TEXT("pelvis"));
+	const FQuat Upright=FRotator(0,GetControlRotation().Yaw,0).Quaternion();
+	FCollisionQueryParams Query(SCENE_QUERY_STAT(PlayerGetUp),false,this);
+	FVector SafeCenter=FVector::ZeroVector;bool Found=false;
+	for (int I=0;I<9 && !Found;++I)
+	{
+		const FVector Offset=I==0 ? FVector::ZeroVector : FVector(FMath::Cos((I-1)*PI/4),FMath::Sin((I-1)*PI/4),0)*60.f;
+		FHitResult Floor;
+		if (!GetWorld()->LineTraceSingleByChannel(Floor,Pelvis+Offset+FVector(0,0,35),Pelvis+Offset-FVector(0,0,220),ECC_Visibility,Query) ||
+			Floor.ImpactNormal.Z<.65f || !WarehousePhysics::IsPhysicalContact(Floor.GetComponent())) continue;
+		const FVector Candidate=Floor.ImpactPoint+FVector(0,0,98);
+		if (GetWorld()->OverlapBlockingTestByChannel(Candidate,Upright,ECC_Pawn,FCollisionShape::MakeCapsule(30,96),Query)) continue;
+		SafeCenter=Candidate;Found=true;
+	}
+	if (!Found) return false;
+	FVector MomentumVelocity=GetMesh()->GetPhysicsLinearVelocity(TEXT("pelvis"));MomentumVelocity.Z=0;
+	GetMesh()->SetAllBodiesSimulatePhysics(false);GetMesh()->SetPhysicsBlendWeight(0.f);GetMesh()->SetEnablePhysicsBlending(false);
+	GetMesh()->SetCollisionProfileName(TEXT("NoCollision"));
+	auto* Capsule=GetCapsuleComponent();Capsule->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+	SetRootComponent(Capsule);GetMesh()->AttachToComponent(Capsule,FAttachmentTransformRules::KeepWorldTransform);
+	Capsule->SetWorldLocationAndRotation(SafeCenter,Upright,false,nullptr,ETeleportType::TeleportPhysics);
+	Capsule->SetCapsuleSize(30,96);Capsule->SetCollisionProfileName(TEXT("Pawn"));
+	WarehousePhysics::ConfigureContact(Capsule,EWarehouseSurface::Rubber,HumanMassKg);
+	Capsule->SetCollisionResponseToAllChannels(ECR_Block);Capsule->SetEnableGravity(true);Capsule->SetSimulatePhysics(true);
+	Capsule->SetPhysicsLinearVelocity(MomentumVelocity);
+	GetMesh()->SetRelativeTransform(StandingMeshRelative);GetMesh()->SetOwnerNoSee(!bObserverPresentation);
+	GetMesh()->FirstPersonPrimitiveType=EFirstPersonPrimitiveType::WorldSpaceRepresentation;GetMesh()->MarkRenderStateDirty();
+	FirstPersonMesh->SetHiddenInGame(bObserverPresentation,true);
+	SetRemotePhoneVisible(false);
+	bPhysicalRagdoll=bPhysicalCrouchRequested=bPhysicalGround=bGetUpRequested=false;
+	BalanceLostSeconds=JumpSupportDelay=0.f;SetIsCrouched(false);
+	GetCharacterMovement()->MovementMode=MOVE_Walking;GetCharacterMovement()->Velocity=MomentumVelocity;
+	if (GEngine) GEngine->AddOnScreenDebugMessage(43,2.f,FColor::Green,TEXT("안전한 바닥에서 일어났습니다."));
+	return true;
 }
 
 bool Amsc_vrCharacter::InitializeCarryPresentation()
@@ -1079,6 +1191,7 @@ void Amsc_vrCharacter::DoMove(float Right, float Forward)
 
 void Amsc_vrCharacter::DoJumpStart()
 {
+	if (bPhysicalRagdoll) { bGetUpRequested=true;RagdollRetrySeconds=0.f;return; }
 	if (bPhysicalRagdoll || !bPhysicalGround || bIsCrouched || IsValid(RemoteForklift) || PlacementTime>=0.f || (Controller && Controller->IsMoveInputIgnored())) return;
 	// Input callbacks may run twice before the next physics/movement tick.
 	// Consume the supported state now so one take-off adds only one impulse.

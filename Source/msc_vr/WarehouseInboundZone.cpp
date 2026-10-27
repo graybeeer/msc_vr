@@ -27,6 +27,12 @@ bool AWarehouseInboundZone::ContainsPallet(const AWarehousePallet* Pallet) const
  const FVector Local=GetActorTransform().InverseTransformPosition(Pallet->GetActorLocation());
  return FMath::Abs(Local.X)<=HalfSizeCm.X-55 && FMath::Abs(Local.Y)<=HalfSizeCm.Y-55 && FMath::Abs(Local.Z)<=5;
 }
+void AWarehouseInboundZone::RecordInboundConfirmed(AWarehousePallet* Pallet)
+{
+ const auto* Pending=StableLoads.Find(Pallet);
+ if (Pending && Pending->bWrapping && Pallet->ReceiptState==EWarehouseReceiptState::Confirmed)
+ { StableLoads.Remove(Pallet);++ConfirmedCount; }
+}
 bool AWarehouseInboundZone::SlotClear(int32 Index,AWarehousePallet* Pallet,const TArray<AActor*>& Loads,float Height,float Mass) const
 {
  const auto& Slot=RackSlots[Index];
@@ -132,9 +138,10 @@ void AWarehouseInboundZone::ScanInbound()
   }
   if (Pallet->ReceiptState==EWarehouseReceiptState::Pending)
   {
+   if (Pallet->bWrapping) continue;
    if (bClaimed) { StableLoads.Remove(Pallet);continue; }
    auto* Previous=StableLoads.Find(Pallet);
-   bool Changed=!Previous || Previous->Cargo.Num()!=Loads.Num() ||
+   bool Changed=!Previous || Previous->bWrapping || Previous->Cargo.Num()!=Loads.Num() ||
     FVector::Dist(Pallet->GetActorLocation(),Previous->Pallet.GetLocation())>2.f ||
     Pallet->GetActorQuat().AngularDistance(Previous->Pallet.GetRotation())>FMath::DegreesToRadians(2.f);
    if (Previous) for (auto* Load:Loads)
@@ -150,8 +157,8 @@ void AWarehouseInboundZone::ScanInbound()
     StableLoads.Add(Pallet,MoveTemp(Snapshot));
    }
    // The receiving NPC is abstracted as a two-second stable-stack inspection.
-   if (Now-StableLoads.FindChecked(Pallet).Since<2.f || !Pallet->ConfirmInbound(Loads)) continue;
-   StableLoads.Remove(Pallet);++ConfirmedCount;
+   if (Now-StableLoads.FindChecked(Pallet).Since>=2.f && Pallet->BeginInboundWrapping(Loads,this)) StableLoads.FindChecked(Pallet).bWrapping=true;
+   continue;
   }
   ++Confirmed;
   const auto Wrapped=Pallet->GetWrappedCargo();

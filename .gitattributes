@@ -1,2 +1,12 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Project-owned runtime files >= 1 MiB. External source packs remain local.
+Content/Warehouse/AGV/Meshes/SM_Refined_AGV_Body.uasset filter=lfs diff=lfs merge=lfs -text
+Content/Warehouse/PalletLift/Meshes/SM_PalletLift_Frame.uasset filter=lfs diff=lfs merge=lfs -text
+Content/Warehouse/PalletLift/Meshes/SM_PalletLift_Frame4.uasset filter=lfs diff=lfs merge=lfs -text
+Content/Warehouse/PalletLift/Meshes/SM_PalletLift_FramePowered3.uasset filter=lfs diff=lfs merge=lfs -text
+Content/Warehouse/PalletLift/Meshes/SM_PalletLift_FramePowered4.uasset filter=lfs diff=lfs merge=lfs -text
+Content/Warehouse/Services/SupportBatches/SM_SM_Support_0_Roof.uasset filter=lfs diff=lfs merge=lfs -text
+Content/Warehouse/Services/SupportBatches/SM_SM_Support_1.uasset filter=lfs diff=lfs merge=lfs -text
+Content/Warehouse/Services/SupportBatches/SM_SM_Support_2.uasset filter=lfs diff=lfs merge=lfs -text

@@ -10,9 +10,28 @@
 #include "PhysicsEngine/PhysicsConstraintComponent.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "Engine/StaticMesh.h"
+#include "GameFramework/Character.h"
+#include "Components/CapsuleComponent.h"
+#include "Camera/CameraComponent.h"
+#include "Components/SceneComponent.h"
+#include "PhysicsEngine/BodyInstance.h"
+#include "Engine/OverlapResult.h"
 
 namespace
 {
+FBox CapsuleEnvelope(const UCapsuleComponent* Capsule,const FTransform& Frame)
+{
+ // UCapsuleComponent::CalcBounds transforms a rectangular render bound. Yaw
+ // expands that box even though a circular collision capsule has not widened.
+ // The actual shape is a line segment swept by a sphere, including real tilt.
+ const float Radius=Capsule->GetScaledCapsuleRadius();
+ const float SegmentHalf=FMath::Max(0.f,Capsule->GetScaledCapsuleHalfHeight()-Radius);
+ const FVector Centre=Frame.InverseTransformPosition(Capsule->GetComponentLocation());
+ const FVector Segment=Frame.InverseTransformVector(Capsule->GetUpVector()*SegmentHalf).GetAbs();
+ const FVector Scale=Frame.GetScale3D().GetAbs();
+ const FVector Radial(Radius/FMath::Max(Scale.X,1.e-8),Radius/FMath::Max(Scale.Y,1.e-8),Radius/FMath::Max(Scale.Z,1.e-8));
+ return FBox(Centre-Segment-Radial,Centre+Segment+Radial);
+}
 bool AtWaitingPose(const AWarehouseForklift* Vehicle,const FTransform& Pose)
 {
  const FVector Offset=Vehicle->GetActorLocation()-Pose.GetLocation();
@@ -67,6 +86,9 @@ AWarehouseElevator::AWarehouseElevator()
  static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube"));
  static ConstructorHelpers::FObjectFinder<UMaterialInterface> Steel(TEXT("/Game/Warehouse/AGV/Materials/M_Graphite_powder-coated_steel"));
  static ConstructorHelpers::FObjectFinder<UMaterialInterface> Chrome(TEXT("/Game/Warehouse/AGV/Materials/M_Machined_steel"));
+ static ConstructorHelpers::FObjectFinder<UStaticMesh> Cylinder(TEXT("/Engine/BasicShapes/Cylinder"));
+ static ConstructorHelpers::FObjectFinder<UMaterialInterface> IndicatorOn(TEXT("/Game/Warehouse/AGV/Materials/M_Sensor_status_green"));
+ IndicatorOnMaterial=IndicatorOn.Object;IndicatorOffMaterial=Steel.Object;
  static ConstructorHelpers::FObjectFinder<UMaterialInterface> Yellow(TEXT("/Game/Warehouse/Materials/MI_SafetyYellow"));
  auto Part=[&](FString Name,FVector Position,FVector Size,UMaterialInterface* Material)
  {
@@ -115,6 +137,42 @@ AWarehouseElevator::AWarehouseElevator()
   Support->SetupAttachment(Platform);Support->SetStaticMesh(Cube.Object);Support->SetAbsolute(false,false,true);
   Support->SetCollisionProfileName(TEXT("NoCollision"));Support->SetVisibility(false);Support->SetHiddenInGame(true);
   CargoDeckSupports.Add(Support);
+ }
+ for (int32 Floor=0;Floor<4;++Floor)
+ {
+  auto* Panel=Part(FString::Printf(TEXT("HumanCallPanel_%d"),Floor),FVector(-296,-205,Floor*400+119),FVector(3,18,24),Yellow.Object);
+  HumanCallPanels.Add(Panel);
+  auto* Label=CreateDefaultSubobject<UTextRenderComponent>(*FString::Printf(TEXT("HumanCallLabel_%d"),Floor));
+  Label->SetupAttachment(RootComponent);Label->SetRelativeLocation(FVector(-299,-205,Floor*400+137));
+  Label->SetRelativeRotation(FRotator(0,180,0));Label->SetHorizontalAlignment(EHTA_Center);Label->SetWorldSize(8);
+  Label->SetText(FText::FromString(FString::Printf(TEXT("L%d / E CALL"),Floor+1)));HumanPanelLabels.Add(Label);
+ }
+ HumanPanelAnchor=CreateDefaultSubobject<USceneComponent>(TEXT("HumanPanelAnchor"));
+ HumanPanelAnchor->SetupAttachment(Platform);HumanPanelAnchor->SetAbsolute(false,false,true);
+ HumanCabinPanel=CreateDefaultSubobject<UStaticMeshComponent>(TEXT("HumanCabinPanel"));
+ HumanCabinPanel->SetupAttachment(HumanPanelAnchor);
+ HumanCabinPanel->SetStaticMesh(Cube.Object);HumanCabinPanel->SetMaterial(0,Chrome.Object);
+ HumanCabinPanel->SetRelativeScale3D(FVector(.05,.24,.46));
+ HumanCabinPanel->SetCollisionProfileName(TEXT("NoCollision"));
+ for (int32 Floor=0;Floor<4;++Floor)
+ {
+  auto* Button=CreateDefaultSubobject<UStaticMeshComponent>(*FString::Printf(TEXT("HumanFloorButton_%d"),Floor));
+  Button->SetupAttachment(HumanPanelAnchor);Button->SetStaticMesh(Cylinder.Object);
+  Button->SetRelativeLocation(FVector(-3.5,-5,(Floor-1.5f)*10.f));
+  Button->SetRelativeRotation(FRotator(90,0,0));Button->SetRelativeScale3D(FVector(.065,.065,.018));
+  Button->SetMaterial(0,IndicatorOffMaterial);
+  // A button is a sight target, not another physical wall or sensor obstacle.
+  WarehousePhysics::ConfigureLayoutSelection(Button);Button->SetCollisionResponseToChannel(ECC_Visibility,ECR_Block);
+  HumanFloorButtons.Add(Button);
+  auto* Number=CreateDefaultSubobject<UTextRenderComponent>(*FString::Printf(TEXT("HumanFloorNumber_%d"),Floor));
+  Number->SetupAttachment(HumanPanelAnchor);Number->SetRelativeLocation(FVector(-3.6,2,(Floor-1.5f)*10.f-2.5f));
+  Number->SetRelativeRotation(FRotator(0,180,0));Number->SetHorizontalAlignment(EHTA_Center);Number->SetWorldSize(6);
+  Number->SetText(FText::FromString(FString::FromInt(Floor+1)));HumanFloorLabels.Add(Number);
+  auto* Lamp=CreateDefaultSubobject<UStaticMeshComponent>(*FString::Printf(TEXT("HumanCallLamp_%d"),Floor));
+  Lamp->SetupAttachment(RootComponent);Lamp->SetStaticMesh(Cylinder.Object);
+  Lamp->SetRelativeLocation(FVector(-298.5,-205,Floor*400.f+119));Lamp->SetRelativeRotation(FRotator(90,0,0));
+  Lamp->SetRelativeScale3D(FVector(.08,.08,.018));Lamp->SetCollisionProfileName(TEXT("NoCollision"));
+  Lamp->SetMaterial(0,IndicatorOffMaterial);HumanCallLamps.Add(Lamp);
  }
 }
 void AWarehouseElevator::OnConstruction(const FTransform& Transform)
@@ -363,10 +421,26 @@ void AWarehouseElevator::ConfigureFloors()
   }
  }
  UpdateCargoModelFloors();
+ for (int32 I=0;I<HumanCallPanels.Num();++I)
+ {
+  const bool Active=I<FloorCount;
+  HumanCallPanels[I]->SetVisibility(Active);HumanCallPanels[I]->SetHiddenInGame(!Active);
+  HumanCallPanels[I]->SetCollisionEnabled(Active ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+  if (HumanPanelLabels.IsValidIndex(I)) {HumanPanelLabels[I]->SetVisibility(Active);HumanPanelLabels[I]->SetHiddenInGame(!Active);}
+ }
+ if (HumanPanelAnchor && HumanCabinPanel)
+ {
+  HumanCabinPanel->AttachToComponent(HumanPanelAnchor,FAttachmentTransformRules::KeepRelativeTransform);
+  HumanCabinPanel->SetAbsolute(false,false,false);
+  HumanCabinPanel->SetRelativeTransform(FTransform(FQuat::Identity,FVector::ZeroVector,FVector(.05,.24,.46)));
+ }
+ if (HumanPanelAnchor)
+  HumanPanelAnchor->SetWorldTransform(FTransform(GetActorQuat(),GetActorTransform().TransformPosition(FVector(150,-105,PlatformHeight+115)),FVector::OneVector));
+ UpdateHumanIndicators();
 }
 bool AWarehouseElevator::SetFloorCount(int32 Count)
 {
- if (Count<1 || Count>4 || State!=EWarehouseElevatorState::Idle || IsValid(ReservedVehicle) || CurrentFloor>=Count) return false;
+ if (Count<1 || Count>4 || State!=EWarehouseElevatorState::Idle || IsValid(ReservedVehicle) || bHumanService || !PendingStops.IsEmpty() || CurrentFloor>=Count) return false;
  if (Count==FloorCount && Gates.Num()==8 && !Gates.Contains(nullptr)) return true;
  const int32 PreviousCount=FloorCount;
  FloorCount=Count;ConfigureFloors();
@@ -462,7 +536,8 @@ FString AWarehouseElevator::CheckInterlocks() const
  if (!bEStopReleased) return TEXT("ELEVATOR E-STOP");
  if (!bDoorSensorsHealthy) return TEXT("ELEVATOR DOOR SENSOR FAULT");
  if (!bLevelSensorHealthy) return TEXT("ELEVATOR LEVEL SENSOR FAULT");
- if (IsValid(ReservedVehicle) && ReservedVehicle->GetTransferMassKg()>FMath::Min(2000.f,RatedMassKg)) return TEXT("ELEVATOR OVERLOAD (VEHICLE + LOAD)");
+ if (CabinPayloadMassKg()>FMath::Min(2000.f,RatedMassKg))
+  return TEXT("ELEVATOR OVERLOAD (VEHICLE + PEOPLE + CARGO)");
  return FString();
 }
 void AWarehouseElevator::SetDeckLock(bool Locked)
@@ -475,7 +550,19 @@ void AWarehouseElevator::SetDeckLock(bool Locked)
 }
 void AWarehouseElevator::SetState(EWarehouseElevatorState Next,const TCHAR* Message)
 {
- State=Next; Status=Message;
+ State=Next;
+ if (Next==EWarehouseElevatorState::AwaitBoarding || Next==EWarehouseElevatorState::AwaitExit) ServeCurrentFloor();
+ // Update the live interaction hint only on a real state transition. Rejected
+ // requests and active interlock reasons remain visible between transitions.
+ else if (Next==EWarehouseElevatorState::ClosingForCall || Next==EWarehouseElevatorState::ClosingLoaded || Next==EWarehouseElevatorState::ClosingEmpty)
+  HumanStatus=TEXT("문을 닫고 있습니다. 문에서 떨어져 주세요.");
+ else if (Next==EWarehouseElevatorState::Calling || Next==EWarehouseElevatorState::Travelling)
+  HumanStatus=FString::Printf(TEXT("%d층으로 이동 중입니다. 도착 후 문이 열릴 때까지 기다리세요."),DestinationFloor+1);
+ else if (Next==EWarehouseElevatorState::OpeningEntry || Next==EWarehouseElevatorState::OpeningExit)
+  HumanStatus=FString::Printf(TEXT("%d층 도착 · 문을 열고 있습니다. 완전히 열린 뒤 탑승하거나 하차하세요."),CurrentFloor+1);
+ else if (Next==EWarehouseElevatorState::Idle)
+  HumanStatus=TEXT("대기 중입니다. 외부 호출대 또는 내부 층 버튼을 이용하세요.");
+ UpdateHumanIndicators(); Status=Message;
  if (Next==EWarehouseElevatorState::OpeningEntry || Next==EWarehouseElevatorState::OpeningExit) SetDeckLock(true);
  Display->SetText(FText::FromString(FString::Printf(TEXT("L%d -> L%d / 2000 KG\n%s"),CurrentFloor+1,DestinationFloor+1,Message)));
  UE_LOG(LogTemp,Log,TEXT("ELEVATOR_STATE %s / L%d -> L%d"),Message,CurrentFloor+1,DestinationFloor+1);
@@ -487,7 +574,7 @@ bool AWarehouseElevator::PortalClear() const
   GetActorTransform().TransformPosition(FVector(-205,0,CurrentFloor*400+135)),GetActorQuat(),ECC_Visibility,
   FCollisionShape::MakeBox(FVector(15,119,134)),Params);
 }
-bool AWarehouseElevator::CabinClear() const
+bool AWarehouseElevator::CabinClear(bool IgnoreHumanPayload) const
 {
  FCollisionQueryParams Params(SCENE_QUERY_STAT(LiftCabin),false,this);
  if (IsValid(ReservedVehicle))
@@ -495,9 +582,254 @@ bool AWarehouseElevator::CabinClear() const
   Params.AddIgnoredActor(ReservedVehicle);
   Params.AddIgnoredActors(ReservedVehicle->GetPhysicalLoads());
  }
+ if (IgnoreHumanPayload) for (const auto& Passenger:HumanPayload)
+  if (Passenger.IsValid()) Params.AddIgnoredActor(Passenger.Get());
  return !GetWorld()->OverlapBlockingTestByChannel(
   GetActorTransform().TransformPosition(FVector(0,0,PlatformHeight+136)),GetActorQuat(),ECC_Visibility,
   FCollisionShape::MakeBox(FVector(173,118,134)),Params);
+}
+FVector AWarehouseElevator::HumanCabinPanelPosition() const
+{
+ return HumanCabinPanel ? HumanCabinPanel->GetComponentLocation() : GetActorTransform().TransformPosition(FVector(150,-105,PlatformHeight+115));
+}
+bool AWarehouseElevator::IsHumanInside(const ACharacter* Person) const
+{
+ if (!IsValid(Person) || !Person->GetCapsuleComponent() || !Platform) return false;
+ const auto* Capsule=Person->GetCapsuleComponent();
+ const FBox Bounds=CapsuleEnvelope(Capsule,GetActorTransform());
+ const float Deck=GetActorTransform().InverseTransformPosition(Platform->GetComponentLocation()).Z+5.f;
+ return Bounds.Min.X>=-170 && Bounds.Max.X<=170 && Bounds.Min.Y>=-115 && Bounds.Max.Y<=115 &&
+  Bounds.Min.Z>=Deck-3.f && Bounds.Min.Z<=Deck+100.f && Bounds.Max.Z<=Deck+265.f;
+}
+bool AWarehouseElevator::CanUseHumanPanel(const ACharacter* Person) const
+{
+ return IsHumanInside(Person) && FVector::DistSquared(Person->GetActorLocation(),HumanCabinPanelPosition())<=FMath::Square(220.f);
+}
+int32 AWarehouseElevator::HumanLandingFloor(const ACharacter* Person) const
+{
+ if (!IsValid(Person) || !Person->GetCapsuleComponent() || IsHumanInside(Person)) return INDEX_NONE;
+ const auto* Capsule=Person->GetCapsuleComponent();
+ const FVector Feet=GetActorTransform().InverseTransformPosition(Capsule->GetComponentLocation()-FVector(0,0,Capsule->GetScaledCapsuleHalfHeight()));
+ for (int32 Floor=0;Floor<FloorCount;++Floor)
+  if (FMath::Abs(Feet.Z-Floor*400.f)<=40.f && FVector::DistSquared2D(Feet,FVector(-285,-205,Floor*400.f))<=FMath::Square(180.f)) return Floor;
+ return INDEX_NONE;
+}
+int32 AWarehouseElevator::HumanButtonAtSight(const ACharacter* Person) const
+{
+ if (!CanUseHumanPanel(Person)) return INDEX_NONE;
+ FVector Eye;FRotator Look;Person->GetActorEyesViewPoint(Eye,Look);
+ if (const auto* Camera=Person->FindComponentByClass<UCameraComponent>()) { Eye=Camera->GetComponentLocation();Look=Camera->GetComponentRotation(); }
+ FCollisionQueryParams Query(SCENE_QUERY_STAT(HumanElevatorButton),false,Person);FHitResult Hit;
+ if (!GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+Look.Vector()*260.f,ECC_Visibility,Query) || Hit.GetActor()!=this) return INDEX_NONE;
+ const int32 Floor=HumanFloorButtons.IndexOfByKey(Cast<UStaticMeshComponent>(Hit.GetComponent()));
+ return Floor>=0 && Floor<FloorCount ? Floor : INDEX_NONE;
+}
+FString AWarehouseElevator::GetPositionIndicatorText() const
+{
+ const float VelocityZ=Platform ? Platform->GetPhysicsLinearVelocity().Z : 0.f;
+ if (FMath::Abs(PlatformHeight-CurrentFloor*400.f)<1.f && FMath::Abs(VelocityZ)<2.f)
+  return FString::Printf(TEXT("CAR L%d | STOP"),CurrentFloor+1);
+ const int32 Target=DestinationFloor;
+ const TCHAR* Direction=VelocityZ>1.f ? TEXT("UP") : VelocityZ< -1.f ? TEXT("DOWN") : TEXT("HOLD");
+ return FString::Printf(TEXT("LAST L%d | %s TO L%d"),CurrentFloor+1,Direction,Target+1);
+}
+void AWarehouseElevator::UpdateHumanIndicators()
+{
+ const FString Position=GetPositionIndicatorText();
+ for (int32 Floor=0;Floor<4;++Floor)
+ {
+  const bool Active=Floor<FloorCount;
+  if (HumanFloorButtons.IsValidIndex(Floor))
+  {
+   auto* Button=HumanFloorButtons[Floor].Get();Button->SetVisibility(Active);Button->SetHiddenInGame(!Active);
+   Button->SetCollisionEnabled(Active ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
+   auto* Material=IsDestinationButtonLit(Floor) ? IndicatorOnMaterial.Get() : IndicatorOffMaterial.Get();
+   if (Button->GetMaterial(0)!=Material) Button->SetMaterial(0,Material);
+  }
+  if (HumanFloorLabels.IsValidIndex(Floor)) { HumanFloorLabels[Floor]->SetVisibility(Active);HumanFloorLabels[Floor]->SetHiddenInGame(!Active); }
+  if (HumanCallLamps.IsValidIndex(Floor))
+  {
+   auto* Lamp=HumanCallLamps[Floor].Get();Lamp->SetVisibility(Active);Lamp->SetHiddenInGame(!Active);
+   auto* Material=IsCallButtonLit(Floor) ? IndicatorOnMaterial.Get() : IndicatorOffMaterial.Get();
+   if (Lamp->GetMaterial(0)!=Material) Lamp->SetMaterial(0,Material);
+  }
+  if (HumanPanelLabels.IsValidIndex(Floor))
+  {
+   const FString Text=FString::Printf(TEXT("CALL L%d\n%s\n%s"),Floor+1,*Position,IsCallButtonLit(Floor) ? TEXT("CALL REGISTERED") : TEXT("E CALL"));
+   if (HumanPanelLabels[Floor]->Text.ToString()!=Text) HumanPanelLabels[Floor]->SetText(FText::FromString(Text));
+   HumanPanelLabels[Floor]->SetWorldSize(6.f);
+  }
+ }
+}
+FString AWarehouseElevator::GetHumanInteractionText(const ACharacter* Person) const
+{
+ const bool Inside=CanUseHumanPanel(Person);
+ const int32 Floor=HumanLandingFloor(Person);
+ if (!Inside && Floor==INDEX_NONE) return FString();
+ const int32 Button=Inside ? HumanButtonAtSight(Person) : INDEX_NONE;
+ return Inside ? FString::Printf(TEXT("범용 엘리베이터 · %s\n%s"),
+  Button==INDEX_NONE ? TEXT("층 버튼을 바라보고 E") : *FString::Printf(TEXT("E: %d층 버튼"),Button+1),*HumanStatus) :
+  FString::Printf(TEXT("범용 엘리베이터 · %d층\nE: 이 층으로 호출\n%s"),Floor+1,*HumanStatus);
+}
+bool AWarehouseElevator::HumanPayloadFits(AActor* Actor) const
+{
+ if (!IsValid(Actor)) return false;
+ bool Physical=false;
+ TArray<UPrimitiveComponent*> Parts;Actor->GetComponents(Parts);
+ for (auto* Part:Parts) if (WarehousePhysics::IsPhysicalContact(Part))
+ {
+  Physical=true;
+  const auto* Capsule=Cast<UCapsuleComponent>(Part);
+  const FBox Bounds=Capsule ? CapsuleEnvelope(Capsule,GetActorTransform()) : Part->CalcBounds(Part->GetComponentTransform().GetRelativeTransform(GetActorTransform())).GetBox();
+  if (Bounds.Min.X< -170 || Bounds.Max.X>170 || Bounds.Min.Y< -115 || Bounds.Max.Y>115 ||
+      Bounds.Min.Z<PlatformHeight-3.f || Bounds.Max.Z>PlatformHeight+265.f) return false;
+ }
+ return Physical;
+}
+bool AWarehouseElevator::CaptureHumanPayload()
+{
+ HumanPayload.Reset();HumanPayloadMassKg=0;
+ FCollisionQueryParams Params(SCENE_QUERY_STAT(HumanLiftPayload),false,this);
+ TArray<FOverlapResult> Hits;
+ GetWorld()->OverlapMultiByChannel(Hits,GetActorTransform().TransformPosition(FVector(0,0,PlatformHeight+136)),GetActorQuat(),
+  ECC_Visibility,FCollisionShape::MakeBox(FVector(173,118,134)),Params);
+ TSet<FBodyInstance*> Bodies;
+ const TArray<AActor*> VehicleLoads=IsValid(ReservedVehicle) ? ReservedVehicle->GetPhysicalLoads() : TArray<AActor*>();
+ for (const auto& Hit:Hits)
+ {
+  AActor* Actor=Hit.GetActor();
+  if (!IsValid(Actor) || Actor==this || Cast<AWarehouseForklift>(Actor) || VehicleLoads.Contains(Actor) || !HumanPayloadFits(Actor)) continue;
+  TArray<UPrimitiveComponent*> Parts;Actor->GetComponents(Parts);
+  bool Dynamic=false;
+  for (auto* Part:Parts) if (Part->IsSimulatingPhysics() && WarehousePhysics::IsPhysicalContact(Part))
+  {
+   Dynamic=true;
+   auto* Body=Part->GetBodyInstance();
+   if (Body && !Bodies.Contains(Body)) { Bodies.Add(Body);HumanPayloadMassKg+=Part->GetMass(); }
+  }
+  if (Dynamic) HumanPayload.AddUnique(Actor);
+ }
+ // Anything not wholly contained and physically carried remains an obstruction.
+ return CabinClear();
+}
+bool AWarehouseElevator::IsDestinationButtonLit(int32 Floor) const
+{
+ if (Floor<0 || Floor>=FloorCount) return false;
+ const bool VehicleArrived=bBoarded && CurrentFloor==VehicleDestinationFloor && State==EWarehouseElevatorState::AwaitExit;
+ return HumanDestinationRequests.Contains(Floor) || (IsValid(ReservedVehicle) && VehicleDestinationFloor==Floor && !VehicleArrived);
+}
+bool AWarehouseElevator::IsCallButtonLit(int32 Floor) const
+{
+ if (Floor<0 || Floor>=FloorCount) return false;
+ const bool VehicleEntryOpen=CurrentFloor==EntryFloor && State==EWarehouseElevatorState::AwaitBoarding;
+ return HumanCallRequests.Contains(Floor) || (IsValid(ReservedVehicle) && !bBoarded && EntryFloor==Floor && !VehicleEntryOpen);
+}
+float AWarehouseElevator::CabinPayloadMassKg() const
+{
+ // GetTransferMassKg already includes the full articulated vehicle and supported
+ // pallet/cargo. CaptureHumanPayload deliberately excludes all those actors.
+ return HumanPayloadMassKg+(bBoarded && IsValid(ReservedVehicle) ? ReservedVehicle->GetTransferMassKg() : 0.f);
+}
+int32 AWarehouseElevator::NextStop() const
+{
+ int32 Best=INDEX_NONE;float BestDistance=MAX_flt;
+ for (int32 Pass=0;Pass<2 && Best==INDEX_NONE;++Pass)
+  for (int32 Floor:PendingStops)
+  {
+   if (Floor<0 || Floor>=FloorCount) continue;
+   const float Delta=Floor*400.f-PlatformHeight;
+   if (Pass==0 && TravelDirection!=0 && Delta*TravelDirection<-.5f) continue;
+   if (FMath::Abs(Delta)<BestDistance) { Best=Floor;BestDistance=FMath::Abs(Delta); }
+  }
+ return Best;
+}
+void AWarehouseElevator::QueueStop(int32 Floor)
+{
+ PendingStops.AddUnique(Floor);
+ const bool Moving=State==EWarehouseElevatorState::Calling || State==EWarehouseElevatorState::Travelling;
+ // A new call ahead can be served on this stroke; never reverse between floors
+ // or command a stop already passed by the physical platform.
+ if (Moving)
+ {
+  const float Remaining=DestinationFloor*400.f-PlatformHeight,Added=Floor*400.f-PlatformHeight;
+  if (Added*Remaining>0 && FMath::Abs(Added)>50.f && FMath::Abs(Added)<FMath::Abs(Remaining)) DestinationFloor=Floor;
+ }
+ else if (State==EWarehouseElevatorState::Idle) StartNextStop();
+ else if (Floor==CurrentFloor && FMath::Abs(PlatformHeight-CurrentFloor*400.f)<1.f && Platform->GetPhysicsLinearVelocity().Size()<2.f)
+ {
+  HumanDoorIdleSeconds=0;
+  if (State==EWarehouseElevatorState::AwaitBoarding || State==EWarehouseElevatorState::AwaitExit)
+  { ServeCurrentFloor();UpdateHumanIndicators();return; }
+  const bool VehiclePickup=IsValid(ReservedVehicle) && !bBoarded && CurrentFloor==EntryFloor;
+  SetState(VehiclePickup ? EWarehouseElevatorState::OpeningEntry : EWarehouseElevatorState::OpeningExit,TEXT("CURRENT FLOOR REQUEST - REOPEN"));
+ }
+ UpdateHumanIndicators();
+}
+void AWarehouseElevator::StartNextStop()
+{
+ const int32 Next=NextStop();if (Next==INDEX_NONE) return;
+ DestinationFloor=Next;HumanDoorIdleSeconds=0;
+ if (Next!=CurrentFloor) TravelDirection=Next>CurrentFloor ? 1 : -1;
+ const bool VehiclePickup=IsValid(ReservedVehicle) && !bBoarded && Next==EntryFloor;
+ if (Next==CurrentFloor && FMath::Abs(PlatformHeight-CurrentFloor*400.f)<1.f)
+  SetState(VehiclePickup ? EWarehouseElevatorState::OpeningEntry : EWarehouseElevatorState::OpeningExit,TEXT("CALLED FLOOR ALIGNED - OPEN"));
+ else SetState(VehiclePickup ? EWarehouseElevatorState::ClosingForCall : EWarehouseElevatorState::ClosingLoaded,TEXT("NEXT FLOOR REQUEST - CLOSE / LOCK"));
+}
+void AWarehouseElevator::ServeCurrentFloor()
+{
+ PendingStops.Remove(CurrentFloor);HumanCallRequests.Remove(CurrentFloor);
+ if (HumanDestinationRequests.Remove(CurrentFloor)>0) ++CompletedHumanTransfers;
+ HumanDoorIdleSeconds=0;
+ HumanStatus=FString::Printf(TEXT("%d층 · 문이 열렸습니다. 탑승하거나 하차하세요."),CurrentFloor+1);
+}
+void AWarehouseElevator::ReleaseVehicleReservation()
+{
+ const int32 OldEntry=EntryFloor,OldExit=VehicleDestinationFloor;
+ ReservedVehicle=nullptr;bBoarded=false;VehicleDestinationFloor=INDEX_NONE;
+ for (int32 Floor:{OldEntry,OldExit})
+ {
+  const bool ActiveStroke=(State==EWarehouseElevatorState::Calling || State==EWarehouseElevatorState::Travelling) && DestinationFloor==Floor;
+  if (!ActiveStroke && !HumanCallRequests.Contains(Floor) && !HumanDestinationRequests.Contains(Floor)) PendingStops.Remove(Floor);
+ }
+ if (State==EWarehouseElevatorState::AwaitBoarding) SetState(EWarehouseElevatorState::AwaitExit,TEXT("VEHICLE REQUEST RELEASED - SHARED SERVICE"));
+ else if ((State==EWarehouseElevatorState::ClosingForCall || State==EWarehouseElevatorState::ClosingLoaded) && !PendingStops.Contains(DestinationFloor))
+ {
+  if (!PendingStops.IsEmpty()) StartNextStop();
+  else SetState(EWarehouseElevatorState::OpeningExit,TEXT("CANCELLED BEFORE DEPARTURE - OPEN CURRENT FLOOR"));
+ }
+ UpdateHumanIndicators();
+}
+bool AWarehouseElevator::CancelTransfer(AWarehouseForklift* Vehicle)
+{
+ // Never release an occupied vehicle halfway through its physical transfer.
+ if (!IsValid(Vehicle) || ReservedVehicle!=Vehicle || bBoarded) return false;
+ ReleaseVehicleReservation();return true;
+}
+bool AWarehouseElevator::RequestHumanCall(ACharacter* Person,int32 Floor)
+{
+ if (Floor<0 || Floor>=FloorCount || HumanLandingFloor(Person)!=Floor)
+ { HumanStatus=TEXT("해당 층의 외부 호출대 가까이에서 호출하세요.");return false; }
+ CaptureHumanPayload();
+ const FString Fault=CheckInterlocks();
+ const bool StationaryHere=CurrentFloor==Floor && FMath::Abs(PlatformHeight-Floor*400.f)<1.f && Platform->GetPhysicsLinearVelocity().Size()<2.f;
+ if (!Fault.IsEmpty() && !(StationaryHere && Fault.StartsWith(TEXT("ELEVATOR OVERLOAD")))) { HumanStatus=Fault;return false; }
+ bHumanService=true;HumanCallRequests.AddUnique(Floor);
+ HumanStatus=TEXT("호출을 접수했습니다. 도착 후 문이 열릴 때까지 기다리세요.");
+ QueueStop(Floor);return true;
+}
+bool AWarehouseElevator::RequestHumanDestination(ACharacter* Person,int32 Floor)
+{
+ if (Floor<0 || Floor>=FloorCount || !CanUseHumanPanel(Person))
+ { HumanStatus=TEXT("탑승 후 내부 버튼 가까이에서 유효한 목적층을 선택하세요.");return false; }
+ CaptureHumanPayload();
+ const FString Fault=CheckInterlocks();
+ const bool StationaryHere=CurrentFloor==Floor && FMath::Abs(PlatformHeight-Floor*400.f)<1.f && Platform->GetPhysicsLinearVelocity().Size()<2.f;
+ if (!Fault.IsEmpty() && !(StationaryHere && Fault.StartsWith(TEXT("ELEVATOR OVERLOAD")))) { HumanStatus=Fault;return false; }
+ bHumanService=true;
+ // Reopening the current landing is not a completed passenger transfer.
+ if (!StationaryHere) HumanDestinationRequests.AddUnique(Floor);
+ HumanStatus=TEXT("목적층을 접수했습니다. 같은 방향의 가까운 층부터 정차합니다.");
+ QueueStop(Floor);return true;
 }
 bool AWarehouseElevator::FitsInside(AWarehouseForklift* Vehicle) const
 {
@@ -522,24 +854,26 @@ bool AWarehouseElevator::FitsInside(AWarehouseForklift* Vehicle) const
 }
 bool AWarehouseElevator::RequestTransfer(AWarehouseForklift* Vehicle,int32 FromFloor,int32 ToFloor)
 {
- if (!IsValid(Vehicle) || FromFloor<0 || FromFloor>=FloorCount || ToFloor<0 || ToFloor>=FloorCount || FromFloor==ToFloor ||
-     Vehicle->GetTransferMassKg()>FMath::Min(2000.f,RatedMassKg) || !CheckInterlocks().IsEmpty()) return false;
- if (ReservedVehicle==Vehicle) return EntryFloor==FromFloor && DestinationFloor==ToFloor;
- if (IsValid(ReservedVehicle) || State!=EWarehouseElevatorState::Idle ||
-     !AtWaitingPose(Vehicle,WaitingPose(FromFloor))) return false;
- ReservedVehicle=Vehicle; EntryFloor=FromFloor; DestinationFloor=ToFloor;
- SetState(EWarehouseElevatorState::ClosingForCall,TEXT("FMS CALL ACCEPTED - CLOSE / LOCK"));
- return true;
+ if (!IsValid(Vehicle) || FromFloor<0 || FromFloor>=FloorCount || ToFloor<0 || ToFloor>=FloorCount || FromFloor==ToFloor) return false;
+ if (ReservedVehicle==Vehicle) return EntryFloor==FromFloor && VehicleDestinationFloor==ToFloor;
+ CaptureHumanPayload();
+ if (IsValid(ReservedVehicle) || Vehicle->GetTransferMassKg()>FMath::Min(2000.f,RatedMassKg) ||
+     !CheckInterlocks().IsEmpty() || !AtWaitingPose(Vehicle,WaitingPose(FromFloor))) return false;
+ ReservedVehicle=Vehicle;EntryFloor=FromFloor;VehicleDestinationFloor=ToFloor;bBoarded=false;
+ if (CurrentFloor==FromFloor && State==EWarehouseElevatorState::AwaitExit && ActualDoorOpening()>=124.f)
+ { SetState(EWarehouseElevatorState::AwaitBoarding,TEXT("FMS CALL AT OPEN LANDING - ENTRY PERMITTED"));return true; }
+ QueueStop(FromFloor);return true;
 }
 bool AWarehouseElevator::CanEnter(AWarehouseForklift* Vehicle) const
 {
- return ReservedVehicle==Vehicle && IsValid(Vehicle) && State==EWarehouseElevatorState::AwaitBoarding &&
-  CurrentFloor==EntryFloor && ActualDoorOpening()>=124 && FMath::Abs(PlatformHeight-EntryFloor*400)<1.f && CheckInterlocks().IsEmpty() && CabinClear();
+ return ReservedVehicle==Vehicle && IsValid(Vehicle) && !bBoarded && State==EWarehouseElevatorState::AwaitBoarding &&
+  CurrentFloor==EntryFloor && ActualDoorOpening()>=124 && FMath::Abs(PlatformHeight-EntryFloor*400)<1.f && CheckInterlocks().IsEmpty() &&
+  Vehicle->GetTransferMassKg()+HumanPayloadMassKg<=FMath::Min(2000.f,RatedMassKg) && CabinClear();
 }
 bool AWarehouseElevator::CanExit(AWarehouseForklift* Vehicle) const
 {
- return ReservedVehicle==Vehicle && IsValid(Vehicle) && State==EWarehouseElevatorState::AwaitExit &&
-  CurrentFloor==DestinationFloor && ActualDoorOpening()>=124 && FMath::Abs(PlatformHeight-DestinationFloor*400)<1.f && CheckInterlocks().IsEmpty();
+ return ReservedVehicle==Vehicle && IsValid(Vehicle) && bBoarded && State==EWarehouseElevatorState::AwaitExit &&
+  CurrentFloor==VehicleDestinationFloor && ActualDoorOpening()>=124 && FMath::Abs(PlatformHeight-VehicleDestinationFloor*400)<1.f && CheckInterlocks().IsEmpty();
 }
 bool AWarehouseElevator::TraceCertifiedPlatformSupport(AWarehouseForklift* Vehicle,FVector Point,FHitResult& Support) const
 {
@@ -596,14 +930,18 @@ bool AWarehouseElevator::ConfirmBoarded(AWarehouseForklift* Vehicle)
      FVector::Dist(Vehicle->GetActorLocation(),BoardingPose(EntryFloor).GetLocation())>1 ||
      FVector::DotProduct(Vehicle->GetActorForwardVector(),GetActorForwardVector())<.9999 ||
      Vehicle->GetActorUpVector().Z<.995f || FMath::Abs(Vehicle->CurrentSpeedCm)>1.f || !Vehicle->IsLiftAtTravelHeight()) return false;
- bBoarded=true;
- SetState(EWarehouseElevatorState::ClosingLoaded,TEXT("BOARDING CONFIRMED - CLOSE / LOCK")); return true;
+ bBoarded=true;PendingStops.AddUnique(VehicleDestinationFloor);
+ // A short open-door dwell lets a person board after the stopped vehicle.
+ // Normal vehicle/person safety sensing remains active during vehicle entry.
+ SetState(EWarehouseElevatorState::AwaitExit,TEXT("BOARDING CONFIRMED - SHARED CABIN DWELL"));return true;
 }
 bool AWarehouseElevator::ConfirmExited(AWarehouseForklift* Vehicle)
 {
- if (!CanExit(Vehicle) || !AtWaitingPose(Vehicle,WaitingPose(DestinationFloor)) || !PortalClear()) return false;
- bBoarded=false; ReservedVehicle=nullptr; ++CompletedTransfers;
- SetState(EWarehouseElevatorState::ClosingEmpty,TEXT("EXIT CONFIRMED - RELEASE RESERVATION")); return true;
+ if (!CanExit(Vehicle) || !AtWaitingPose(Vehicle,WaitingPose(VehicleDestinationFloor)) || !PortalClear()) return false;
+ ReleaseVehicleReservation();++CompletedTransfers;HumanDoorIdleSeconds=0;
+ if (!PendingStops.IsEmpty()) StartNextStop();
+ else SetState(EWarehouseElevatorState::ClosingEmpty,TEXT("EXIT CONFIRMED - RELEASE VEHICLE / RETAIN HUMAN REQUESTS"));
+ return true;
 }
 float AWarehouseElevator::ActualDoorOpening() const
 {
@@ -660,6 +998,7 @@ bool AWarehouseElevator::MovePlatform(int32 Floor,float Dt)
   Params.AddIgnoredActor(ReservedVehicle);
   Params.AddIgnoredActors(ReservedVehicle->GetPhysicalLoads());
  }
+ for (const auto& Passenger:HumanPayload) if (Passenger.IsValid()) Params.AddIgnoredActor(Passenger.Get());
  TArray<FHitResult> Hits;
  const FVector Start=Platform->GetComponentLocation(),Delta(0,0,Next-PlatformHeight);
  GetWorld()->SweepMultiByChannel(Hits,Start,Start+Delta,GetActorQuat(),ECC_Visibility,FCollisionShape::MakeBox(FVector(174.5,119.5,4.9)),Params);
@@ -668,7 +1007,7 @@ bool AWarehouseElevator::MovePlatform(int32 Floor,float Dt)
   { Status=TEXT("PLATFORM PATH OBSTRUCTED"); return false; }
  SetDeckLock(false);
  PlatformTarget=FMath::FInterpConstantTo(PlatformTarget,Floor*400.f,Dt,FMath::Clamp(TravelSpeedCm,1.f,50.f));
- const float Mass=500.f+(bBoarded && IsValid(ReservedVehicle) ? ReservedVehicle->GetTransferMassKg() : 0.f);
+ const float Mass=500.f+CabinPayloadMassKg();
  if (PlatformJoint) PlatformJoint->SetLinearPositionTarget(FVector(0,0,StrokeHalfHeight()-PlatformTarget-Mass*980.f/300000.f));
  Platform->WakeAllRigidBodies(); // Powered stroke; resting floor locks may sleep.
  // Passengers ride deck contact. No actor translation or velocity reset.
@@ -679,28 +1018,64 @@ void AWarehouseElevator::Tick(float Dt) { Super::Tick(Dt); AdvanceElevator(Dt); 
 void AWarehouseElevator::AdvanceElevator(float Seconds)
 {
  if (PlatformJoint) PlatformHeight=GetActorTransform().InverseTransformPosition(Platform->GetComponentLocation()).Z+5.f;
+ if (VehicleDestinationFloor!=INDEX_NONE && !IsValid(ReservedVehicle)) ReleaseVehicleReservation();
+ const bool PayloadContained=CaptureHumanPayload();
+ // Keep building/layout edits blocked while a person or loose object straddles
+ // the cabin, even though it is not yet an approved fully contained payload.
+ bHumanService=!PayloadContained || !HumanPayload.IsEmpty() || !HumanCallRequests.IsEmpty() || !HumanDestinationRequests.IsEmpty();
+ UpdateHumanIndicators();
  const float Dt=FMath::Clamp(Seconds,0.f,.133333f);
  const FString Fault=CheckInterlocks();
- if (!Fault.IsEmpty()) { Status=Fault; Display->SetText(FText::FromString(Fault)); return; }
- if (IsValid(ReservedVehicle) && (!ReservedVehicle->bPowered || ReservedVehicle->AIState==EWarehouseAIState::SelfCheck || !ReservedVehicle->CheckSystems().IsEmpty())) return;
- if (State!=EWarehouseElevatorState::Idle && State!=EWarehouseElevatorState::ClosingEmpty && !IsValid(ReservedVehicle))
- { Status=TEXT("RESERVED VEHICLE LOST - RECOVERY REQUIRED"); return; }
+ const bool AtLanding=FMath::Abs(PlatformHeight-CurrentFloor*400.f)<1.f && Platform->GetPhysicsLinearVelocity().Size()<2.f;
+ const bool Opening=State==EWarehouseElevatorState::OpeningEntry || State==EWarehouseElevatorState::OpeningExit ||
+  State==EWarehouseElevatorState::AwaitBoarding || State==EWarehouseElevatorState::AwaitExit;
+ const bool PermitUnloading=AtLanding && Opening && Fault.StartsWith(TEXT("ELEVATOR OVERLOAD"));
+ if (!Fault.IsEmpty() && !PermitUnloading) { Status=Fault;HumanStatus=Fault;Display->SetText(FText::FromString(Fault));return; }
+ if (bBoarded && IsValid(ReservedVehicle) && (!ReservedVehicle->bPowered || ReservedVehicle->AIState==EWarehouseAIState::SelfCheck || !ReservedVehicle->CheckSystems().IsEmpty())) return;
+ // Boarding/exiting people can straddle the light curtain. Keep the doors open;
+ // cabin containment and curtain clearance are required only before movement.
+ if (!PayloadContained && !Opening && State!=EWarehouseElevatorState::Idle)
+ { Status=TEXT("CABIN OBSTRUCTED - MOVE FULLY INSIDE");HumanStatus=TEXT("사람·화물을 문에서 떨어진 캐빈 안쪽으로 옮기세요.");return; }
+ if (PayloadContained && HumanStatus.Contains(TEXT("캐빈 안쪽"))) HumanStatus=TEXT("캐빈 확인 완료 · 등록된 목적층 순서로 운행합니다.");
  switch (State)
  {
+ case EWarehouseElevatorState::Idle:
+  if (!PendingStops.IsEmpty()) StartNextStop();break;
  case EWarehouseElevatorState::ClosingForCall:
-  if (SetDoors(false,Dt)) SetState(EWarehouseElevatorState::Calling,TEXT("CALLING PLATFORM")); break;
+  if (SetDoors(false,Dt)) SetState(EWarehouseElevatorState::Calling,TEXT("CALLING PLATFORM"));break;
  case EWarehouseElevatorState::Calling:
-  if (MovePlatform(EntryFloor,Dt)) SetState(EWarehouseElevatorState::OpeningEntry,TEXT("ARRIVED - DECK LOCK / OPEN")); break;
- case EWarehouseElevatorState::OpeningEntry:
-  if (SetDoors(true,Dt)) SetState(EWarehouseElevatorState::AwaitBoarding,TEXT("ENTRY PERMITTED")); break;
- case EWarehouseElevatorState::ClosingLoaded:
-  if (FitsInside(ReservedVehicle) && CabinClear() && SetDoors(false,Dt)) SetState(EWarehouseElevatorState::Travelling,TEXT("DOORS LOCKED - FLOOR TRANSFER")); break;
  case EWarehouseElevatorState::Travelling:
-  if (MovePlatform(DestinationFloor,Dt)) SetState(EWarehouseElevatorState::OpeningExit,TEXT("DESTINATION ALIGNED - OPEN")); break;
+  if (MovePlatform(DestinationFloor,Dt))
+  {
+   const bool Pickup=IsValid(ReservedVehicle) && !bBoarded && CurrentFloor==EntryFloor;
+   SetState(Pickup ? EWarehouseElevatorState::OpeningEntry : EWarehouseElevatorState::OpeningExit,TEXT("CALLED FLOOR ALIGNED - OPEN"));
+  } break;
+ case EWarehouseElevatorState::OpeningEntry:
  case EWarehouseElevatorState::OpeningExit:
-  if (SetDoors(true,Dt)) SetState(EWarehouseElevatorState::AwaitExit,TEXT("EXIT PERMITTED")); break;
+  if (SetDoors(true,Dt))
+  {
+   const bool Pickup=IsValid(ReservedVehicle) && !bBoarded && CurrentFloor==EntryFloor;
+   SetState(Pickup ? EWarehouseElevatorState::AwaitBoarding : EWarehouseElevatorState::AwaitExit,TEXT("FLOOR SERVED - DOORS OPEN"));
+  } break;
+ case EWarehouseElevatorState::ClosingLoaded:
+  if ((!bBoarded || FitsInside(ReservedVehicle)) && CabinClear() && SetDoors(false,Dt)) SetState(EWarehouseElevatorState::Travelling,TEXT("DOORS LOCKED - FLOOR TRANSFER"));break;
+ case EWarehouseElevatorState::AwaitBoarding:
+  // Wait for the vehicle's explicit stopped/contained boarding acknowledgement.
+  if (!IsValid(ReservedVehicle)) SetState(EWarehouseElevatorState::AwaitExit,TEXT("SHARED LANDING DWELL"));break;
+ case EWarehouseElevatorState::AwaitExit:
+  // Only the reserved exit floor waits for ConfirmExited. At all other stops
+  // the vehicle remains in ElevatorRide and its normal brakes stay applied.
+  if (bBoarded && CurrentFloor==VehicleDestinationFloor) break;
+  HumanDoorIdleSeconds=PortalClear() && PayloadContained ? HumanDoorIdleSeconds+Dt : 0.f;
+  if (!PendingStops.IsEmpty() && HumanDoorIdleSeconds>=3.f) StartNextStop();
+  else if (PendingStops.IsEmpty() && HumanDoorIdleSeconds>=8.f) SetState(EWarehouseElevatorState::ClosingEmpty,TEXT("NO PENDING CALLS - CLOSE"));break;
  case EWarehouseElevatorState::ClosingEmpty:
-  if (SetDoors(false,Dt)) SetState(EWarehouseElevatorState::Idle,TEXT("READY / 2000 KG MAX")); break;
- default: break;
+  if (!PendingStops.IsEmpty()) { StartNextStop();break; }
+  if (SetDoors(false,Dt))
+  {
+   HumanDoorIdleSeconds=0;TravelDirection=0;
+   HumanStatus=TEXT("대기 중입니다. 외부 호출대 또는 내부 층 버튼을 이용하세요.");SetState(EWarehouseElevatorState::Idle,TEXT("READY / 2000 KG MAX"));
+  } break;
+ default:break;
  }
 }

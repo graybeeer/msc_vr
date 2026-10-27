@@ -14,8 +14,7 @@ registry = unreal.AssetRegistryHelpers.get_asset_registry()
 registry.search_all_assets(True)
 names = ['M_Relaxed_Stand_Idle_Loop', 'M_Neutral_Crouch_Idle_Loop',
          'M_Relaxed_Jump_Loop_Fall', 'M_Neutral_Jump_F_Start_Stand_Lfoot',
-         'M_Neutral_Jump_F_Land_Stand_Light_Lfoot',
-         'M_Relaxed_Transition_Stand_to_Crouch', 'M_Relaxed_Transition_Crouch_to_Stand']
+         'M_Neutral_Jump_F_Land_Stand_Light_Lfoot']
 for gait in ['Walk', 'Run', 'Crouch']:
     for direction in ['F', 'B', 'LL', 'RR', 'FL', 'FR', 'BL', 'BR']:
         # Relaxed lateral loops use a different name for the right-facing stride.
@@ -31,7 +30,7 @@ inputs = unreal.IKRetargetBatchOperationInputs(
     target_mesh=unreal.load_asset('/Game/Characters/UE5_Mannequins/Meshes/SKM_Quinn_Simple'),
     ik_retarget_asset=unreal.load_asset('/Game/Characters/UE5_Mannequins/Rigs/RTG_UEFN_to_UE5_Mannequin'),
     target_path=OUTPUT, include_referenced_assets=False, overwrite_existing_files=True)
-existing = registry.get_assets_by_path(OUTPUT, recursive=True)
+existing = [a for a in registry.get_assets_by_path(OUTPUT, recursive=True) if str(a.asset_name) in names]
 result = existing if {str(a.asset_name) for a in existing} == set(names) else unreal.IKRetargetBatchOperation.run_batch_retarget(inputs)
 assert len(result) == len(selected), (len(result), len(selected))
 packages = []

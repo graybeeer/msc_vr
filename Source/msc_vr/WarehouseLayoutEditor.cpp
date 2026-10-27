@@ -62,7 +62,7 @@ namespace
  }
  bool ShaftBusy(AActor* Actor)
  {
-  if (const auto* Lift=Cast<AWarehouseElevator>(Actor)) return Lift->State!=EWarehouseElevatorState::Idle || Lift->ReservedVehicle;
+  if (const auto* Lift=Cast<AWarehouseElevator>(Actor)) return Lift->State!=EWarehouseElevatorState::Idle || Lift->ReservedVehicle || Lift->bHumanService;
   if (const auto* Lift=Cast<AWarehousePalletLift>(Actor)) return !Lift->IsIdleForLayout();
   return false;
  }
@@ -406,6 +406,13 @@ bool AWarehouseLayoutEditor::BeginDrag(AActor* HitActor,FVector FloorPoint)
    RotationBounds+=FBox(FVector(-Bay->SizeCm.X*.5,-Bay->SizeCm.Y*.5,0),FVector(Bay->SizeCm.X*.5,Bay->SizeCm.Y*.5,0)).TransformBy(Bay->GetActorTransform().ToMatrixWithScale());
  }
  if (!RotationBounds.IsValid) for (AActor* Member:Members) if (IsValid(Member)) RotationBounds+=Member->GetActorLocation();
+ CaptureMoving(Members);
+ GrabPoint=FloorPoint;Delta=FVector::ZeroVector;Rotation=FQuat::Identity;RotationPivot=FVector::ZeroVector;bDragging=true;
+ Status=FString::Printf(TEXT("%d개 요소 이동 중 · 충돌 꺼짐 · 같은 층 · 놓으면 검사"),Moving.Num());
+ return true;
+}
+void AWarehouseLayoutEditor::CaptureMoving(const TArray<AActor*>& Members)
+{
  Moving.Reset();
  for (AActor* A:Members)
  {
@@ -440,9 +447,6 @@ bool AWarehouseLayoutEditor::BeginDrag(AActor* HitActor,FVector FloorPoint)
    if (P.Simulated) if (auto* Primitive=Cast<UPrimitiveComponent>(C)) Primitive->SetSimulatePhysics(false);
   }
  }
- GrabPoint=FloorPoint;Delta=FVector::ZeroVector;Rotation=FQuat::Identity;RotationPivot=FVector::ZeroVector;bDragging=true;
- Status=FString::Printf(TEXT("%d개 요소 이동 중 · 충돌 꺼짐 · 같은 층 · 놓으면 검사"),Moving.Num());
- return true;
 }
 void AWarehouseLayoutEditor::UpdateDrag(FVector FloorPoint)
 {

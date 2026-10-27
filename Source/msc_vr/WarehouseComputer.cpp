@@ -117,6 +117,11 @@ void AWarehouseComputer::ReceiveJobReport(const FWarehouseJobReport& Report)
   Task->bCompleted=true;Task->State=TEXT("완료 · 재고 위치 갱신됨");
   Task->FinishedSimulationSeconds=Report.SimulationSeconds;
  }
+ else if (Report.Result==TEXT("CANCELLED"))
+ {
+  Task->bCancelled=true;Task->State=TEXT("취소됨 · ")+Report.Detail;
+  Task->FinishedSimulationSeconds=Report.SimulationSeconds;
+ }
  else if (Report.Result==TEXT("STATE") || Report.Result==TEXT("FAULT")) Task->State=Report.Detail;
  Task->ElapsedSimulationSeconds=GetTaskElapsedSeconds(Task->JobId);
 }
@@ -204,7 +209,7 @@ void AWarehouseComputer::RefreshState()
   // Authored initial queues or a console spawned after dispatch have no known submission timestamp.
   RememberJob(Vehicle,Vehicle->ActiveJob,false);for (const auto& Job : Vehicle->PendingJobs) RememberJob(Vehicle,Job,false);
   // Recover an exact completion timestamp if the console missed a delegate during initialization.
-  for (const auto& Report : Vehicle->JobReports) if (Report.Result==TEXT("COMPLETED")) ReceiveJobReport(Report);
+  for (const auto& Report : Vehicle->JobReports) if (Report.Result==TEXT("COMPLETED") || Report.Result==TEXT("CANCELLED")) ReceiveJobReport(Report);
  }
  for (auto& Task : Tasks)
  {

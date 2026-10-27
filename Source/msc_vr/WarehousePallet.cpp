@@ -15,6 +15,7 @@ AWarehousePallet::AWarehousePallet()
  PrimaryActorTick.TickGroup=TG_PostPhysics;
  PrimaryActorTick.TickInterval=.1f;
  WrapMaterial=TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Warehouse/Materials/M_PalletWrap.M_PalletWrap")));
+ WrappingHighlightMaterial=TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Warehouse/Materials/M_PalletWrappingWhite.M_PalletWrappingWhite")));
  RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
  static ConstructorHelpers::FObjectFinder<UStaticMesh> Pallet(TEXT("/Game/Warehouse/Physics/SM_Ind_War_Storage_Pallet_Wood_Worn_01"));
  Body=CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PalletMesh"));

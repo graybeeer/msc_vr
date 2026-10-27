@@ -8,6 +8,13 @@
 #include "WarehouseForklift.h"
 #include "WarehouseComputer.h"
 #include "WarehouseLayoutEditor.h"
+#include "WarehouseLayoutInventory.h"
+#include "WarehouseCargo.h"
+#include "WarehousePallet.h"
+#include "msc_vrCharacter.h"
+#include "Kismet/GameplayStatics.h"
+#include "Misc/ScopeExit.h"
+#include "GameFramework/PlayerController.h"
 #include "Components/SceneComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -66,13 +73,14 @@ namespace
   Add(Rect.Min.X,Rect.Min.Y,Low.X,Rect.Max.Y);Add(High.X,Rect.Min.Y,Rect.Max.X,Rect.Max.Y);
   Add(Low.X,Rect.Min.Y,High.X,Low.Y);Add(Low.X,High.Y,High.X,Rect.Max.Y);return Result;
  }
- struct FShaft { TArray<FBox2D> Opening;FBox2D Clearance,Landing; };
- TArray<FShaft> Shafts(const AWarehouseBuildingLayout* Building)
+ struct FShaft { AActor* Actor=nullptr;TArray<FBox2D> Opening;FBox2D Clearance,Landing; };
+ TArray<FShaft> Shafts(const AWarehouseBuildingLayout* Building,const TArray<AActor*>& Removed={})
  {
   TArray<FShaft> Result;
   auto Add=[&](const AActor* Actor,FVector2D Ground,FVector2D Size,FVector2D Offset,double Yaw,FBox2D Landing)
   {
-   const FQuat Rotation(FVector::UpVector,FMath::DegreesToRadians(Yaw));FShaft Shaft;
+   if (!Actor->GetActorEnableCollision() || Removed.Contains(Actor)) return;
+   const FQuat Rotation(FVector::UpVector,FMath::DegreesToRadians(Yaw));FShaft Shaft;Shaft.Actor=const_cast<AActor*>(Actor);
    for (int32 Floor=0;Floor<4;++Floor)
    {
     const FVector2D Half=(Floor ? Size : Ground)*.5,Centre=Floor ? Offset : FVector2D::ZeroVector;FBox2D Bounds(ForceInit);
@@ -154,9 +162,9 @@ namespace
   }
   return FBox(ForceInit);
  }
- TArray<FPart> Plan(const AWarehouseBuildingLayout* Building,const FWarehouseBuildingSettings& S)
+ TArray<FPart> Plan(const AWarehouseBuildingLayout* Building,const FWarehouseBuildingSettings& S,const TArray<AActor*>& Removed={})
  {
-  TArray<FPart> Parts;const FBox2D Shell=Footprint(S);const auto Lifts=Shafts(Building);
+  TArray<FPart> Parts;const FBox2D Shell=Footprint(S);const auto Lifts=Shafts(Building,Removed);
   auto Add=[&](EPart Role,FVector Centre,FVector Size,int32 Floor=0,FQuat Rotation=FQuat::Identity,AStaticMeshActor* Source=nullptr)
   { if (Size.GetMin()>.05) Parts.Add({Role,Centre,Size,Rotation,Floor,Source}); };
   auto FreeOfShaft=[&](FVector2D Centre,FVector2D Size)
@@ -291,7 +299,7 @@ namespace
    }
   }
   TArray<FBox> Occupied;
-  for (TActorIterator<AActor> It(Building->GetWorld());It;++It) if (Preserved(Building,*It))
+  for (TActorIterator<AActor> It(Building->GetWorld());It;++It) if (Preserved(Building,*It) && !Removed.Contains(*It))
   {
    const FBox Bounds=AWarehouseDamageSystem::GetPhysicalBounds(*It);
    if (Bounds.IsValid) Occupied.Emplace(Bounds.Min-Building->GetActorLocation(),Bounds.Max-Building->GetActorLocation());
@@ -389,8 +397,23 @@ FBox AWarehouseBuildingLayout::GetFootprint() const
 
 bool AWarehouseBuildingLayout::ValidateSettings(const FWarehouseBuildingSettings& Proposed,FString& Reason) const
 {
+ TArray<AActor*> Removed;TArray<AWarehouseForklift*> Relocate;return ValidateSettingsInternal(Proposed,Reason,Removed,Relocate);
+}
+bool AWarehouseBuildingLayout::ValidateSettingsInternal(const FWarehouseBuildingSettings& Proposed,FString& Reason,TArray<AActor*>& Removed,TArray<AWarehouseForklift*>& Relocate) const
+{
  Reason.Empty();
  auto Fail=[&](const FString& Message) { Reason=Message;return false; };
+ auto Remove=[&](AActor* Actor,const FString& Message)
+ {
+  if (auto* Vehicle=Cast<AWarehouseForklift>(Actor);Vehicle && GetWorld()->IsGameWorld()) { Relocate.AddUnique(Vehicle);return true; }
+  if (const auto* Lift=Cast<AWarehouseElevator>(Actor);Lift && Lift->bHumanService)
+   return Fail(TEXT("사람이 이용 중인 엘리베이터는 삭제할 수 없습니다. 하차 후 건물을 편집하세요."));
+  // The player is never silently deleted.
+  const auto* Pawn=Cast<APawn>(Actor);
+  if (Actor->IsA<AWarehouseForklift>() || (Pawn && Pawn->IsPlayerControlled()) || !GetWorld()->IsGameWorld())
+   return Fail(Message+TEXT(" · 플레이어는 삭제하지 않습니다. 남는 바닥으로 먼저 이동하세요."));
+  Removed.AddUnique(Actor);return true;
+ };
  if (!GetWorld() || !GetActorRotation().IsNearlyZero(.01) || !GetActorScale3D().Equals(FVector::OneVector,.001) || FMath::Abs(GetActorLocation().Z)>.01)
   return Fail(TEXT("건물 기준점은 지상 높이·회전 0도·배율 1이어야 합니다."));
  if (!FMath::IsFinite(Proposed.WidthCm) || !FMath::IsFinite(Proposed.DepthCm) || !FMath::IsFinite(Proposed.RoofHeightCm) ||
@@ -410,32 +433,34 @@ bool AWarehouseBuildingLayout::ValidateSettings(const FWarehouseBuildingSettings
  }
  if (Proposed.RoofHeightCm<Highest*400+300) return Fail(TEXT("최상층 바닥 위로 최소 3m의 층고를 확보해야 합니다."));
  const int32 Floors=Highest+1;
- const bool HaveLift=TActorIterator<AWarehouseElevator>(GetWorld()) || TActorIterator<AWarehousePalletLift>(GetWorld());
+ bool HaveLift=false;
+ for (const auto& Shaft:Shafts(this,Removed))
+ {
+  const FBox Bounds=AWarehouseDamageSystem::GetPhysicalBounds(Shaft.Actor);
+  const FBox2D XY(FVector2D(Bounds.Min-GetActorLocation()),FVector2D(Bounds.Max-GetActorLocation()));
+  bool Incompatible=!Contains(Shell,XY,1);
+  if (const auto* Lift=Cast<AWarehouseElevator>(Shaft.Actor))
+   Incompatible|=Lift->FloorCount!=Floors && (Lift->State!=EWarehouseElevatorState::Idle || Lift->CurrentFloor>=Floors || Lift->ReservedVehicle);
+  if (const auto* Lift=Cast<AWarehousePalletLift>(Shaft.Actor))
+   Incompatible|=Lift->FloorCount!=Floors && (!Lift->IsIdleForLayout() || Lift->CurrentFloor>=Floors);
+  if (Incompatible) { if (!Remove(Shaft.Actor,TEXT("승강기 위치/운행 층이 새 건물 범위를 벗어납니다."))) return false; }
+  else HaveLift=true;
+ }
  if (HaveLift && !GetWorld()->IsGameWorld()) return Fail(TEXT("승강기 설치 건물은 플레이 중 건물 편집 화면에서 변경하세요."));
  if (HaveLift && Proposed.RoofHeightCm<Highest*400+340) return Fail(TEXT("승강기 상부 프레임과 천장 사이에 여유 공간을 확보하세요."));
- for (TActorIterator<AWarehouseElevator> It(GetWorld());It;++It) if (It->FloorCount!=Floors && (It->State!=EWarehouseElevatorState::Idle || It->CurrentFloor>=Floors || It->ReservedVehicle))
-  return Fail(TEXT("범용 엘리베이터를 유지할 층으로 내리고 운행을 끝낸 뒤 층수를 바꾸세요."));
- for (TActorIterator<AWarehousePalletLift> It(GetWorld());It;++It) if (It->FloorCount!=Floors && (!It->IsIdleForLayout() || It->CurrentFloor>=Floors))
-  return Fail(TEXT("화물용 엘리베이터를 유지할 층으로 내리고 운반을 끝낸 뒤 층수를 바꾸세요."));
- // Never mutate a loaded machine or live driving body during a geometry transaction.
- if (GetWorld()->IsGameWorld())
- {
-  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
-   if (It->IsRemoteControlled() || It->GetSupportedPallet() || It->GetVelocity().Size()>5)
-    return Fail(It->VehicleName+TEXT("가 운전·운반 중입니다. 안전하게 내려놓고 정지한 뒤 건물을 변경하세요."));
-  for (TActorIterator<AWarehouseElevator> It(GetWorld());It;++It)
-   if (It->ReservedVehicle || It->State==EWarehouseElevatorState::Calling || It->State==EWarehouseElevatorState::Travelling || It->State==EWarehouseElevatorState::ClosingLoaded)
-    return Fail(TEXT("범용 엘리베이터가 운행 중입니다."));
-  for (TActorIterator<AWarehousePalletLift> It(GetWorld());It;++It) if (!It->IsIdleForLayout()) return Fail(TEXT("화물용 엘리베이터가 운반 중입니다."));
- }
- const auto Parts=Plan(this,Proposed);const FVector Origin=GetActorLocation();
- for (const FShaft& Shaft:Shafts(this)) for (int32 Floor=0;Floor<Floors;++Floor)
+ // Editing pauses the world; retained vehicles and loaded lifts keep their bodies and loads.
+ const auto Parts=Plan(this,Proposed,Removed);const FVector Origin=GetActorLocation();
+ for (const FShaft& Shaft:Shafts(this,Removed)) for (int32 Floor=0;Floor<Floors;++Floor)
   for (const FBox2D& Required:{Shaft.Opening[Floor],Shaft.Landing})
   {
    TArray<FBox2D> Unsupported={Required};
    for (const FPart& P:Parts) if (P.Role==EPart::Floor && P.Floor==Floor)
    { const FBox B=P.Bounds();TArray<FBox2D> Next;for (const auto& Rect:Unsupported) Next.Append(Subtract(Rect,FBox2D(FVector2D(B.Min),FVector2D(B.Max))));Unsupported=MoveTemp(Next); }
-   if (!Unsupported.IsEmpty()) return Fail(FString::Printf(TEXT("%d층 승강기 개구부 또는 진입 대기 바닥이 복층·계단·중정 밖으로 나갑니다."),Floor+1));
+   if (!Unsupported.IsEmpty())
+   {
+    if (!Remove(Shaft.Actor,FString::Printf(TEXT("%d층 승강기 진입 바닥이 사라집니다."),Floor+1))) return false;
+    return ValidateSettingsInternal(Proposed,Reason,Removed,Relocate);
+   }
   }
  for (const auto& Part:Parts) if (Part.Role==EPart::Stair)
  {
@@ -460,7 +485,7 @@ bool AWarehouseBuildingLayout::ValidateSettings(const FWarehouseBuildingSettings
   }
  }
  const FBox2D Previous=Footprint(Settings);
- for (TActorIterator<AActor> It(GetWorld());It;++It) if (Preserved(this,*It))
+ for (TActorIterator<AActor> It(GetWorld());It;++It) if (Preserved(this,*It) && !Removed.Contains(*It) && !Relocate.Contains(Cast<AWarehouseForklift>(*It)))
  {
   const FBox World=AWarehouseDamageSystem::GetPhysicalBounds(*It);if (!World.IsValid) continue;
   const FBox Bounds(World.Min-Origin,World.Max-Origin);const FBox2D XY(FVector2D(Bounds.Min),FVector2D(Bounds.Max));
@@ -471,7 +496,10 @@ bool AWarehouseBuildingLayout::ValidateSettings(const FWarehouseBuildingSettings
     FVector2D(FMath::Min(Previous.Max.X,XY.Max.X),FMath::Min(Previous.Max.Y,XY.Max.Y)));
    const double Margin=Interior ? 1. : -.1,Top=Interior ? Bounds.Max.Z : FMath::Min(Bounds.Max.Z,double(Settings.RoofHeightCm));
    if (!Contains(Shell,Required,Margin) || Top>Proposed.RoofHeightCm-Margin)
-    return Fail(It->GetActorNameOrLabel()+TEXT("이 새 건물 밖이나 천장에 걸립니다. 기존 물류·설비를 먼저 재배치하세요."));
+   {
+    if (!Remove(*It,It->GetActorNameOrLabel()+TEXT("이 새 건물 밖이나 천장에 걸립니다."))) return false;
+    continue;
+   }
    // Shelf loads inherit their supporting rack's floor; use the physical bottom,
    // never a tall actor centre that can extend into the next storey.
    const int32 Floor=FMath::Clamp(FMath::FloorToInt((Bounds.Min.Z+20)/400.),0,3);
@@ -482,7 +510,10 @@ bool AWarehouseBuildingLayout::ValidateSettings(const FWarehouseBuildingSettings
     for (const auto& P:Parts) if ((P.Role==EPart::Floor || P.Role==EPart::Stair) && P.Floor==Floor && FMath::Abs(P.Bounds().Max.Z-Floor*400.)<.1)
     { const FBox B=P.Bounds();TArray<FBox2D> Next;for (const auto& Rect:Unsupported) Next.Append(Subtract(Rect,FBox2D(FVector2D(B.Min),FVector2D(B.Max)).ExpandBy(1)));Unsupported=MoveTemp(Next); }
     if (!M.bEnabled || !Unsupported.IsEmpty())
-     return Fail(FString::Printf(TEXT("%s의 %d층 지지 바닥이 사라집니다. 물류·랙·작업자를 먼저 옮기세요."),*It->GetActorNameOrLabel(),Floor+1));
+    {
+     if (!Remove(*It,FString::Printf(TEXT("%s의 %d층 지지 바닥이 사라집니다."),*It->GetActorNameOrLabel(),Floor+1))) return false;
+     continue;
+    }
    }
   }
   for (const auto& Part:Parts)
@@ -499,7 +530,8 @@ bool AWarehouseBuildingLayout::ValidateSettings(const FWarehouseBuildingSettings
      if (!ExteriorActuallyOverlaps(Part.Source,*It,ProposedWorld) || PreservesExistingExteriorContact(Part.Source,*It,ProposedWorld,World)) continue;
     }
     ReportCollision(TEXT("planned"),Part,FBox(Planned.Min+Origin,Planned.Max+Origin),*It,World);
-    return Fail(It->GetActorNameOrLabel()+TEXT("이 변경할 벽·바닥·기둥·계단·난간과 겹칩니다."));
+    if (!Remove(*It,It->GetActorNameOrLabel()+TEXT("이 변경할 벽·바닥·기둥·계단·난간과 겹칩니다."))) return false;
+    break;
    }
   }
  }
@@ -595,7 +627,72 @@ void AWarehouseBuildingLayout::RestoreOriginalStructure()
 bool AWarehouseBuildingLayout::ApplySettings(const FWarehouseBuildingSettings& Proposed)
 {
  if (AWarehousePlayStage::Find(this)) { Status=TEXT("플레이 스테이지의 건물·층수·지형은 고정입니다.");return false; }
- CaptureExistingLayout();FString Reason;if (!ValidateSettings(Proposed,Reason)) { Status=Reason;return false; }
+ CaptureExistingLayout();FString Reason;TArray<AActor*> Removed;TArray<AWarehouseForklift*> Relocate;
+ if (!ValidateSettingsInternal(Proposed,Reason,Removed,Relocate)) { Status=Reason;return false; }
+ const bool WasPaused=UGameplayStatics::IsGamePaused(this),GameWorld=GetWorld()->IsGameWorld();
+ if (GameWorld && !WasPaused) UGameplayStatics::SetGamePaused(this,true);
+ bool Committed=false;
+ struct FStaged { TWeakObjectPtr<AActor> Actor;bool Hidden,Collision; };
+ TArray<FStaged> Staged;
+ TArray<AWarehouseLayoutEditor*> Movers;
+ auto* Store=GameWorld ? AWarehouseLayoutInventory::Find(this) : nullptr;
+ auto* LiveLayout=GameWorld ? AWarehouseLayoutEditor::Find(this) : nullptr;
+ const int32 HeldBefore=Store ? Store->HeldCargo.Num() : 0;
+ const int32 InventoryRevision=Store ? Store->Revision : 0;
+ const FString InventoryMessage=Store ? Store->LastMessage : FString();
+ ON_SCOPE_EXIT
+ {
+  if (!Committed)
+  {
+   for (const auto& Entry:Staged) if (Entry.Actor.IsValid())
+   { Entry.Actor->SetActorHiddenInGame(Entry.Hidden);Entry.Actor->SetActorEnableCollision(Entry.Collision); }
+   if (Store) { Store->HeldCargo.SetNum(HeldBefore);Store->Revision=InventoryRevision;Store->LastMessage=InventoryMessage; }
+  }
+  for (auto* Mover:Movers)
+  {
+   Mover->Restore(!Committed);Mover->Destroy();
+  }
+  if (Committed) for (auto* Vehicle:Relocate) if (IsValid(Vehicle))
+  { Vehicle->SuspendForBuildingEdit({});Vehicle->RefreshAfterLayout(Vehicle->GetSupportedPallet()!=nullptr); }
+  if (GameWorld && !WasPaused) UGameplayStatics::SetGamePaused(this,false);
+ };
+ // Expand complete rack groups and supported loads before hiding anything.
+ auto ExpandRemoval=[&]()
+ {
+  auto* Strength=AWarehouseDamageSystem::Find(this);if (Strength) Strength->EnsureSupportSnapshot();
+  for (int32 I=0;I<Removed.Num();++I)
+  {
+   AActor* Actor=Removed[I];
+   const auto* Pawn=Cast<APawn>(Actor);
+   if (auto* Vehicle=Cast<AWarehouseForklift>(Actor)) { Relocate.AddUnique(Vehicle);continue; }
+   if (const auto* Lift=Cast<AWarehouseElevator>(Actor);Lift && Lift->bHumanService)
+   { Status=TEXT("사람이 이용 중인 엘리베이터는 하차 후 변경하세요.");return false; }
+   if (const auto* Lift=Cast<AWarehouseElevator>(Actor);Lift && IsValid(Lift->ReservedVehicle)) Relocate.AddUnique(Lift->ReservedVehicle);
+   if (const auto* Lift=Cast<AWarehousePalletLift>(Actor))
+    for (TActorIterator<AActor> It(GetWorld());It;++It) if (Lift->IsHandlingCargo(*It)) Removed.AddUnique(*It);
+   if (Pawn && Pawn->IsPlayerControlled())
+   { Status=Actor->GetActorNameOrLabel()+TEXT("의 실제 지지/공간을 유지해야 합니다. 남는 바닥으로 먼저 재배치하세요.");return false; }
+   for (TActorIterator<Amsc_vrCharacter> It(GetWorld());It;++It) if (It->GetHeldCargo()==Actor)
+   { Status=TEXT("플레이어가 들고 있는 물건은 내려놓은 뒤 건물을 편집하세요.");return false; }
+   for (FName Tag:Actor->Tags) if (Tag.ToString().StartsWith(TEXT("LayoutGroup:")))
+    for (TActorIterator<AActor> It(GetWorld());It;++It) if (It->ActorHasTag(Tag) && !ReplacedStructure.Contains(*It)) Removed.AddUnique(*It);
+   if (Strength) for (AActor* Load:Strength->GetSupportedActors(Actor,false)) if (IsValid(Load)) Removed.AddUnique(Load);
+   if (const auto* Pallet=Cast<AWarehousePallet>(Actor)) for (auto* Load:Pallet->GetWrappedCargo()) if (IsValid(Load)) Removed.AddUnique(Load);
+  }
+  for (auto* Vehicle:Relocate)
+  {
+   Removed.Remove(Vehicle);
+   for (AActor* Load:Vehicle->GetPhysicalLoads()) Removed.Remove(Load);
+  }
+  return true;
+ };
+ if (!ExpandRemoval()) return false;
+ if (!Removed.IsEmpty())
+ {
+  Store=AWarehouseLayoutInventory::Find(this);Store->CapturePrototypes(LiveLayout);
+  for (AActor* Actor:Removed)
+  { Staged.Add({Actor,Actor->IsHidden(),Actor->GetActorEnableCollision()});Actor->SetActorHiddenInGame(true);Actor->SetActorEnableCollision(false); }
+ }
  const auto Parts=Plan(this,Proposed);TArray<TObjectPtr<AStaticMeshActor>> Next;
  auto* Cube=LoadObject<UStaticMesh>(nullptr,TEXT("/Engine/BasicShapes/Cube.Cube"));if (!Cube) { Status=TEXT("구조용 메시를 불러올 수 없습니다.");return false; }
  // Build a complete inactive replacement first. A failed allocation cannot remove support.
@@ -634,6 +731,70 @@ bool AWarehouseBuildingLayout::ApplySettings(const FWarehouseBuildingSettings& P
   Actor->SetActorLabel(FString::Printf(TEXT("BLD_L%d_%02d_%04d"),Part.Floor+1,int32(Part.Role),I));
 #endif
  }
+ TArray<FBox> MovedBounds;
+ TSet<AWarehouseForklift*> Positioned;
+ auto RelocateVehicles=[&]()
+ {
+  for (auto* Vehicle:Relocate)
+  {
+   if (Positioned.Contains(Vehicle)) continue;
+   TArray<AActor*> Members{Vehicle};Members.Append(Vehicle->GetPhysicalLoads());
+   FBox Before(ForceInit);
+   for (AActor* Member:Members)
+   {
+    const int32 StagedIndex=Staged.IndexOfByPredicate([&](const auto& Entry) { return Entry.Actor==Member; });
+    if (StagedIndex!=INDEX_NONE)
+    { Member->SetActorHiddenInGame(Staged[StagedIndex].Hidden);Member->SetActorEnableCollision(Staged[StagedIndex].Collision);Staged.RemoveAt(StagedIndex); }
+    Removed.Remove(Member);Before+=AWarehouseDamageSystem::GetPhysicalBounds(Member);
+   }
+   if (!Before.IsValid) { Status=TEXT("지게차 실제 충돌 형상을 확인할 수 없어 건물 변경을 취소했습니다.");return false; }
+   const FVector Start=Vehicle->GetActorLocation();
+   FActorSpawnParameters Spawn;Spawn.ObjectFlags|=RF_Transient;
+   auto* Mover=GetWorld()->SpawnActor<AWarehouseLayoutEditor>(Spawn);
+   if (!Mover) { Status=TEXT("지게차 재배치 준비 실패 · 건물 유지");return false; }
+   Movers.Add(Mover);Mover->CaptureMoving(Members);
+   bool Found=false;const int32 CurrentFloor=FMath::Clamp(FMath::FloorToInt((Start.Z+20)/400.),0,3);
+   TArray<int32> Floors{CurrentFloor};if (CurrentFloor) Floors.Add(0);
+   for (int32 Floor:Floors)
+   {
+    if (Floor && !Upper(Proposed,Floor).bEnabled) continue;
+    TArray<FVector> Candidates;
+    for (double X=-Proposed.WidthCm*.5+100;X<=Proposed.WidthCm*.5-100;X+=100)
+     for (double Y=-Proposed.DepthCm*.5+100;Y<=Proposed.DepthCm*.5-100;Y+=100) Candidates.Add(GetActorLocation()+FVector(X,Y,Floor*400.));
+    Candidates.Sort([&](const FVector& A,const FVector& B) { return FVector::DistSquared(A,Start)<FVector::DistSquared(B,Start); });
+    for (const FVector& Point:Candidates)
+    {
+     const FVector Offset=Point-Start;const FBox Body(Before.Min+Offset,Before.Max+Offset);
+     const FBox2D XY(FVector2D(Body.Min-GetActorLocation()),FVector2D(Body.Max-GetActorLocation()));
+     if (!Contains(Footprint(Proposed),XY,5) || Body.Max.Z>Proposed.RoofHeightCm-5 || Body.Min.Z<Floor*400.-2) continue;
+     TArray<FBox2D> Unsupported{XY};bool Clear=true;
+     for (int32 I=0;I<Next.Num();++I)
+     {
+      const FBox Part=Next[I]->GetStaticMeshComponent()->Bounds.GetBox();
+      if (Parts[I].Role==EPart::Floor && Parts[I].Floor==Floor && FMath::Abs(Part.Max.Z-Floor*400.)<.1)
+      {
+       const FBox2D Bearing(FVector2D(Part.Min-GetActorLocation()),FVector2D(Part.Max-GetActorLocation()));TArray<FBox2D> Remains;
+       for (const auto& Rect:Unsupported) Remains.Append(Subtract(Rect,Bearing));Unsupported=MoveTemp(Remains);continue;
+      }
+      if (Overlaps(Body,Part,1)) { Clear=false;break; }
+     }
+     if (!Clear || !Unsupported.IsEmpty()) continue;
+     for (const FBox& Other:MovedBounds) if (Overlaps(Body,Other,5)) { Clear=false;break; }
+     if (!Clear) continue;
+     for (TActorIterator<AActor> It(GetWorld());It;++It) if (Preserved(this,*It) && !Members.Contains(*It) && !Removed.Contains(*It))
+     {
+      const FBox Other=AWarehouseDamageSystem::GetPhysicalBounds(*It);if (Other.IsValid && Overlaps(Body,Other,5)) { Clear=false;break; }
+     }
+     if (!Clear) continue;
+     Mover->Delta=Offset;Mover->ApplyPreview();MovedBounds.Add(Body);Positioned.Add(Vehicle);Found=true;break;
+    }
+    if (Found) break;
+   }
+   if (!Found) { Status=Vehicle->VehicleName+TEXT("와 적재물을 함께 둘 안전한 바닥/공간이 없습니다. 건물과 물건을 원복했습니다.");return false; }
+  }
+  return true;
+ };
+ if (!RelocateVehicles()) { DestroyParts(Next);return false; }
  // A non-box imported module can have a different oriented bound from its planning
  // rectangle. Check the instantiated geometry before disabling any original support.
  TArray<TPair<AActor*,FBox>> Occupants;
@@ -641,6 +802,7 @@ bool AWarehouseBuildingLayout::ApplySettings(const FWarehouseBuildingSettings& P
  { const FBox Bounds=AWarehouseDamageSystem::GetPhysicalBounds(*It);if (Bounds.IsValid) Occupants.Emplace(*It,Bounds); }
  for (int32 I=0;I<Next.Num();++I) for (const auto& Occupant:Occupants)
  {
+  if (Removed.Contains(Occupant.Key)) continue;
   if (Parts[I].Role==EPart::Floor && (Occupant.Key->IsA<AWarehouseElevator>() || Occupant.Key->IsA<AWarehousePalletLift>())) continue;
   const auto* Part=Next[I]->GetStaticMeshComponent();const FBox Bounds=Part->Bounds.GetBox();
   if (!Overlaps(Bounds,Occupant.Value,1)) continue;
@@ -651,8 +813,20 @@ bool AWarehouseBuildingLayout::ApplySettings(const FWarehouseBuildingSettings& P
       Part->GetComponentScale().Equals(Source->GetComponentScale(),.00001) &&
       (!ExteriorActuallyOverlaps(Parts[I].Source,Occupant.Key,Bounds) || PreservesExistingExteriorContact(Parts[I].Source,Occupant.Key,Bounds,Occupant.Value))) continue;
   ReportCollision(TEXT("generated"),Parts[I],Bounds,Occupant.Key,Occupant.Value);
-  DestroyParts(Next);Status=Occupant.Key->GetActorNameOrLabel()+TEXT("이 실제 건축 메시와 겹칩니다. 변경을 취소했습니다.");return false;
+  if (auto* Vehicle=Cast<AWarehouseForklift>(Occupant.Key))
+  {
+   Relocate.AddUnique(Vehicle);if (!RelocateVehicles()) { DestroyParts(Next);return false; }continue;
+  }
+  Removed.AddUnique(Occupant.Key);
+  if (!Store || !ExpandRemoval()) { DestroyParts(Next);return false; }
+  if (!RelocateVehicles()) { DestroyParts(Next);return false; }
+  Store->CapturePrototypes(LiveLayout);
+  for (AActor* Actor:Removed) if (!Staged.ContainsByPredicate([&](const auto& Entry) { return Entry.Actor==Actor; }))
+  { Staged.Add({Actor,Actor->IsHidden(),Actor->GetActorEnableCollision()});Actor->SetActorHiddenInGame(true);Actor->SetActorEnableCollision(false); }
  }
+ // Persist every parcel before deleting anything. A duplicate ID cancels the whole transaction.
+ if (Store) for (AActor* Actor:Removed) if (auto* Cargo=Cast<AWarehouseCargo>(Actor))
+  if (!Store->HoldCargo(Cargo)) { DestroyParts(Next);Status=Store->LastMessage;return false; }
  const int32 Floors=Proposed.Floor4.bEnabled ? 4 : Proposed.Floor3.bEnabled ? 3 : Proposed.Floor2.bEnabled ? 2 : 1;
  TArray<TPair<AWarehouseElevator*,int32>> GeneralFloors;TArray<TPair<AWarehousePalletLift*,int32>> CargoFloors;
  auto RestoreLiftFloors=[&]()
@@ -660,12 +834,12 @@ bool AWarehouseBuildingLayout::ApplySettings(const FWarehouseBuildingSettings& P
   for (const auto& Pair:GeneralFloors) if (IsValid(Pair.Key)) Pair.Key->SetFloorCount(Pair.Value);
   for (const auto& Pair:CargoFloors) if (IsValid(Pair.Key)) Pair.Key->SetFloorCount(Pair.Value);
  };
- for (TActorIterator<AWarehouseElevator> It(GetWorld());It;++It) if (It->FloorCount!=Floors)
+ for (TActorIterator<AWarehouseElevator> It(GetWorld());It;++It) if (!Removed.Contains(*It) && It->FloorCount!=Floors)
  {
   GeneralFloors.Emplace(*It,It->FloorCount);
   if (!It->SetFloorCount(Floors)) { RestoreLiftFloors();DestroyParts(Next);Status=TEXT("범용 승강기 층수 변경 실패 · 건물 유지");return false; }
  }
- for (TActorIterator<AWarehousePalletLift> It(GetWorld());It;++It) if (It->FloorCount!=Floors)
+ for (TActorIterator<AWarehousePalletLift> It(GetWorld());It;++It) if (!Removed.Contains(*It) && It->FloorCount!=Floors)
  {
   CargoFloors.Emplace(*It,It->FloorCount);
   if (!It->SetFloorCount(Floors)) { RestoreLiftFloors();DestroyParts(Next);Status=TEXT("화물용 승강기 층수 변경 실패 · 건물 유지");return false; }
@@ -693,14 +867,14 @@ bool AWarehouseBuildingLayout::ApplySettings(const FWarehouseBuildingSettings& P
  // this transaction's slabs. Restore them immediately after the helper captures.
  TArray<TPair<AActor*,TArray<FName>>> OriginalTags;
  for (AActor* Actor:ReplacedStructure) if (IsValid(Actor)) { OriginalTags.Emplace(Actor,Actor->Tags);Actor->Tags.Remove(TEXT("ElevatorLayoutFloor")); }
- const bool HaveLift=TActorIterator<AWarehouseElevator>(GetWorld()) || TActorIterator<AWarehousePalletLift>(GetWorld());
- const bool OpeningsReady=!GetWorld()->IsGameWorld() || !HaveLift || WarehouseElevatorLayout::Rebuild(this,false);
+ const bool HaveLift=!Shafts(this).IsEmpty();
+ const bool OpeningsReady=!GetWorld()->IsGameWorld() || !HaveLift || WarehouseElevatorLayout::Rebuild(this,false,Removed);
  for (const auto& Pair:OriginalTags) if (IsValid(Pair.Key)) Pair.Key->Tags=Pair.Value;
  if (!OpeningsReady)
  {
   RestoreLiftFloors();
   if (auto* Strength=AWarehouseDamageSystem::Find(this))
-  { TArray<AActor*> Removed;for (AStaticMeshActor* Actor:GeneratedStructure) Removed.Add(Actor);Strength->RemoveLayoutActors(Removed); }
+  { TArray<AActor*> FailedParts;for (AStaticMeshActor* Actor:GeneratedStructure) FailedParts.Add(Actor);Strength->RemoveLayoutActors(FailedParts); }
   WarehouseElevatorLayout::RestoreInitial(this);DestroyParts(GeneratedStructure);GeneratedStructure=MoveTemp(PreviousActors);Settings=PreviousSettings;
   for (AStaticMeshActor* Actor:GeneratedStructure) if (IsValid(Actor)) { Actor->SetActorHiddenInGame(false);Actor->SetActorEnableCollision(true);Actor->GetStaticMeshComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics); }
   if (GeneratedStructure.IsEmpty()) RestoreOriginalStructure();else WarehouseElevatorLayout::Rebuild(this,false);
@@ -708,9 +882,19 @@ bool AWarehouseBuildingLayout::ApplySettings(const FWarehouseBuildingSettings& P
  }
  if (auto* Strength=AWarehouseDamageSystem::Find(this))
  {
-  TArray<AActor*> Removed;for (AStaticMeshActor* Actor:PreviousActors) Removed.Add(Actor);Strength->RemoveLayoutActors(Removed);
+  TArray<AActor*> OldParts;for (AStaticMeshActor* Actor:PreviousActors) OldParts.Add(Actor);Strength->RemoveLayoutActors(OldParts);
   Strength->RefreshLayoutBindings();
  }
+ // Only after every geometry/lift check succeeds do operational state and live stock change.
+ int32 PausedVehicles=0;
+ for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
+ {
+  const bool Running=It->bPowered || It->IsRemoteControlled();
+  if (auto* Operator=Cast<Amsc_vrCharacter>(It->GetRemoteOperator())) Operator->EndRemoteControl();
+  It->SuspendForBuildingEdit(Removed);PausedVehicles+=Running ? 1 : 0;
+ }
+ if (Store && !Removed.IsEmpty()) { Store->ForgetActors(Removed);for (AActor* Actor:Removed) if (IsValid(Actor)) Actor->Destroy(); }
+ Committed=true;
  DestroyParts(PreviousActors);bHasAppliedChanges=true;++Revision;
  for (AActor* Light:GeneratedLights) if (IsValid(Light)) Light->Destroy();GeneratedLights.Reset();
  for (const FPart& Part:Parts) if (Part.Role==EPart::Light)
@@ -731,7 +915,7 @@ bool AWarehouseBuildingLayout::ApplySettings(const FWarehouseBuildingSettings& P
   for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) It->RefreshAfterLayout(false);
   for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) It->RefreshState();
  }
- Status=FString::Printf(TEXT("건물 적용 · %.0f × %.0fm · 최대 4층 · 기존 물류·설비 보존"),Settings.WidthCm/100,Settings.DepthCm/100);
+ Status=FString::Printf(TEXT("건물 적용 · %.0f × %.0fm · 지게차 %d대 일시정지/%d대 안전 재배치 · 상자 %d개 보류 · 간섭 요소 %d개 정리"),Settings.WidthCm/100,Settings.DepthCm/100,PausedVehicles,Positioned.Num(),Store ? Store->HeldCargo.Num()-HeldBefore : 0,Removed.Num());
  return true;
 }
 bool AWarehouseBuildingLayout::RebuildGeometry() { return ApplySettings(Settings); }
