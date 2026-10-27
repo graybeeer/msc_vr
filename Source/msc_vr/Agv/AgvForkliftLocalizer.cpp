@@ -545,6 +545,7 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	{
 		return;
 	}
+	const bool bPartialScan = Sources.Num() < SensorKit->Lidars.Num();
 	const double Start = FPlatformTime::Seconds();
 	const bool bHadNoMap = bNoMap;
 	const bool bHaveMap = EnsureMap();
@@ -603,6 +604,7 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	{
 		++RejectedMatches;
 		LastInlierRatio = 0.f;
+		bMatchToLog = bLogMatches;
 		return;
 	}
 
@@ -635,6 +637,19 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 		RecoveredMatches += Ratio >= MinInlierRatio;
 	}
 	LastInlierRatio = (float)Ratio;
+	if (Ratio >= MinInlierRatio && bPartialScan)
+	{
+		// Few points can fit the wrong place: a side-scanner scan only refines, it does not move the estimate far.
+		FVector2D Now, Matched;
+		double NowYaw, MatchedYaw;
+		ToMap(OdomPosition, OdomYaw, Now, NowYaw);
+		Matched = AgvMath::Rotate(Th, OdomPosition) + FVector2D(Tx, Ty);
+		if (FVector2D::Distance(Now, Matched) > MaxPartialCorrectionCm)
+		{
+			Ratio = 0.0;
+			LastInlierRatio = 0.f;
+		}
+	}
 	if (Ratio >= MinInlierRatio)
 	{
 		FVector2D Before, After;

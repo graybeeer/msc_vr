@@ -131,8 +131,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="0", ClampMax="1"))
 	float MinInlierRatio = 0.5f;
 
+	/** Fewest voxelized points for a match. The side scanners alone give about 120 (2026-10-27). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="3"))
-	int32 MinMatchPoints = 100;
+	int32 MinMatchPoints = 50;
+
+	/** A side-scanner-only match that would move the estimate farther than this is ignored (the full scans decide). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="1"))
+	float MaxPartialCorrectionCm = 30.f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="1"))
 	int32 MatchIterations = 20;
