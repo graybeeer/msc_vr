@@ -32,12 +32,17 @@ namespace AgvForkliftLoc
 		TEXT("agv.loc"),
 		TEXT("agv.loc: LiDAR localization in shadow mode on every main warehouse forklift (measures the estimate against "
 			"the exact pose; travel still uses the exact pose). Again = log the results. agv.loc reset = clear the statistics. "
-			"agv.loc view = show/hide the top-left panel of what forklift 1 believes."),
+			"agv.loc view = show/hide the top-left panel of what forklift 1 believes. agv.loc drive [0] = route travel on the estimate (on/off)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
 		{
 			UAgvLocalizationSubsystem* Subsystem = World ? World->GetSubsystem<UAgvLocalizationSubsystem>() : nullptr;
 			if (!Subsystem)
 			{
+				return;
+			}
+			if (Args.Contains(TEXT("drive")))
+			{
+				Subsystem->SetDriveOnEstimate(!Args.Contains(TEXT("0")));
 				return;
 			}
 			if (Args.Contains(TEXT("view")))
@@ -155,8 +160,8 @@ void UAgvForkliftLocalizerComponent::InitializePose()
 	const FTransform Actor = Forklift->GetActorTransform();
 	OdomYaw = FMath::DegreesToRadians(Actor.Rotator().Yaw);
 	OdomPosition = FVector2D(Actor.GetLocation()) + AgvMath::Rotate(OdomYaw, ReferenceOffset);
-	CorrectionOffset = FVector2D::ZeroVector;
-	CorrectionYaw = 0.0;
+	CorrectionOffset = DrivingOffset = FVector2D::ZeroVector;
+	CorrectionYaw = DrivingYaw = 0.0;
 	TravelSinceMatchCm = 0.f;
 	LastTrueLocation = Actor.GetLocation();
 	// A snapshot already taken belongs to the old pose.
@@ -172,25 +177,61 @@ void UAgvForkliftLocalizerComponent::ToMap(const FVector2D& Position, double Yaw
 	OutYaw = Yaw + CorrectionYaw;
 }
 
+void UAgvForkliftLocalizerComponent::SlewDrivingCorrection(float Dt)
+{
+	// Move the driving pose (not the correction's parameters: a yaw change about the map origin would swing a vehicle
+	// far from it sideways) towards the matched pose at limited rates, then express it as the driving correction.
+	FVector2D Target, Current;
+	double TargetYaw, CurrentYaw;
+	ToMap(OdomPosition, OdomYaw, Target, TargetYaw);
+	Current = AgvMath::Rotate(DrivingYaw, OdomPosition) + DrivingOffset;
+	CurrentYaw = OdomYaw + DrivingYaw;
+	const FVector2D Delta = Target - Current;
+	const double DeltaYaw = AgvMath::Wrap(TargetYaw - CurrentYaw);
+	if (Delta.Size() > 100.0 || FMath::Abs(DeltaYaw) > FMath::DegreesToRadians(10.0))
+	{
+		// Too far apart to blend (a re-initialisation or a recovered heading): take the match.
+		DrivingOffset = CorrectionOffset;
+		DrivingYaw = CorrectionYaw;
+		return;
+	}
+	const double MaxStep = CorrectionRateCmS * Dt;
+	Current += Delta.Size() > MaxStep ? Delta.GetSafeNormal() * MaxStep : Delta;
+	const double MaxTurn = FMath::DegreesToRadians((double)CorrectionRateDegS) * Dt;
+	CurrentYaw += FMath::Clamp(DeltaYaw, -MaxTurn, MaxTurn);
+	DrivingYaw = CurrentYaw - OdomYaw;
+	DrivingOffset = Current - AgvMath::Rotate(DrivingYaw, OdomPosition);
+}
+
 bool UAgvForkliftLocalizerComponent::GetPose(FVector2D& OutPosition, double& OutYaw) const
 {
 	if (!bInitialized || !bAvailable || bLost)
 	{
 		return false;
 	}
-	ToMap(OdomPosition, OdomYaw, OutPosition, OutYaw);
+	OutPosition = AgvMath::Rotate(DrivingYaw, OdomPosition) + DrivingOffset;
+	OutYaw = OdomYaw + DrivingYaw;
 	OutPosition += PositionBiasCm;
 	OutYaw += FMath::DegreesToRadians((double)YawBiasDeg);
 	return true;
 }
 
-bool UAgvForkliftLocalizerComponent::GetEstimatedActorTransform(FTransform& Out) const
+bool UAgvForkliftLocalizerComponent::GetEstimatedActorTransform(FTransform& Out, bool bEvenIfLost) const
 {
 	FVector2D Reference;
 	double Yaw;
-	if (!Forklift || !GetPose(Reference, Yaw))
+	if (!Forklift || !bInitialized)
 	{
 		return false;
+	}
+	if (!GetPose(Reference, Yaw))
+	{
+		if (!bEvenIfLost)
+		{
+			return false;
+		}
+		Reference = AgvMath::Rotate(DrivingYaw, OdomPosition) + DrivingOffset;
+		Yaw = OdomYaw + DrivingYaw;
 	}
 	const FTransform Actor = Forklift->GetActorTransform();
 	const FVector2D Origin = Reference - AgvMath::Rotate(Yaw, ReferenceOffset);
@@ -245,6 +286,7 @@ void UAgvForkliftLocalizerComponent::TickComponent(float DeltaTime, ELevelTick T
 			// The state read now is the result of the physics step that ran for the previous frame's time.
 			StepOdometry(LastDt);
 			CollectAndMatchScan();
+			SlewDrivingCorrection(LastDt);
 		}
 		if (TravelSinceMatchCm > LostAfterTravelCm && !bLost)
 		{
@@ -507,6 +549,12 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 		LastCorrectionCm = (float)FVector2D::Distance(Before, After);
 		TravelSinceMatchCm = 0.f;
 		++AcceptedMatches;
+		if (bLost)
+		{
+			// The scan fits the map again from the dead-reckoned estimate: localized again.
+			UE_LOG(LogAgvForkliftLoc, Log, TEXT("AGV_LOC_RELOCALIZED %s"), *Forklift->GetName());
+			bLost = false;
+		}
 	}
 	else
 	{
@@ -603,7 +651,17 @@ bool UAgvLocalizationSubsystem::DoesSupportWorldType(const EWorldType::Type Worl
 void UAgvLocalizationSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
 	Super::OnWorldBeginPlay(InWorld);
-	if (FParse::Param(FCommandLine::Get(), TEXT("AgvLocShadow")))
+	if (FParse::Param(FCommandLine::Get(), TEXT("AgvLocDrive")))
+	{
+		SetDriveOnEstimate(true);
+		return;
+	}
+	bool bWanted = FParse::Param(FCommandLine::Get(), TEXT("AgvLocShadow"));
+	for (TActorIterator<AWarehouseForklift> It(&InWorld); It && !bWanted; ++It)
+	{
+		bWanted = It->bUseAgvLocalization;
+	}
+	if (bWanted)
 	{
 		Enable();
 	}
@@ -651,6 +709,42 @@ void UAgvLocalizationSubsystem::Attach(AActor* Actor)
 	}
 	UAgvForkliftLocalizerComponent* Localizer = NewObject<UAgvForkliftLocalizerComponent>(Forklift, TEXT("AgvForkliftLocalizer"));
 	Localizer->RegisterComponent();
+	if (bDriveOnEstimate)
+	{
+		Forklift->bUseAgvLocalization = true;
+	}
+}
+
+void UAgvLocalizationSubsystem::SetDriveOnEstimate(bool bOn)
+{
+	Enable();
+	bDriveOnEstimate = bOn;
+	for (TActorIterator<AWarehouseForklift> It(GetWorld()); It; ++It)
+	{
+		It->bUseAgvLocalization = bOn;
+	}
+	UE_LOG(LogAgvForkliftLoc, Log, TEXT("AGV_LOC route travel on the LiDAR estimate %s"), bOn ? TEXT("ON") : TEXT("OFF"));
+}
+
+// --- AWarehouseForklift hooks (declared in WarehouseForklift.h) ---------------------------------------------------
+
+FTransform AWarehouseForklift::NavigationTransform() const
+{
+	FTransform Estimated;
+	const UAgvForkliftLocalizerComponent* Localizer = bUseAgvLocalization ? FindComponentByClass<UAgvForkliftLocalizerComponent>() : nullptr;
+	// When lost, travel stops (AgvLocalizationBlocked); planning a stop still gets the dead-reckoned guess, never the truth.
+	return Localizer && Localizer->GetEstimatedActorTransform(Estimated, true) ? Estimated : GetActorTransform();
+}
+
+bool AWarehouseForklift::AgvLocalizationBlocked(FString& OutReason) const
+{
+	const UAgvForkliftLocalizerComponent* Localizer = bUseAgvLocalization ? FindComponentByClass<UAgvForkliftLocalizerComponent>() : nullptr;
+	if (Localizer && Localizer->IsLost())
+	{
+		OutReason = TEXT("AGV LOCALIZATION LOST");
+		return true;
+	}
+	return false;
 }
 
 FString UAgvLocalizationSubsystem::Report() const

@@ -39,8 +39,14 @@ public:
 	virtual void InitializePose() override;
 	virtual bool IsMappedStructure(const FVector2D& WorldPointCm, double ToleranceCm) const override;
 
-	/** The actor transform the estimate implies (x, y, yaw estimated; height, pitch and roll as they are). */
-	bool GetEstimatedActorTransform(FTransform& Out) const;
+	/**
+	 * The actor transform the estimate implies (x, y, yaw estimated; height, pitch and roll as they are). This is the
+	 * driving estimate: scan corrections reach it at a limited rate so the steering does not jump. False when lost,
+	 * unless bEvenIfLost (the dead-reckoned guess, for planning a stop).
+	 */
+	bool GetEstimatedActorTransform(FTransform& Out, bool bEvenIfLost = false) const;
+
+	bool IsLost() const { return bInitialized && (bLost || !bAvailable); }
 
 	UFUNCTION(BlueprintPure, Category="AGV|Localization")
 	FString Summary() const;
@@ -115,6 +121,13 @@ public:
 	/** Share of each accepted match applied at once (1 = jump to the match). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="0.05", ClampMax="1"))
 	float CorrectionGain = 0.5f;
+
+	/** How fast an accepted scan correction reaches the driving estimate (cm/s, deg/s of simulated time). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="1"))
+	float CorrectionRateCmS = 25.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="0.1"))
+	float CorrectionRateDegS = 2.f;
 
 	/** Distance driven without an accepted match after which the estimate is declared lost. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="1"))
@@ -202,6 +215,7 @@ private:
 	bool EnsureMap();
 	void Measure();
 	void ToMap(const FVector2D& Position, double Yaw, FVector2D& OutPosition, double& OutYaw) const;
+	void SlewDrivingCorrection(float Dt);
 	double Gauss();
 
 	UPROPERTY(Transient) TObjectPtr<AWarehouseForklift> Forklift;
@@ -239,6 +253,9 @@ private:
 	// Correction map <- odometry: map = Rotate(CorrectionYaw) * odometry + CorrectionOffset.
 	FVector2D CorrectionOffset = FVector2D::ZeroVector;
 	double CorrectionYaw = 0.0;
+	/** The correction the driving estimate uses: follows CorrectionOffset/Yaw at the correction rates. */
+	FVector2D DrivingOffset = FVector2D::ZeroVector;
+	double DrivingYaw = 0.0;
 
 	FVector LastTrueLocation = FVector::ZeroVector;
 	double ErrorSum = 0.0;
@@ -264,6 +281,8 @@ public:
 
 	/** Adds the localizer to every forklift present and to those spawned later. */
 	void Enable();
+	/** Route travel on the estimate (AWarehouseForklift::bUseAgvLocalization) for every forklift, now and spawned later. */
+	void SetDriveOnEstimate(bool bOn);
 	bool IsEnabled() const { return bEnabled; }
 	FString Report() const;
 
@@ -284,6 +303,7 @@ private:
 	void UpdateMapTexture(const TSharedPtr<const FAgvDistanceMap>& Map);
 
 	bool bEnabled = false;
+	bool bDriveOnEstimate = false;
 	bool bShowPanel = true;
 	FDelegateHandle SpawnHandle;
 	FDelegateHandle DrawHandle;

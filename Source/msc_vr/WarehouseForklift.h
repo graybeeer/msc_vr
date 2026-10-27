@@ -73,6 +73,13 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") EWarehouseAIState AIState = EWarehouseAIState::Off;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") FWarehouseWorkOrder ActiveJob;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") TArray<FWarehouseRoutePoint> PlannedRoute;
+ // AGV LiDAR localization (feature/forklift-navigation; bodies in Agv/AgvForkliftLocalizer.cpp). Off = exact pose as before.
+ // Route travel and the planning start use the estimate; precise alignment, docking and the last 80cm keep the exact pose.
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV Localization") bool bUseAgvLocalization = false;
+ /** Pose for route travel decisions: the LiDAR estimate when bUseAgvLocalization, else the actual pose. */
+ UFUNCTION(BlueprintPure, Category="AGV Localization") FTransform NavigationTransform() const;
+ /** True when bUseAgvLocalization and the estimate is lost or not yet available (OutReason says which). */
+ bool AgvLocalizationBlocked(FString& OutReason) const;
  // Read-only presentation of the remaining plan; does not plan, sense or command motion.
  UFUNCTION(BlueprintPure, Category="Warehouse|Display") TArray<FVector> GetDisplayRoute() const;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") TArray<FWarehouseJobReport> JobReports;
