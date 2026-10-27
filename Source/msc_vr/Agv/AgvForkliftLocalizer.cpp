@@ -32,7 +32,7 @@ namespace AgvForkliftLoc
 		TEXT("agv.loc"),
 		TEXT("agv.loc: LiDAR localization in shadow mode on every main warehouse forklift (measures the estimate against "
 			"the exact pose; travel still uses the exact pose). Again = log the results. agv.loc reset = clear the statistics. "
-			"agv.loc view = show/hide the top-left panel of what forklift 1 believes. agv.loc drive [0] = route travel on the estimate (on/off)."),
+			"agv.loc view = show/hide the top-left panel of what forklift 1 believes. agv.loc mode = first-person 3D / top view. agv.loc drive [0] = route travel on the estimate (on/off)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
 		{
 			UAgvLocalizationSubsystem* Subsystem = World ? World->GetSubsystem<UAgvLocalizationSubsystem>() : nullptr;
@@ -43,6 +43,11 @@ namespace AgvForkliftLoc
 			if (Args.Contains(TEXT("drive")))
 			{
 				Subsystem->SetDriveOnEstimate(!Args.Contains(TEXT("0")));
+				return;
+			}
+			if (Args.Contains(TEXT("mode")))
+			{
+				Subsystem->SetPanel3D(!Subsystem->IsPanel3D());
 				return;
 			}
 			if (Args.Contains(TEXT("view")))
@@ -589,6 +594,7 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	// Points from low on the structure count too (the side scanners sweep 27 cm above the floor across rack posts).
 	const double Low = SensorKit->SnapshotFloorZCm + PointMinZCm, High = SensorKit->SnapshotFloorZCm + MapMaxZCm;
 	TArray<FVector2D> ScanPoints;
+	TArray<double> ScanHeights;
 	for (const UAgvLidarComponent* Lidar : Sources)
 	{
 		if (!Lidar)
@@ -610,6 +616,7 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 				continue;
 			}
 			ScanPoints.Add(OdomPosition + AgvMath::Rotate(OdomYaw, Vehicle - ReferenceOffset));
+			ScanHeights.Add(Z);
 		}
 	}
 	TArray<FVector2D> Points;
@@ -699,6 +706,16 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 		const double Yaw = FMath::DegreesToRadians(Actual.Rotator().Yaw);
 		MatchAlongCm = (float)FVector2D::DotProduct(Delta, AgvMath::Dir(Yaw));
 		MatchAcrossCm = (float)FVector2D::DotProduct(Delta, AgvMath::Normal(Yaw));
+	}
+	// The scan in 3D as the vehicle places it, for the first-person view (about 3000 points at most).
+	LastScan3D.Reset();
+	LastScan3DMapped.Reset();
+	const int32 Stride = FMath::Max(1, ScanPoints.Num() / 3000);
+	for (int32 Index = 0; Index < ScanPoints.Num(); Index += Stride)
+	{
+		const FVector2D Placed = AgvMath::Rotate(CorrectionYaw, ScanPoints[Index]) + CorrectionOffset;
+		LastScan3D.Add(FVector(Placed, ScanHeights[Index]));
+		LastScan3DMapped.Add(Map->Sample(Placed) <= InlierDistanceCm);
 	}
 	// The scan as the vehicle now places it: on the map where it believes it stands.
 	LastScanInMap.Reset(Points.Num());
@@ -1082,6 +1099,11 @@ void UAgvLocalizationSubsystem::DrawPanel(UCanvas* Canvas, APlayerController* Pl
 	{
 		return;
 	}
+	if (bPanel3D)
+	{
+		DrawFirstPersonPanel(Canvas, Vehicle);
+		return;
+	}
 
 	// A top view (world X right, Y down, as in the editor top view) centred on where the vehicle believes it is.
 	const double Size = FMath::Clamp(Canvas->ClipY * 0.36, 220.0, 420.0);
@@ -1180,5 +1202,144 @@ void UAgvLocalizationSubsystem::DrawPanel(UCanvas* Canvas, APlayerController* Pl
 		Text(FString::Printf(TEXT("%s  err %.1f cm  match %.2f  pts %d"), *Vehicle->StatusText, Vehicle->ErrorCm, Vehicle->LastInlierRatio, Vehicle->LastMatchPoints),
 			PanelMax.Y + 4.0, FLinearColor::White);
 		Text(TEXT("map grey | scan on map green | unmapped orange | route blue | estimate yellow | actual white"), PanelMax.Y + 20.0, FLinearColor(0.75f, 0.78f, 0.8f, 1.f));
+	}
+}
+
+void UAgvLocalizationSubsystem::DrawFirstPersonPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle)
+{
+	AWarehouseForklift* Forklift = Vehicle->GetForklift();
+	const UAgvShadowSensorsComponent* Kit = Vehicle->GetSensorKit();
+
+	// The view from an eye on the body end (away from the forks), where the vehicle believes it is: everything drawn is
+	// what it knows (map structure, its scan, its route), placed with its own estimate.
+	const double Width = FMath::Clamp(Canvas->ClipX * 0.32, 320.0, 640.0), Height = Width * 9.0 / 16.0;
+	const FVector2D Panel(16.0, 16.0);
+	const FVector2D PanelMax = Panel + FVector2D(Width, Height);
+	const FVector2D Centre = Panel + FVector2D(Width, Height) * 0.5;
+	const double Focal = Width * 0.5; // 90 degree horizontal field of view
+	FTransform Pose;
+	if (!Vehicle->GetEstimatedActorTransform(Pose, true))
+	{
+		Pose = Forklift->GetActorTransform();
+	}
+	const double Floor = Kit ? Kit->SnapshotFloorZCm : Pose.GetLocation().Z;
+	FVector Eye = Pose.TransformPosition(FVector(Vehicle->GetVehicleBox().Min.X - 10.0, 0.0, 0.0));
+	Eye.Z = Floor + 210.0;
+	const FTransform Camera(FRotator(-12.0, Pose.Rotator().Yaw + 180.0, 0.0), Eye);
+	constexpr double Near = 20.0;
+
+	auto Project = [&](const FVector& Local) { return Centre + FVector2D(Local.Y, -Local.Z) * (Focal / Local.X); };
+	auto Line = [&](const FVector& WorldA, const FVector& WorldB, const FLinearColor& Color, float Thickness)
+	{
+		FVector A = Camera.InverseTransformPosition(WorldA), B = Camera.InverseTransformPosition(WorldB);
+		if (A.X < Near && B.X < Near)
+		{
+			return;
+		}
+		// Cut at the near plane so lines passing beside the eye still draw.
+		if (A.X < Near) A = FMath::Lerp(A, B, (Near - A.X) / (B.X - A.X));
+		if (B.X < Near) B = FMath::Lerp(B, A, (Near - B.X) / (A.X - B.X));
+		FVector2D SA = Project(A), SB = Project(B);
+		if (AgvForkliftLoc::ClipSegment(SA, SB, Panel, PanelMax))
+		{
+			FCanvasLineItem Item(SA, SB);
+			Item.SetColor(Color);
+			Item.LineThickness = Thickness;
+			Canvas->DrawItem(Item);
+		}
+	};
+
+	FCanvasTileItem Back(Panel, FVector2D(Width, Height), FLinearColor(0.02f, 0.03f, 0.05f, 0.85f));
+	Back.BlendMode = SE_BLEND_Translucent;
+	Canvas->DrawItem(Back);
+
+	// Floor grid, 2 m cells around the eye, for depth.
+	const FLinearColor Grid(0.25f, 0.3f, 0.35f, 0.6f);
+	const double GridX = FMath::GridSnap(Eye.X, 200.0), GridY = FMath::GridSnap(Eye.Y, 200.0);
+	for (int32 Step = -12; Step <= 12; ++Step)
+	{
+		Line(FVector(GridX + Step * 200.0, GridY - 2400.0, Floor), FVector(GridX + Step * 200.0, GridY + 2400.0, Floor), Grid, 1.f);
+		Line(FVector(GridX - 2400.0, GridY + Step * 200.0, Floor), FVector(GridX + 2400.0, GridY + Step * 200.0, Floor), Grid, 1.f);
+	}
+
+	// The map it knows: building structure and fixed racks as oriented boxes (floor slabs and upper floors left out).
+	if (Kit)
+	{
+		const FLinearColor Structure(0.55f, 0.68f, 0.85f, 0.9f);
+		for (const FAgvObservedObstacle& Entry : Kit->GetKnownObstacles())
+		{
+			const FBox& Local = Entry.LocalBounds;
+			if (!Local.IsValid || Entry.WorldBounds.Max.Z < Floor + 5.0 || Entry.WorldBounds.Min.Z > Floor + 400.0)
+			{
+				continue;
+			}
+			const FVector Middle = Entry.WorldBounds.GetCenter();
+			if (FVector::Dist2D(Middle, Eye) > 2500.0 + Entry.WorldBounds.GetExtent().Size2D() || Camera.InverseTransformPosition(Middle).X < -300.0)
+			{
+				continue;
+			}
+			FVector Corners[8];
+			for (int32 Index = 0; Index < 8; ++Index)
+			{
+				Corners[Index] = Entry.ObservedTransform.TransformPosition(FVector(
+					(Index & 1) ? Local.Max.X : Local.Min.X, (Index & 2) ? Local.Max.Y : Local.Min.Y, (Index & 4) ? Local.Max.Z : Local.Min.Z));
+			}
+			static const int32 Edges[12][2] = { {0,1},{2,3},{4,5},{6,7},{0,2},{1,3},{4,6},{5,7},{0,4},{1,5},{2,6},{3,7} };
+			for (const auto& Edge : Edges)
+			{
+				Line(Corners[Edge[0]], Corners[Edge[1]], Structure, 1.f);
+			}
+		}
+	}
+
+	// The route it follows, on the floor.
+	FVector Previous(FVector2D(Pose.GetLocation()), Floor + 3.0);
+	for (const FWarehouseRoutePoint& Point : Forklift->PlannedRoute)
+	{
+		const FVector Next(FVector2D(Point.Pose.GetLocation()), Floor + 3.0);
+		Line(Previous, Next, FLinearColor(0.25f, 0.55f, 1.f, 1.f), 3.f);
+		Previous = Next;
+	}
+
+	// Its last scan where it believes the points are: on the map (green) or unmapped things (orange).
+	const TArray<FVector>& Scan = Vehicle->GetLastScan3D();
+	const TArray<bool>& Mapped = Vehicle->GetLastScan3DMapped();
+	for (int32 Index = 0; Index < Scan.Num(); ++Index)
+	{
+		const FVector Local = Camera.InverseTransformPosition(Scan[Index]);
+		if (Local.X < Near || Local.X > 3000.0)
+		{
+			continue;
+		}
+		const FVector2D Screen = Project(Local);
+		if (Screen.X < Panel.X || Screen.Y < Panel.Y || Screen.X > PanelMax.X - 3.0 || Screen.Y > PanelMax.Y - 3.0)
+		{
+			continue;
+		}
+		const double Dot = Local.X < 600.0 ? 3.0 : 2.0;
+		FCanvasTileItem Item(Screen - FVector2D(Dot * 0.5), FVector2D(Dot), Mapped.IsValidIndex(Index) && Mapped[Index] ? FLinearColor(0.3f, 1.f, 0.4f, 1.f) : FLinearColor(1.f, 0.55f, 0.1f, 1.f));
+		Canvas->DrawItem(Item);
+	}
+
+	const FLinearColor Frame(0.6f, 0.65f, 0.7f, 1.f);
+	for (const auto& Corner : { TPair<FVector2D, FVector2D>(Panel, FVector2D(PanelMax.X, Panel.Y)), TPair<FVector2D, FVector2D>(FVector2D(PanelMax.X, Panel.Y), PanelMax),
+		TPair<FVector2D, FVector2D>(PanelMax, FVector2D(Panel.X, PanelMax.Y)), TPair<FVector2D, FVector2D>(FVector2D(Panel.X, PanelMax.Y), Panel) })
+	{
+		FCanvasLineItem Item(Corner.Key, Corner.Value);
+		Item.SetColor(Frame);
+		Canvas->DrawItem(Item);
+	}
+	if (UFont* Font = GEngine ? GEngine->GetSmallFont() : nullptr)
+	{
+		auto Text = [&](const FString& Value, double Y, const FLinearColor& Color)
+		{
+			FCanvasTextItem Item(FVector2D(Panel.X + 6.0, Y), FText::FromString(Value), Font, Color);
+			Item.EnableShadow(FLinearColor::Black);
+			Canvas->DrawItem(Item);
+		};
+		Text(TEXT("FORKLIFT 1 - AI VIEW (body side, on its LiDAR estimate)"), Panel.Y + 4.0, FLinearColor::White);
+		Text(FString::Printf(TEXT("%s  err %.1f cm  match %.2f  pts %d"), *Vehicle->StatusText, Vehicle->ErrorCm, Vehicle->LastInlierRatio, Vehicle->LastMatchPoints),
+			PanelMax.Y + 4.0, FLinearColor::White);
+		Text(TEXT("map structure blue | scan on map green | unmapped orange | route blue"), PanelMax.Y + 20.0, FLinearColor(0.75f, 0.78f, 0.8f, 1.f));
 	}
 }

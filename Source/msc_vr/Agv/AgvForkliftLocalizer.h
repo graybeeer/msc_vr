@@ -62,6 +62,10 @@ public:
 	/** The vehicle body's outline in the actor frame (cm). */
 	const FBox2D& GetVehicleBox() const { return VehicleBox; }
 	AWarehouseForklift* GetForklift() const { return Forklift; }
+	/** Last matched scan in 3D (map frame x, y; world height) and whether each point lies on the map. */
+	const TArray<FVector>& GetLastScan3D() const { return LastScan3D; }
+	const TArray<bool>& GetLastScan3DMapped() const { return LastScan3DMapped; }
+	UAgvShadowSensorsComponent* GetSensorKit() const { return SensorKit; }
 
 	UFUNCTION(BlueprintCallable, Category="AGV|Localization")
 	void ResetStatistics();
@@ -306,6 +310,8 @@ private:
 	FBox2D SelfFilter = FBox2D(ForceInit);
 	FBox2D VehicleBox = FBox2D(ForceInit);
 	TArray<FVector2D> LastScanInMap;
+	TArray<FVector> LastScan3D;
+	TArray<bool> LastScan3DMapped;
 	TArray<bool> LastScanMapped;
 
 	// Odometry: reference-point pose in the odometry frame (cm, rad).
@@ -358,6 +364,9 @@ public:
 
 	/** The top-left view of what forklift 1 believes (map, scan, route, estimated and actual outline). */
 	void SetPanelVisible(bool bVisible) { bShowPanel = bVisible; }
+	/** 3D = forklift 1's first-person view of what it believes (default); off = the 2D top view. */
+	void SetPanel3D(bool b3D) { bPanel3D = b3D; }
+	bool IsPanel3D() const { return bPanel3D; }
 	bool IsPanelVisible() const { return bShowPanel; }
 
 protected:
@@ -367,6 +376,7 @@ private:
 	void Attach(AActor* Actor);
 	void OnActorSpawned(AActor* Actor);
 	void DrawPanel(UCanvas* Canvas, APlayerController* Player);
+	void DrawFirstPersonPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle);
 	UAgvForkliftLocalizerComponent* FindPanelVehicle() const;
 	void UpdateMapTexture(const TSharedPtr<const FAgvDistanceMap>& Map);
 
@@ -375,6 +385,7 @@ private:
 	/** Set by -AgvLocDrive or agv.loc drive: applies bDriveOnEstimate to vehicles spawned later as well. */
 	bool bDriveOverride = false;
 	bool bShowPanel = true;
+	bool bPanel3D = true;
 	FDelegateHandle SpawnHandle;
 	FDelegateHandle DrawHandle;
 	TMap<uint64, TSharedPtr<const FAgvDistanceMap>> Maps;
