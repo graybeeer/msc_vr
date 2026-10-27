@@ -251,6 +251,8 @@ private:
 	/** A match ran this frame; its log line is written after the error is measured. */
 	bool bMatchToLog = false;
 	bool bHighErrorLogged = false;
+	float MatchAlongCm = 0.f;
+	float MatchAcrossCm = 0.f;
 	bool bNoMap = false;
 	float LastDt = 0.f;
 	double WheelRadiusCm = 15.f;

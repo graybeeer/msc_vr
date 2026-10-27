@@ -306,9 +306,10 @@ void UAgvForkliftLocalizerComponent::TickComponent(float DeltaTime, ELevelTick T
 		if (bMatchToLog)
 		{
 			bMatchToLog = false;
-			UE_LOG(LogAgvForkliftLoc, Log, TEXT("AGV_LOC_SHADOW %s t=%.1f err=%.1fcm yaw=%.2fdeg ratio=%.2f pts=%d corr=%.1fcm ms=%.1f %s"),
+			UE_LOG(LogAgvForkliftLoc, Log, TEXT("AGV_LOC_SHADOW %s t=%.1f err=%.1fcm yaw=%.2fdeg ratio=%.2f pts=%d corr=%.1fcm matched_along=%.1f matched_across=%.1f speed=%.0f ms=%.1f %s"),
 				*Forklift->GetName(), GetWorld()->GetTimeSeconds(), ErrorCm, HeadingErrorDeg, LastInlierRatio, LastMatchPoints,
-				LastCorrectionCm, LastMatchMilliseconds, *StatusText);
+				LastCorrectionCm, MatchAlongCm, MatchAcrossCm, FVector::DotProduct(Body->GetPhysicsLinearVelocity(), Forklift->GetActorForwardVector()),
+				LastMatchMilliseconds, *StatusText);
 		}
 	}
 	LastTrueLocation = TrueLocation;
@@ -591,6 +592,18 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	else
 	{
 		++RejectedMatches;
+	}
+	{
+		// Diagnostic: the matched pose (before the driving blend) against the truth, along and across the vehicle.
+		FVector2D Matched;
+		double MatchedYaw;
+		ToMap(OdomPosition, OdomYaw, Matched, MatchedYaw);
+		const FTransform Actual = Forklift->GetActorTransform();
+		const FVector2D TrueReference = FVector2D(Actual.GetLocation()) + AgvMath::Rotate(FMath::DegreesToRadians(Actual.Rotator().Yaw), ReferenceOffset);
+		const FVector2D Delta = Matched - TrueReference;
+		const double Yaw = FMath::DegreesToRadians(Actual.Rotator().Yaw);
+		MatchAlongCm = (float)FVector2D::DotProduct(Delta, AgvMath::Dir(Yaw));
+		MatchAcrossCm = (float)FVector2D::DotProduct(Delta, AgvMath::Normal(Yaw));
 	}
 	// The scan as the vehicle now places it: on the map where it believes it stands.
 	LastScanInMap.Reset(Points.Num());
