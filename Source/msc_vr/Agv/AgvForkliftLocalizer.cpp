@@ -288,6 +288,12 @@ void UAgvForkliftLocalizerComponent::TickComponent(float DeltaTime, ELevelTick T
 			CollectAndMatchScan();
 			SlewDrivingCorrection(LastDt);
 		}
+		if (Forklift->IsRemoteControlled())
+		{
+			// Manual driving switches the scans off by design: the odometry keeps the estimate and the first scans after
+			// the session decide again, instead of a fault the moment the vehicle returns to autonomous work.
+			TravelSinceMatchCm = 0.f;
+		}
 		if (TravelSinceMatchCm > LostAfterTravelCm && !bLost)
 		{
 			UE_LOG(LogAgvForkliftLoc, Warning, TEXT("AGV_LOC_LOST %s after %.0f cm without a LiDAR match"), *Forklift->GetName(), TravelSinceMatchCm);
