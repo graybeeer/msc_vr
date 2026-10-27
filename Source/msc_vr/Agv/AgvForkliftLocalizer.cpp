@@ -657,6 +657,8 @@ bool UAgvLocalizationSubsystem::DoesSupportWorldType(const EWorldType::Type Worl
 void UAgvLocalizationSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
 	Super::OnWorldBeginPlay(InWorld);
+	// Vehicles spawned later (tests copy rigs into new scenes, the layout editor adds vehicles) are checked too.
+	SpawnHandle = InWorld.AddOnActorSpawnedHandler(FOnActorSpawned::FDelegate::CreateUObject(this, &UAgvLocalizationSubsystem::OnActorSpawned));
 	if (FParse::Param(FCommandLine::Get(), TEXT("AgvLocDrive")))
 	{
 		SetDriveOnEstimate(true);
@@ -701,9 +703,25 @@ void UAgvLocalizationSubsystem::Enable()
 	{
 		Attach(*It);
 	}
-	SpawnHandle = World->AddOnActorSpawnedHandler(FOnActorSpawned::FDelegate::CreateUObject(this, &UAgvLocalizationSubsystem::Attach));
 	DrawHandle = UDebugDrawService::Register(TEXT("Game"), FDebugDrawDelegate::CreateUObject(this, &UAgvLocalizationSubsystem::DrawPanel));
-	UE_LOG(LogAgvForkliftLoc, Log, TEXT("AGV_LOC shadow localization ON"));
+	UE_LOG(LogAgvForkliftLoc, Log, TEXT("AGV_LOC localization ON"));
+}
+
+void UAgvLocalizationSubsystem::OnActorSpawned(AActor* Actor)
+{
+	const AWarehouseForklift* Forklift = Cast<AWarehouseForklift>(Actor);
+	if (!Forklift)
+	{
+		return;
+	}
+	if (bEnabled)
+	{
+		Attach(Actor);
+	}
+	else if (Forklift->bUseAgvLocalization)
+	{
+		Enable(); // attaches every forklift, this one included
+	}
 }
 
 void UAgvLocalizationSubsystem::Attach(AActor* Actor)
@@ -715,15 +733,16 @@ void UAgvLocalizationSubsystem::Attach(AActor* Actor)
 	}
 	UAgvForkliftLocalizerComponent* Localizer = NewObject<UAgvForkliftLocalizerComponent>(Forklift, TEXT("AgvForkliftLocalizer"));
 	Localizer->RegisterComponent();
-	if (bDriveOnEstimate)
+	if (bDriveOverride)
 	{
-		Forklift->bUseAgvLocalization = true;
+		Forklift->bUseAgvLocalization = bDriveOnEstimate;
 	}
 }
 
 void UAgvLocalizationSubsystem::SetDriveOnEstimate(bool bOn)
 {
 	Enable();
+	bDriveOverride = true;
 	bDriveOnEstimate = bOn;
 	for (TActorIterator<AWarehouseForklift> It(GetWorld()); It; ++It)
 	{

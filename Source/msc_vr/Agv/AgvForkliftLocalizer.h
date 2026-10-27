@@ -266,9 +266,9 @@ private:
 };
 
 /**
- * Attaches the forklift localizer to every main warehouse forklift when shadow localization is enabled: by the
- * command line (-AgvLocShadow) or in play with the console command agv.loc. Off by default: without either, nothing
- * is added and the game runs exactly as before. Also keeps the distance maps so vehicles on the same floor share one.
+ * Attaches the forklift localizer to every main warehouse forklift when any of them drives on it
+ * (AWarehouseForklift::bUseAgvLocalization, on by default), when -AgvLocShadow / -AgvLocDrive is given, or in play
+ * with the console command agv.loc. Also keeps the distance maps so vehicles on the same floor share one.
  */
 UCLASS()
 class MSC_VR_API UAgvLocalizationSubsystem : public UWorldSubsystem
@@ -298,12 +298,15 @@ protected:
 
 private:
 	void Attach(AActor* Actor);
+	void OnActorSpawned(AActor* Actor);
 	void DrawPanel(UCanvas* Canvas, APlayerController* Player);
 	UAgvForkliftLocalizerComponent* FindPanelVehicle() const;
 	void UpdateMapTexture(const TSharedPtr<const FAgvDistanceMap>& Map);
 
 	bool bEnabled = false;
 	bool bDriveOnEstimate = false;
+	/** Set by -AgvLocDrive or agv.loc drive: applies bDriveOnEstimate to vehicles spawned later as well. */
+	bool bDriveOverride = false;
 	bool bShowPanel = true;
 	FDelegateHandle SpawnHandle;
 	FDelegateHandle DrawHandle;
