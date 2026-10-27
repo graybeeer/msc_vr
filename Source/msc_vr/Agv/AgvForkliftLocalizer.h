@@ -82,6 +82,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Odometry", meta=(ClampMin="0"))
 	float GyroNoiseDegSqrtS = 0.02f;
 
+	/** Travel from encoders on the two free-rolling load wheels (off = the drive wheel's encoder). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Odometry")
+	bool bLoadWheelEncoders = true;
+
 	/** Side slip of the load-wheel axle from drive wheel heading and gyro (off = the axle never slips sideways). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Odometry")
 	bool bModelSideSlip = true;
@@ -272,6 +276,8 @@ private:
 	UPROPERTY(Transient) TObjectPtr<AWarehouseForklift> Forklift;
 	UPROPERTY(Transient) TObjectPtr<UPrimitiveComponent> Body;
 	UPROPERTY(Transient) TObjectPtr<UPrimitiveComponent> DriveWheel;
+	UPROPERTY(Transient) TArray<TObjectPtr<UPrimitiveComponent>> LoadWheels;
+	double LoadWheelRadiusCm = 8.0;
 	UPROPERTY(Transient) TObjectPtr<UAgvShadowSensorsComponent> SensorKit;
 	UPROPERTY(Transient) TArray<TObjectPtr<UAgvLidarComponent>> LocalizationScanners;
 	double LocalizationScanClock = 0.0;

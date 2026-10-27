@@ -133,6 +133,8 @@ bool UAgvForkliftLocalizerComponent::ResolveParts()
 		}
 		Body = FoundBody;
 		DriveWheel = FoundWheel;
+		LoadWheels = { LoadLeft, LoadRight };
+		LoadWheelRadiusCm = FMath::Max(1.0, (double)LoadLeft->Bounds.BoxExtent.Z);
 		const FTransform Actor = Forklift->GetActorTransform();
 		ReferenceOffset = FVector2D((Actor.InverseTransformPosition(LoadLeft->GetComponentLocation()) + Actor.InverseTransformPosition(LoadRight->GetComponentLocation())) * 0.5);
 		DriveWheelbaseCm = ReferenceOffset.X - Actor.InverseTransformPosition(DriveWheel->GetComponentLocation()).X;
@@ -331,8 +333,21 @@ void UAgvForkliftLocalizerComponent::StepOdometry(float Dt)
 	// Steering encoder: the rolling direction in the vehicle frame (0 = straight ahead, 90 deg = turning on the spot).
 	const double Steer = FMath::Atan2(FVector::DotProduct(Roll, Right), FVector::DotProduct(Roll, Forward)) + FMath::DegreesToRadians((double)SteerOffsetDeg);
 	const double Rim = Spin * WheelRadiusCm * Dt * (1.0 + WheelRadiusErrorPercent / 100.0) * (1.0 + Gauss() * EncoderNoisePercent / 100.0);
-	// The drive wheel's forward share is the travel of the load-wheel axle.
-	const double Measured = Rim * FMath::Cos(Steer);
+	// Travel of the load-wheel axle: from the free-rolling load wheels' encoders (they neither spin under drive torque
+	// nor lock under the brake, which put 6-26 cm between one-second scans with the drive wheel, 2026-10-27), else
+	// the drive wheel's forward share.
+	double Measured = Rim * FMath::Cos(Steer);
+	if (bLoadWheelEncoders && LoadWheels.Num() == 2 && LoadWheels[0] && LoadWheels[1])
+	{
+		double Sum = 0.0;
+		for (const UPrimitiveComponent* Wheel : LoadWheels)
+		{
+			const FVector WheelAxle = Wheel->GetRightVector();
+			const double WheelSpin = FVector::DotProduct(Wheel->GetPhysicsAngularVelocityInRadians() - Body->GetPhysicsAngularVelocityInRadians(), WheelAxle);
+			Sum += WheelSpin * LoadWheelRadiusCm * FVector::DotProduct(FVector::CrossProduct(WheelAxle, Up).GetSafeNormal(), Forward);
+		}
+		Measured = Sum * 0.5 * Dt * (1.0 + WheelRadiusErrorPercent / 100.0) * (1.0 + Gauss() * EncoderNoisePercent / 100.0);
+	}
 
 	// Yaw-rate gyro with bias and angle random walk; held at standstill (zero-velocity update).
 	const double Rate = FVector::DotProduct(Body->GetPhysicsAngularVelocityInRadians(), Up) + FMath::DegreesToRadians((double)GyroBiasDegS);
