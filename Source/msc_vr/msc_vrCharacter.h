@@ -76,6 +76,7 @@ protected:
 	void UpdateRemoteControl();
 	bool InitializeCarryPresentation();
 	void SetRemoteCharacterFade(bool Enabled);
+	void SetRemotePhoneVisible(bool Visible);
 
 	UPROPERTY(EditDefaultsOnly, Category="Carry", meta=(ClampMin="0.05", ClampMax="1.0"))
 	float CarryOpacity = .3f;

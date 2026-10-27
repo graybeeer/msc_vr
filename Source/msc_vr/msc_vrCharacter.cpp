@@ -119,7 +119,11 @@ Amsc_vrCharacter::Amsc_vrCharacter()
 		Screen->SetOnlyOwnerSee(OwnerView); Screen->SetOwnerNoSee(!OwnerView);
 		Screen->FirstPersonPrimitiveType=Body->FirstPersonPrimitiveType;
 		Screen->SetCastShadow(false);
+		// SetupAttachment has not registered the children yet; hide the screen explicitly.
+		Screen->SetVisibility(false);
+		Screen->SetHiddenInGame(true);
 		Body->SetVisibility(false,true);
+		Body->SetHiddenInGame(true);
 		Body->SetAutoActivate(false);
 		if (OwnerView) RemotePhone=Body; else RemoteWorldPhone=Body;
 	}
@@ -323,6 +327,7 @@ bool Amsc_vrCharacter::InitializeCarryMesh()
 void Amsc_vrCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+	SetRemotePhoneVisible(false); // Also reset visibility saved in the player Blueprint.
 	bUseControllerRotationYaw=false; bUseControllerRotationPitch=false; bUseControllerRotationRoll=false;
 	Tags.AddUnique(TEXT("WarehousePhysicalHuman"));
 	GetCapsuleComponent()->SetCapsuleSize(30.f,96.f);
@@ -454,6 +459,16 @@ void Amsc_vrCharacter::SetRemoteCharacterFade(bool Enabled)
 	}
 }
 
+void Amsc_vrCharacter::SetRemotePhoneVisible(bool Visible)
+{
+	for (auto* Phone : {RemotePhone.Get(),RemoteWorldPhone.Get()})
+	{
+		Phone->SetVisibility(Visible,true);
+		Phone->SetHiddenInGame(!Visible,true);
+		Phone->SetActive(Visible);
+	}
+}
+
 void Amsc_vrCharacter::ToggleRemoteControl()
 {
 	if (IsValid(RemoteForklift)) { EndRemoteControl(); return; }
@@ -479,8 +494,7 @@ bool Amsc_vrCharacter::BeginRemoteControl(AWarehouseForklift* Forklift)
 	FirstPersonMesh->SetVisibility(false,false);
 	RemoteWorldMesh->SetComponentTickEnabled(true); RemoteWorldMesh->SetVisibility(true);
 	GetMesh()->SetVisibility(false,false);
-	RemotePhone->SetActive(true); RemoteWorldPhone->SetActive(true);
-	RemotePhone->SetVisibility(true,true); RemoteWorldPhone->SetVisibility(true,true);
+	SetRemotePhoneVisible(true);
 	FirstPersonCameraComponent->FirstPersonFieldOfView=90.f;
 	auto* Viewport=GetWorld()->GetGameViewport();
 	bRemoteHadViewportFocus=Viewport && Viewport->Viewport && Viewport->Viewport->HasFocus();
@@ -504,8 +518,7 @@ void Amsc_vrCharacter::EndRemoteControl()
 	RemoteForklift=nullptr;
 	SetRemoteCharacterFade(false);
 	bRemoteHadViewportFocus=false;
-	RemotePhone->SetVisibility(false,true); RemoteWorldPhone->SetVisibility(false,true);
-	RemotePhone->SetActive(false); RemoteWorldPhone->SetActive(false);
+	SetRemotePhoneVisible(false);
 	if (!IsValid(HeldCargo))
 	{
 		RemoteWorldMesh->SetVisibility(false); RemoteWorldMesh->SetComponentTickEnabled(false);

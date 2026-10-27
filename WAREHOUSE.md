@@ -115,6 +115,8 @@ G 전환 시 해당 차량의 자율 작업을 일시정지한다. 플레이어�
 
 2026-10-16 `RemoteControlsUIBuild_20261016.log`의 빌드와 `RemoteControlsHUD_20261016.log`의 `REMOTE_TPS_PIE_PASSED`를 확인했다. 실제 플레이어 Blueprint가 연결된 미저장 Entry PIE에서 후방 카메라 추적·둘러보기·벽 앞 시점 보정과 G/메뉴 후1인칭 복귀를 검사했다. `Saved/Testing/RemoteControlsHUD_2026101600000.png`에서 하단 중앙의 작은 두 줄 안내와 투명 배경을 시각 확인했다. 기존 `verify_interaction_movement_pie.py -RemoteTPSChecks -RemoteTPSCapture`의 촬영만 UI 포함 방식으로 바꾼 임시 실행이며 OS 키 입력 검사는 아니다.
 
+2026-10-26 Editor 빌드와 `verify_interaction_movement_pie.py -RemoteTPSChecks`를 통과했다. `RemotePhoneVisibility_20261026_Final.log`에서 실제 플레이어 Blueprint의 스마트폰 본체·화면 4개에 대해 시작 숨김, G 연결 시 표시, G 해제·메뉴 복귀·관찰 진입/복귀 시 숨김을 확인했다. 원격 TPS 추적·둘러보기·벽 앞 카메라 보정·1인칭 복귀도 통과했다. NullRHI PIE의 컴포넌트 표시/숨김 플래그와 게임 API 검사이며 실제 화면 촬영·OS 키 입력 검사는 아니다.
+
 구역 표지는 1인칭·원격 시점에서 25m, 관찰 시점에서 200m까지 표시한다. 벽·물체에 가리면 숨기며, 관찰에서 숨긴 지붕·위층 구조는 가림 검사에서 제외한다. 층 선택 시 해당 층의 표지·사람 이름표를 표시하고, 설정 메뉴를 열면 둘 다 숨겨 메뉴와 겹치지 않게 한다. 구역 표지끼리는 실제 글꼴·화면 배율로 계산한 표시 범위가 겹치면 가까운 표지를 우선한다. 관찰에서 같은 층의 표시 중인 구역 표지 5m 안에 있는 사람은 구역 표지로 안내하여 중복 이름표를 줄인다. 1인칭·원격에서는 구역 표지와 화면상 겹치는 역할 이름표만 숨기며, 겹침이 풀리면 다시 표시한다. 배경은 글자 길이에 맞춘다. UI 액터에는 충돌과 물리가 없다. `Scripts/configure_area_labels.py`는 이 표지들만 추가·갱신하며 기존 구조·물류·작업자·차량 배치를 변경하지 않는다.
 
 ## 창고 앞 관제 컴퓨터
