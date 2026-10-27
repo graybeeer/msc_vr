@@ -640,10 +640,10 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	if (Ratio >= MinInlierRatio && bPartialScan)
 	{
 		// Few points can fit the wrong place: a side-scanner scan only refines, it does not move the estimate far.
-		FVector2D Now, Matched;
-		double NowYaw, MatchedYaw;
+		FVector2D Now;
+		double NowYaw;
 		ToMap(OdomPosition, OdomYaw, Now, NowYaw);
-		Matched = AgvMath::Rotate(Th, OdomPosition) + FVector2D(Tx, Ty);
+		const FVector2D Matched = AgvMath::Rotate(Th, OdomPosition) + FVector2D(Tx, Ty);
 		if (FVector2D::Distance(Now, Matched) > MaxPartialCorrectionCm)
 		{
 			Ratio = 0.0;
