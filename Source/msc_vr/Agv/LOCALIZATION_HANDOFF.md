@@ -160,6 +160,17 @@
 - 팀원 문서 `AUTONOMY.md`·`PROJECT_STRUCTURE.md`에는 아직 "위치 추정 미연결"로 적혀 있다. 팀원 문서라 고치지 않았고, 사용자가 팀원과 협의한다.
 - 측면 스캐너 사본으로 추가 광선은 차량당 약 540개×초당 5회이고, 1회 스캔에 약 1ms 걸린다. 화면 렌더링 상태의 프레임 비용은 재지 않았다.
 
+### 9-2. 1인칭 AI 시점과 측면 스캔 제거 (2026-10-28)
+- **1인칭 AI 시점(`2a0bfbbe`)**: 좌측 상단 패널의 기본 화면을 지게차 1의 1인칭 3D로 바꿨다. 눈은 차체 쪽(포크 반대) 끝 2.1m 높이에 있고, 차체 방향을 12° 내려다본다(화각 90°). 카메라는 추정 위치를 따라간다. 지도 구조물(파란 3D 윤곽선), 3D 스캔 점(초록은 지도와 일치, 주황은 지도에 없는 물체), 경로, 2m 바닥 격자를 그린다. `agv.loc mode`로 2D 보기와 전환한다. 렌더링 실행 캡처 `Saved/Testing/LocShadow/fpv_*.png`로 표시를 확인했다(지게차 1이 대기 중인 장면만). ROS/RViz 연결은 하지 않았다. 브리지·설치 부담에 비해 보여 주는 정보가 같기 때문이며, 수업 요구가 생기면 내보내기를 따로 붙인다.
+- **지게차 2 고장 원인(렌더링 실행 `Saved/Logs/LocFpv_20261027.log`)**: 입고 구역 접근 중 측면 스캔(일치율 0.86~0.90으로 수용 기준 통과)이 추정 위치를 옆으로 -2 → -8.5cm, 방향 0.74°까지 끌었다. 1초 전체 스캔의 정합 직후 옆 오차는 0.3~1.8cm였다. 그 결과 차량이 화물 쪽으로 붙어 `TURN CLEARANCE` 복구 후퇴를 했고, 후퇴한 자리에서 출발 여유(25cm)가 없어 `start_clear=0` → `NO SAFE DETOUR` 고장이 났다.
+- **조치**: 측면 스캔을 기본으로 끄고(`c8e894ee`), 같은 렌더링 조건으로 재실행했다(`Saved/Logs/LocFix_render_twojobs_20261028.log`). 결과는 완료 3, 고장 0, 복구 5회(자가 회복), 오차 평균 1.6~2.1 / 95% 3.5~4.0 / 최대 11.6~15.4cm였다. 측면 스캔은 구동 바퀴 헛돎을 메우려고 넣은 것인데, 하중 바퀴 엔코더로 그 문제가 없어져 쓸모가 없다고 판단했다. 이어서 사용하지 않는 측면 스캐너 코드를 동작 변경 없이 제거했다(`347526fe`). `PointMinZCm` 10, `MinMatchPoints` 50은 측정한 상태를 유지하려고 그대로 두었다.
+- **사용자 확인이 남은 검증(집에서 진행)**:
+  1. 같은 시나리오를 렌더링 켬/끔으로 2~3회 반복한다. 한 번 통과로는 확정할 수 없다.
+  2. `scen.py three`, `verify_dual_forklifts_remote_pie.py`(켬/끔 비교)를 돌린다.
+  3. Entry 묶음(`shared_charging`, `fleet_traffic`, `obstacle_interval`, `native_forklift_motion`, `remote_drive_continuity`, `elevator_route_visuals`)을 돌린다. 영향이 없어야 정상이다.
+  4. Play로 직접 확인한다. 지게차 1이 작업할 때 1인칭 AI 시점이 움직이는지, `stat unit` 프레임 비용도 본다.
+  - 실행 방법: 저장 맵 시나리오는 `UnrealEditor.exe msc_vr.uproject -ExecCmds="py <스크립트>" [-nullrhi] -unattended -nosplash -nop4 -abslog=<로그>`, 비교용 끔은 `-AgvLocOff`. 결과는 로그의 `AGV_LOC_SUMMARY`, `AGV_REPORT ... FAULT`, `_PASSED`로 판정한다.
+
 ## 10. 제안하는 첫 단계 (2026-10-27 이전 제안)
 1. 이 문서와 [FORKLIFT_NAVIGATION.md](FORKLIFT_NAVIGATION.md)를 읽고, 사용자와 단계 (2)부터 갈지 범위를 확인한다.
 2. `UAgvLocalizerComponent`를 운용 차량에 붙이고 주입 오차 모델로 `FollowRoute` 이동 구간만 추정 위치를 쓰게 한다(정렬·도킹은 정확한 위치 유지).
