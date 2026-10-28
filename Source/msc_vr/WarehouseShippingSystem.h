@@ -97,6 +97,8 @@ public:
  UFUNCTION(BlueprintPure,Category="Shipping") FString GetPalletShipment(AWarehousePallet* Pallet) const;
  UFUNCTION(BlueprintPure,Category="Shipping") FString LocatePallet(AWarehousePallet* Pallet) const;
  UFUNCTION(BlueprintCallable,Category="Shipping") void RefreshShipping();
+ // Call only after a committed edit, never while Advance holds a reference to Zones.
+ UFUNCTION(BlueprintCallable,Category="Shipping") void RefreshLayoutCatalog();
 private:
  int32 NextShipment=1;
  double NextOperationsAt=0;

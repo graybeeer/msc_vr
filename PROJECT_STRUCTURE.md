@@ -8,7 +8,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 ## 실행 구조 한눈에 보기
 
-메인 메뉴는 `Content/Warehouse/Play/Maps/MainMenu`다. 기존 3층 창고는 관리자 모드로 유지하고, 플레이 모드는 별도의 고정 단층 맵 3개와 예산·해금을 사용한다. 모드 경계·비용 가정·장식·모델 아이콘은 [PLAY_MODE.md](PLAY_MODE.md)에서 관리한다.
+메인 메뉴는 `Content/Warehouse/Play/Maps/MainMenu`다. 기존 3층 창고는 지게차 명령·직접 조작·재배치에 집중하는 자동 운영이 기본이며, 설정의 **모든 작업 수동으로 처리**로 기존 전체 관제를 연다. 플레이 모드는 별도의 고정 단층 맵 3개와 예산·해금을 사용한다. 모드 경계·비용 가정·장식·모델 아이콘은 [PLAY_MODE.md](PLAY_MODE.md)에서 관리한다.
 
 2026-10-25 로컬 `main`의 `391c5f8b`에서 구조 정리를 시작하고, 초기 배치 저장·반복 실험·운영 성과 기능을 반영했다. 아래는 현재 실행 경계이며, 추가 제안·우선순위는 [시뮬레이션 개선안](SIMULATION_ROADMAP.md)에서 별도로 관리한다. 기능별 실제 검증 범위는 담당 문서에서 확인한다.
 
@@ -30,6 +30,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
+| 기본 간소화·NPC 업무 자동 조정·수동 처리 옵션·지게차 전용 화면 | `WarehouseFocusDirector.h/.cpp`, `WarehouseOperationsSettings.h/.cpp`, `WarehouseFocusUI.h/.cpp`, `msc_vrGameMode`, `msc_vrPlayerController` | 기존 검수/배송편/운반 API만 호출. 정책은 `TRUCK_LOGISTICS_DESIGN.md`, 모드 경계는 `PLAY_MODE.md`, 조작은 `WAREHOUSE.md`. 검사 `Scripts/verify_forklift_focus_pie.py`, `verify_focus_ui_pie.py`; 새 공급은 최초 운행 전·편집/실험 중 대기. 설정은 로컬 Config이며 배치 스냅샷에서 업무 조정자는 제외 |
 | 로컬 용량·미사용 팩·생성 캐시 정리와 필수 에셋 재검사 | `Scripts/optimize_project_storage.py`, `Scripts/audit_runtime_assets.py`, `Scripts/verify_runtime_storage.py` | 정리·원본 복원은 `TEAM_ASSETS.md`의 로컬 용량 정리 절; 최신 참조·크기·경로 검증, 원본 ZIP 보관/무결성 검사, Git 추적 파일·사용자 저장·캡처 보존. 게임 사용 에셋 제거는 별도 Git 검토 |
 | 씬 시작·전환·배치 복원·건물 확정 로딩 화면 | `WarehouseLoading.h/.cpp`, `Scripts/verify_warehouse_loading_pie.py` | `WarehouseBuildingLayout::ApplySettings`, `WarehouseExperimentSubsystem` 복원 단계, `msc_vr.Build.cs`; 사용·표시 범위는 `WAREHOUSE.md`, 실제 건물 성공/실패 검사는 `verify_building_services_pie.py -BuildingLoadingChecks` |
 | 게임 사용 에셋 선별·Git/LFS·출처와 전체 참조 목록 | `RUNTIME_ASSETS.md`, `Config/RuntimeAssets.json`, `Scripts/audit_runtime_assets.py` | 기본 맵5개·C++/설정 직접 경로와 동적 접두어의 의존성을 수집; 설치/재생성은 `TEAM_ASSETS.md`, 사용 에셋·필수 의존 파일만 Git에 포함하고 전체 원본 팩은 제외 |
@@ -295,8 +296,10 @@ msc_vr/
     verify_fleet_layout_stress_pie.py
     verify_fleet_traffic_pie.py
     verify_fleet_workflow_pie.py
+    verify_focus_ui_pie.py
     verify_forklift_autonomy.py
     verify_forklift_autonomy_pie.py
+    verify_forklift_focus_pie.py
     verify_forklift_recovery_pie.py
     verify_forklift_sensors_pie.py
     verify_forklift_training.py
@@ -416,6 +419,10 @@ msc_vr/
       WarehouseExperimentUI.h
       WarehouseFleetCoordinator.cpp
       WarehouseFleetCoordinator.h
+      WarehouseFocusDirector.cpp
+      WarehouseFocusDirector.h
+      WarehouseFocusUI.cpp
+      WarehouseFocusUI.h
       WarehouseForklift.cpp
       WarehouseForklift.h
       WarehouseForkliftAI.cpp
@@ -442,6 +449,8 @@ msc_vr/
       WarehouseLogisticsTruck.h
       WarehouseObserverWallFade.cpp
       WarehouseObserverWallFade.h
+      WarehouseOperationsSettings.cpp
+      WarehouseOperationsSettings.h
       WarehouseOperationsUI.cpp
       WarehouseOperationsUI.h
       WarehousePallet.cpp

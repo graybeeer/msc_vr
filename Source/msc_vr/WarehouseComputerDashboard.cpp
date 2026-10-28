@@ -1,4 +1,6 @@
 #include "WarehouseComputerDashboard.h"
+#include "WarehouseFocusDirector.h"
+#include "WarehouseFocusUI.h"
 #include "WarehouseExperimentUI.h"
 #include "WarehouseOperationsUI.h"
 #include "WarehousePlayMode.h"
@@ -689,6 +691,7 @@ FAutoConsoleCommand DashboardTestCommand(TEXT("Warehouse.Computer.Test"),TEXT("E
 
 TSharedRef<SWidget> MakeWarehouseComputerDashboard(AWarehouseComputer* Computer,Amsc_vrPlayerController* Controller)
 {
+ if(AWarehouseFocusDirector::IsActive(Computer)) return MakeWarehouseFocusScreen(Computer,Controller);
  auto Dashboard=SNew(WarehouseDashboard::SWarehouseDashboard).Computer(Computer).Controller(Controller);
 #if WITH_EDITOR && !UE_BUILD_SHIPPING
  WarehouseDashboard::TestDashboard=Dashboard;

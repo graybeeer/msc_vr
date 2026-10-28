@@ -25,6 +25,8 @@
 #include "WarehousePalletLift.h"
 #include "WarehouseElevator.h"
 #include "WarehouseComputer.h"
+#include "WarehouseComputerDashboard.h"
+#include "WarehouseFocusDirector.h"
 #include "WarehouseExperimentUI.h"
 #include "WarehouseExperimentSubsystem.h"
 #include "WarehousePlayMode.h"
@@ -49,6 +51,7 @@
 #include "Widgets/Layout/SScrollBox.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SSlider.h"
 #include "Widgets/Input/SNumericEntryBox.h"
 #include "Widgets/Text/STextBlock.h"
@@ -438,13 +441,26 @@ void Amsc_vrPlayerController::BeginPlay()
 			 +SHorizontalBox::Slot().AutoWidth().Padding(0,0,10,0)[MakeWarehouseLayoutIcon([this](){return LayoutEditor ? LayoutEditor->Category : EWarehouseLayoutCategory::All;},[this](){return LayoutEditor ? LayoutEditor->GetAddChoiceLabel() : FString();},72)]
 			 +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).AutoWrapText(true).Text_Lambda([this]() { return FText::FromString(LayoutEditor ? TEXT("추가 대상: ")+LayoutEditor->GetAddChoiceLabel()+TEXT(" · 클릭하면 다음 종류") : FString()); })]]];
 		OrdinaryTools->AddSlot().AutoHeight().Padding(3)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
-			.Text_Lambda([this]() { if(AWarehousePlayStage::IsPlay(this)) return FText::FromString(TEXT("고정 창고 · 설비 추가는 예산에서 결제 · 취소 무료 · 철거 환불 없음"));auto* Store=AWarehouseLayoutInventory::Find(this);return FText::FromString(FString::Printf(TEXT("보류된 물류 %d개 · 상자 데이터 생성·영구 삭제는 중앙 컴퓨터에서"),Store ? Store->HeldCargo.Num() : 0)); })];
+			.Text_Lambda([this]()
+			{
+				if(AWarehousePlayStage::IsPlay(this)) return FText::FromString(TEXT("고정 창고 · 설비 추가는 예산에서 결제 · 취소 무료 · 철거 환불 없음"));
+				const auto* Store=AWarehouseLayoutInventory::Find(this);const int32 Count=Store ? Store->HeldCargo.Num() : 0;
+				return FText::FromString(AWarehouseFocusDirector::IsActive(this)
+					? FString::Printf(TEXT("보류된 물류 %d개 · 추가에서 다시 배치할 수 있습니다. 새 입고 물류는 자동으로 준비됩니다."),Count)
+					: FString::Printf(TEXT("보류된 물류 %d개 · 상자 데이터 생성·영구 삭제는 중앙 컴퓨터에서"),Count));
+			})];
 		Tools->AddSlot().AutoHeight().Padding(3,8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(740)
 			.Text_Lambda([this]() { return FText::FromString(ConstructionEditor && ConstructionEditor->bActive ? ConstructionEditor->Status : LayoutEditor ? LayoutEditor->Status : FString()); })];
 		auto ObserverTools=SNew(SVerticalBox)
 			+SVerticalBox::Slot().AutoHeight()
 			[SNew(SBorder).Padding(WarehouseUIStyle::PanelPadding).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(WarehouseUIStyle::Panel)
 				.Visibility_Lambda([this]() { return IsLayoutEditing() ? EVisibility::Visible : EVisibility::Collapsed; })[Tools]]
+			+SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right).Padding(0,6,0,0)
+			[SNew(SButton).IsFocusable(false).ContentPadding(FMargin(16,8))
+				.Visibility_Lambda([this]() {return AWarehouseFocusDirector::Find(this) ? EVisibility::Visible : EVisibility::Collapsed;})
+				.ToolTipText(FText::FromString(TEXT("재배치를 마치고 시뮬레이션을 재개한 뒤 지게차 명령 화면을 엽니다.")))
+				.OnClicked_Lambda([this]() {OpenForkliftCommands();return FReply::Handled();})
+				[SNew(STextBlock).Font(WarehouseUIStyle::Font(18)).ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("지게차 명령")))]]
 			+SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right).Padding(0,6,0,0)
 			[SNew(SButton).IsFocusable(false).ContentPadding(FMargin(10,5))
 				.ToolTipText_Lambda([this]() { return FText::FromString(IsLayoutEditing() ? TEXT("편집 도구를 숨기고 시뮬레이션을 재개합니다.") : TEXT("마지막 편집층의 배치 도구를 열고 시뮬레이션을 일시정지합니다.")); })
@@ -487,6 +503,21 @@ void Amsc_vrPlayerController::BeginPlay()
 }
 
 bool Amsc_vrPlayerController::IsMainMenu() const { return AWarehousePlayStage::IsMenu(this); }
+bool Amsc_vrPlayerController::OpenForkliftCommands()
+{
+ if(IsMainMenu() || !IsLocalController() || !GetWorld()->GetGameViewport() || !AWarehouseFocusDirector::Find(this)) return false;
+ if(ComputerWidget.IsValid()) return true;
+ AWarehouseComputer* Computer=nullptr;
+ for(TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) if(It->CanUse()) {Computer=*It;break;}
+ if(!Computer) return false;
+ if(ExperimentWidget.IsValid()) CloseWarehouseExperiments();
+ if(auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn())) OperatorCharacter->EndRemoteControl();
+ SetLayoutEditing(false);CloseWarehouseMenu();
+ Computer->RefreshState();ActiveComputer=Computer;
+ ComputerWidget=MakeWarehouseComputerDashboard(Computer,this);
+ GetWorld()->GetGameViewport()->AddViewportWidgetContent(ComputerWidget.ToSharedRef(),250);
+ UpdateInputMode();FSlateApplication::Get().SetKeyboardFocus(ComputerWidget);return true;
+}
 bool Amsc_vrPlayerController::OpenPlayMode(int32 StageIndex)
 {
  if (StageIndex < -1 || StageIndex>3) return false;
@@ -574,9 +605,10 @@ void Amsc_vrPlayerController::UpdateInputMode()
 
 void Amsc_vrPlayerController::CloseWarehouseMenu()
 {
+	const bool bHadMenu=MenuWidget.IsValid();
 	if (MenuWidget.IsValid() && GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(MenuWidget.ToSharedRef());
 	MenuWidget.Reset();
-	SaveConfig();
+	if (bHadMenu) SaveConfig();
 	UpdateInputMode();
 }
 
@@ -607,6 +639,18 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 		.ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("물류창고 · 설정 / 관찰")))];
 	Text(TEXT("F1: 메뉴  |  Shift: 달리기  |  Ctrl: 앉기  |  E: 집기 / 적재\nG: 바라보는 지게차의 후방 3인칭 원격 조작 / 종료\n원격: W/S 전후진 · A/D 조향·자리 회전 · 좌클릭 포크 올림 · 우클릭 내림 · Space 제동\n마우스 이동: 지게차 주변 보기 · 종료하면 플레이어 1인칭 복귀\n관찰 진입 시 재배치 모드가 켜지며 시뮬레이션이 일시정지됩니다. 하단 버튼으로 재배치를 끄면 시뮬레이션이 재개됩니다."));
 	Button(bObserverView ? TEXT("1인칭 캐릭터로 돌아가기") : TEXT("전지적 관찰 시점으로 전환"),[this]() { ToggleObserverView(); CloseWarehouseMenu(); });
+	if(auto* Director=AWarehouseFocusDirector::Find(this))
+	{
+		Button(TEXT("지게차 명령"),[this]() {OpenForkliftCommands();});
+		const TWeakObjectPtr<AWarehouseFocusDirector> Operations=Director;
+		Panel->AddSlot().AutoHeight().Padding(8)[SNew(SCheckBox)
+			.IsChecked_Lambda([Operations]() {return Operations.IsValid() && Operations->IsManualOperations() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;})
+			.OnCheckStateChanged_Lambda([this,Operations](ECheckBoxState State)
+			{
+				if(Operations.IsValid()) {CloseWarehouseComputer();Operations->SetManualOperations(State==ECheckBoxState::Checked);}
+			})[SNew(STextBlock).Font(WarehouseUIStyle::Font(18)).ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(TEXT("모든 작업 수동으로 처리")))]];
+		Text(TEXT("기본은 자동 운영입니다. 켜면 입고 검수·배송편·트럭 등 전체 업무 화면을 직접 사용하며, 이미 진행 중인 작업은 이어서 완료됩니다."));
+	}
 	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Accent)
 		.Text_Lambda([this]() { return FText::FromString(FString::Printf(TEXT("시뮬레이션 배속: %d배 · 실제 처리 %.2f배 · 같은 물리 정확도"),SimulationClock ? SimulationClock->RequestedSpeed : 1,SimulationClock ? SimulationClock->AchievedSpeed : 1.f)); }).AutoWrapText(true)];
 	for (int32 Speed:{1,2,4}) Button(FString::Printf(TEXT("시뮬레이션 %d배"),Speed),[this,Speed]() { SetSimulationSpeed(Speed); });
@@ -983,7 +1027,7 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
      OperatorCharacter->IsPlacingCargo() ? TEXT("팔레트 위에 내려놓는 중 · E : 취소") : TEXT("E : 가까운 팔레트 위에 쌓기 / 안전한 곳에 내려놓기")));
   if (!bObserverView)
    if (Cast<AWarehouseComputer>(OperatorCharacter->GetInteractionTarget()))
-    return FText::FromString(TEXT("E : 관제 컴퓨터 접속\n실시간 재고 · 운반 작업 · 지게차 관리"));
+    return FText::FromString(AWarehouseFocusDirector::IsActive(this) ? TEXT("E : 지게차 명령\n운행 시작 · 정지 · 팔레트 출고 운반") : TEXT("E : 관제 컴퓨터 접속\n실시간 재고 · 운반 작업 · 지게차 관리"));
   if (!bObserverView)
    if (auto* Lift=Cast<AWarehousePalletLift>(OperatorCharacter->GetInteractionTarget()))
     return Lift->GetInteractionText(FMath::Clamp(FMath::FloorToInt((OperatorCharacter->GetActorLocation().Z-Lift->GetActorLocation().Z)/400.f),0,Lift->FloorCount-1));

@@ -60,6 +60,7 @@ public:
 	UFUNCTION(BlueprintPure, Category="Settings") bool IsObserverView() const { return bObserverView; }
 	UFUNCTION(BlueprintPure, Category="Settings") bool IsWarehouseMenuOpen() const { return IsMainMenu() || MenuWidget.IsValid() || ComputerWidget.IsValid() || ExperimentWidget.IsValid(); }
 	UFUNCTION(BlueprintCallable, Category="Console") bool OpenWarehouseComputer(AWarehouseComputer* Computer);
+	UFUNCTION(BlueprintCallable, Category="Console") bool OpenForkliftCommands();
 	UFUNCTION(BlueprintCallable, Category="Console") void CloseWarehouseComputer();
 	UFUNCTION(BlueprintPure, Category="Console") bool IsWarehouseComputerOpen() const { return ComputerWidget.IsValid(); }
 	virtual void PlayerTick(float DeltaTime) override;

@@ -182,8 +182,8 @@ TSharedRef<SWidget> MakeWarehousePlayPanel(Amsc_vrPlayerController* PC,AWarehous
  {
   auto Body=SNew(SVerticalBox);
   Body->AddSlot().AutoHeight().Padding(0,0,0,14)[PlayText([](){return TEXT("WAREHOUSE / 물류창고 운영");},28,WarehouseUIStyle::Accent)];
-  Body->AddSlot().AutoHeight().Padding(0,6)[PlayText([](){return TEXT("관리자 모드 · 기존 창고에서 배치·물류·실험 변수를 자유롭게 조절합니다.");})];
-  Body->AddSlot().AutoHeight().Padding(0,6,0,20)[PlayButton(TEXT("관리자 모드 시작"),[Owner](){if(Owner.IsValid()) Owner->OpenPlayMode(-1);})];
+  Body->AddSlot().AutoHeight().Padding(0,6)[PlayText([](){return TEXT("창고 시뮬레이션 · 지게차 명령, 플레이어 조작, 창고 지형·물체 재배치에 집중합니다. 나머지 창고 업무는 자동으로 처리합니다.");})];
+  Body->AddSlot().AutoHeight().Padding(0,6,0,20)[PlayButton(TEXT("창고 시뮬레이션 시작"),[Owner](){if(Owner.IsValid()) Owner->OpenPlayMode(-1);})];
   Body->AddSlot().AutoHeight().Padding(0,6)[PlayText([](){return TEXT("플레이 모드 · 고정된 창고에서 예산 안에 설비를 배치하고 입고 목표를 달성하세요.");},18)];
   for(int32 I=1;I<=3;++I)
   {

@@ -15,6 +15,7 @@
 #include "WarehouseComputer.h"
 #include "WarehouseInboundZone.h"
 #include "WarehouseLogisticsTruck.h"
+#include "WarehouseShippingSystem.h"
 #include "WarehouseFleetCoordinator.h"
 #include "WarehouseDamageSystem.h"
 #include "WarehousePhysics.h"
@@ -557,6 +558,9 @@ bool AWarehouseLayoutEditor::BeginAdd(FVector FloorPoint)
 void AWarehouseLayoutEditor::RefreshAfterEdit(bool PublishTaskLocation)
 {
  UWarehouseChargerWiring::RefreshConnections(this);
+ // Update office destinations only at committed layout boundaries, never while
+ // shipping is iterating a reservation that refers to the zone array.
+ for (TActorIterator<AWarehouseShippingSystem> It(GetWorld());It;++It) It->RefreshLayoutCatalog();
  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) It->RefreshAfterLayout(PublishTaskLocation);
  for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) It->RefreshState();
 }

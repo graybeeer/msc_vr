@@ -68,7 +68,8 @@ namespace
   if (A->IsA<AStaticMeshActor>() || A->IsA<ATargetPoint>() || A->IsA<ATextRenderActor>() || A->IsA<ALight>()) return true;
   if (!Class.StartsWith(TEXT("/Script/msc_vr.Warehouse"))) return false;
   return !Class.Contains(TEXT("SimulationClock")) && !Class.Contains(TEXT("TransportVisualizer")) &&
-   !Class.Contains(TEXT("ConstructionEditor")) && !Class.Contains(TEXT("ObserverWallFade")) && !Class.Contains(TEXT("Experiment"));
+   !Class.Contains(TEXT("ConstructionEditor")) && !Class.Contains(TEXT("ObserverWallFade")) &&
+   !Class.Contains(TEXT("FocusDirector")) && !Class.Contains(TEXT("Experiment"));
  }
  bool AllowedActorClass(UClass* Type)
  { return Type && Type->IsChildOf(AActor::StaticClass()) && (Type->IsChildOf(ALight::StaticClass()) || IsDataActor(Type->GetDefaultObject<AActor>())); }

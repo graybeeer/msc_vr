@@ -11,6 +11,7 @@
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
 #include "Engine/OverlapResult.h"
+#include "Engine/TargetPoint.h"
 #include "EngineUtils.h"
 
 namespace
@@ -46,6 +47,64 @@ AWarehouseShippingSystem* AWarehouseShippingSystem::Find(const AActor* Context)
  if (!Context || !Context->GetWorld()) return nullptr;
  for (TActorIterator<AWarehouseShippingSystem> It(Context->GetWorld());It;++It) return *It;
  return Context->GetWorld()->SpawnActor<AWarehouseShippingSystem>();
+}
+void AWarehouseShippingSystem::RefreshLayoutCatalog()
+{
+ if (!HasAuthority()) return;
+ Trucks.RemoveAll([](const auto& T){return !IsValid(T);});
+ for (TActorIterator<AWarehouseLogisticsTruck> It(GetWorld());It;++It) Trucks.AddUnique(*It);
+ Zones.RemoveAll([](const auto& Z){return !IsValid(Z.Anchor);});
+ AWarehouseLayoutEditor* Layout=nullptr;
+ for (TActorIterator<AWarehouseLayoutEditor> It(GetWorld());It;++It) {Layout=*It;break;}
+ if (!Layout) return;
+ for (auto& Area:Layout->Zones)
+ {
+  if (Area.Name!=TEXT("Inbound") && Area.Name!=TEXT("Outbound")) continue;
+  auto* Existing=Zones.FindByPredicate([&](const auto& Z){return Area.Members.Contains(Z.Anchor);});
+  if (Existing)
+  {
+   // The anchor already moved with its group. Retain IDs, reserved slot indexes and local poses.
+   Existing->HalfSize=Existing->Anchor->GetActorQuat().UnrotateVector(Area.HalfSize).GetAbs();
+   continue;
+  }
+  if (!Area.Members.ContainsByPredicate([](const auto& A){return IsValid(A);})) continue;
+  AActor* Anchor=nullptr;
+  for (AActor* A:Area.Members) if (IsValid(A) && Cast<ATargetPoint>(A) && A->GetActorLocation().Equals(Area.Centre,1)) {Anchor=A;break;}
+  if (!Anchor)
+  {
+   // A new staging group may have only paint/NPC actors. Its shipping origin must be the area centre.
+   Anchor=GetWorld()->SpawnActor<ATargetPoint>(Area.Centre,FRotator::ZeroRotator);
+   if (!Anchor) continue;
+   Anchor->Tags.Add(TEXT("LayoutType:Zone"));
+   for (AActor* A:Area.Members) if (IsValid(A))
+   { for (const FName Tag:A->Tags) if (Tag.ToString().StartsWith(TEXT("LayoutGroup:")) || Tag.ToString().StartsWith(TEXT("WarehouseFloor"))) Anchor->Tags.AddUnique(Tag);break; }
+   Area.Members.Add(Anchor);
+  }
+  FWarehouseShippingZone Zone;Zone.Anchor=Anchor;Zone.bInbound=Area.Name==TEXT("Inbound");
+  Zone.ZoneId=FString::Printf(TEXT("%s-%s"),Zone.bInbound ? TEXT("IN") : TEXT("OUT"),*Anchor->GetName());
+  Zone.HalfSize=Anchor->GetActorQuat().UnrotateVector(Area.HalfSize).GetAbs();
+  auto AddSlot=[&](const FTransform& WorldPose)
+  {
+   if (Zone.Slots.Num()>=6) return;
+   const FTransform Local=WorldPose.GetRelativeTransform(Anchor->GetActorTransform());const FVector P=Local.GetLocation();
+   // A 110 cm pallet needs 5 cm of margin; reject out-of-area and overlapping slots.
+   if (FMath::Abs(P.X)>Zone.HalfSize.X-60 || FMath::Abs(P.Y)>Zone.HalfSize.Y-60 || FMath::Abs(P.Z)>3) return;
+   if (Zone.Slots.ContainsByPredicate([&](const FTransform& S){return FVector::Dist2D(S.GetLocation(),P)<125;})) return;
+   Zone.Slots.Add(Local);
+  };
+  for (const auto& Pose:Area.Destinations) AddSlot(Pose);
+  // Inbound clones do not have user-facing outbound destinations. Derive bounded handover slots.
+  for (double Y=-Zone.HalfSize.Y+70;Y<=Zone.HalfSize.Y-60 && Zone.Slots.Num()<6;Y+=140)
+   for (double X=-Zone.HalfSize.X+70;X<=Zone.HalfSize.X-60 && Zone.Slots.Num()<6;X+=140)
+    AddSlot(FTransform(FRotator(0,180,0),FVector(X,Y,.15))*Anchor->GetActorTransform());
+  if (!Zone.bInbound)
+  {
+   // Console dispatch resolves these same world destinations to an outbound index.
+   Area.Destinations.Reset();
+   for (const auto& Slot:Zone.Slots) Area.Destinations.Add(Slot*Anchor->GetActorTransform());
+  }
+  Zones.Add(MoveTemp(Zone));
+ }
 }
 void AWarehouseShippingSystem::Tick(float Dt) { Super::Tick(Dt);RefreshShipping();AdvanceOperations(); }
 FString AWarehouseShippingSystem::GetPalletShipment(AWarehousePallet* P) const
