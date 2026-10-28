@@ -2,6 +2,7 @@
 #include "Agv/AgvShadowSensors.h"
 #include "WarehouseLayoutEditor.h"
 #include "WarehousePhysics.h"
+#include "WarehousePerformance.h"
 #include "WarehousePallet.h"
 #include "WarehouseFleetCoordinator.h"
 #include "WarehouseElevator.h"
@@ -109,6 +110,8 @@ void AWarehouseForklift::InvalidateSensorSnapshot(const FString& Reason)
 
 bool AWarehouseForklift::AutonomousSensorsReady() const
 {
+ if (bPlanningRoute && PlanningSensorReadiness.IsSet()) return PlanningSensorReadiness.GetValue();
+ if (bPlanningRoute) { CSV_CUSTOM_STAT(Warehouse,PlanningReadinessChecks,1,ECsvCustomStatOp::Accumulate); }
  return SensorMode!=EWarehouseSensorMode::Autonomous ||
   (SensorKit && !IsSensorSamplingSuppressed() && SensorKit->IsSnapshotFresh(GetWorld()->GetTimeSeconds()));
 }
@@ -234,8 +237,11 @@ bool AWarehouseForklift::PerceivedBoxClear(const FTransform& Pose,const FBox& Lo
   }
  }
  const FBox Broad=LocalBox.TransformBy(Pose.ToMatrixWithScale());
- if (!PeopleOnly) for (const auto& Obstacle : SensorKit->GetKnownObstacles())
+ FAgvObstacleIndices Candidates;
+ if (!PeopleOnly) SensorKit->FindKnownCandidates(Broad,Candidates);
+ for (int32 Index : Candidates)
  {
+  const auto& Obstacle=SensorKit->GetKnownObstacles()[Index];
   if (Ignore(Obstacle) || !Obstacle.WorldBounds.Intersect(Broad)) continue;
   if (Obstacle.Component.IsValid())
   {
@@ -248,8 +254,10 @@ bool AWarehouseForklift::PerceivedBoxClear(const FTransform& Pose,const FBox& Lo
   }
   else return false; // Published geometry stays conservative until the next revision.
  }
- for (const auto& Obstacle : SensorKit->GetObservedObstacles())
+ SensorKit->FindObservedCandidates(Broad,Candidates);
+ for (int32 Index : Candidates)
  {
+  const auto& Obstacle=SensorKit->GetObservedObstacles()[Index];
   FVector Point;
   if (!Ignore(Obstacle) && PointCloudOverlaps(Obstacle,Pose,LocalBox,&Point))
   {
@@ -277,16 +285,23 @@ bool AWarehouseForklift::PerceivedPartClear(UStaticMeshComponent* Part,const FTr
  FBox Broad=Local.TransformBy(Pose.ToMatrixWithScale());
  if (!Part->BodyInstance.WeldParent && Part->BodyInstance.IsValidBodyInstance())
   Broad=Part->BodyInstance.GetBodyBounds().TransformBy(Part->GetComponentTransform().ToInverseMatrixWithScale()*Pose.ToMatrixWithScale());
- if (!Part->BodyInstance.WeldParent) for (const auto& Obstacle : SensorKit->GetKnownObstacles())
+ FAgvObstacleIndices Candidates;
+ if (!Part->BodyInstance.WeldParent) SensorKit->FindKnownCandidates(Broad,Candidates);
+ for (int32 Index : Candidates)
  {
+  const auto& Obstacle=SensorKit->GetKnownObstacles()[Index];
   if (Obstacle.Component.Get()==Bearing || Obstacle.Actor.Get()==this || Ignored.Contains(Obstacle.Actor.Get()) || !Obstacle.WorldBounds.Intersect(Broad)) continue;
   if (!Obstacle.Component.IsValid()) return Reject(Obstacle,TEXT("published-building-missing"),FVector::ZeroVector);
   const FTransform Test=AtPublishedPose(Pose,Obstacle);
   if (Obstacle.Component->ComponentOverlapComponent(Part,Test.GetLocation(),Test.GetRotation(),FCollisionQueryParams::DefaultQueryParam))
    return Reject(Obstacle,TEXT("published-building"),FVector::ZeroVector);
  }
- for (const auto& Obstacle : SensorKit->GetObservedObstacles())
+ // PointCloudOverlapsPart uses AggGeom's bounds, which may differ from the
+ // current native body's transformed bounds used for fixed-shape overlap.
+ SensorKit->FindObservedCandidates(Setup ? Setup->AggGeom.CalcAABB(Pose) : Local.TransformBy(Pose.ToMatrixWithScale()),Candidates);
+ for (int32 Index : Candidates)
  {
+  const auto& Obstacle=SensorKit->GetObservedObstacles()[Index];
   FVector Point=FVector::ZeroVector;
   if (Obstacle.Component.Get()!=Bearing && Obstacle.Actor.Get()!=this && !Ignored.Contains(Obstacle.Actor.Get()) && PointCloudOverlapsPart(Obstacle,Part,Pose,&Point))
    return Reject(Obstacle,TEXT("observed-point"),Point);
@@ -313,8 +328,11 @@ bool AWarehouseForklift::PerceivedMotionClear(UStaticMeshComponent* Part,FVector
    *Start.ToString(),*End.ToString(),*Candidate.ToString(),InitialDistance,Distance,Reason,SensorKit->SnapshotCount);
   return false;
  };
- for (const auto& Obstacle : SensorKit->GetObservedObstacles())
+ FAgvObstacleIndices Candidates;
+ SensorKit->FindObservedCandidates(Swept,Candidates);
+ for (int32 Index : Candidates)
  {
+  const auto& Obstacle=SensorKit->GetObservedObstacles()[Index];
   if (Obstacle.Actor.Get()==this || Ignored.Contains(Obstacle.Actor.Get()) || !Obstacle.WorldBounds.Intersect(Swept)) continue;
   for (const FVector& Point : Obstacle.WorldPoints) if (Swept.IsInsideOrOn(Point))
   {
@@ -352,8 +370,11 @@ bool AWarehouseForklift::PerceivedFloorSupport(FVector Point,FHitResult* Surface
  if (!SensorKit || !AutonomousSensorsReady()) return false;
  const FVector Start=Point+FVector(0,0,3),End=Point-FVector(0,0,5);
  FCollisionQueryParams Params(SCENE_QUERY_STAT(PublishedFloorSupport),false,this);
- for (const auto& Obstacle : SensorKit->GetKnownObstacles())
+ FAgvObstacleIndices Candidates;
+ SensorKit->FindKnownCandidates(FBox(Point-FVector(5),Point+FVector(5)),Candidates);
+ for (int32 Index : Candidates)
  {
+  const auto& Obstacle=SensorKit->GetKnownObstacles()[Index];
   if (!Obstacle.Component.IsValid() || !Obstacle.WorldBounds.ExpandBy(5.).IsInsideOrOn(Point)) continue;
   const FTransform Live=Obstacle.Component->GetComponentTransform();
   const auto Remap=[&](FVector P) { return Live.TransformPosition(Obstacle.ObservedTransform.InverseTransformPosition(P)); };

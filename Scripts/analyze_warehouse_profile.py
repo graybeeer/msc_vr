@@ -14,12 +14,14 @@ from pathlib import Path
 
 
 SCOPES = {
-    "DamageTick", "LoadGraph", "SupportedActors", "SupportTraversal", "RoutePlanning", "TrafficPermit",
+    "DamageTick", "LoadGraph", "SupportGeometry", "SupportedActors", "SupportTraversal", "RoutePlanning", "TrafficPermit",
     "InventoryRefresh", "InboundScan", "ForkliftTick", "ForkliftMotors",
+    "SensorSnapshot", "KnownMapBuild", "ObserverVisibility", "ObserverWallFade", "TransportVisuals", "ChargerWiring",
 }
 COUNTERS = {
-    "LoadGraphBuilds", "SupportTraceCount", "SupportedActorQueries",
-    "NavigationQueries", "RoutePlans", "GeometryRejectedCandidates", "SupportSnapshotReuses",
+    "LoadGraphBuilds", "SupportTraceCount", "SupportRelationsReused", "SupportRelationsTraced", "SupportedActorQueries",
+    "NavigationQueries", "RoutePlans", "PlanningReadinessChecks", "GeometryRejectedCandidates", "SupportSnapshotReuses",
+    "SensorSnapshots", "SensorBeams", "KnownMapBuilds", "KnownMapComponents",
 }
 NATIVE_TIMINGS = {
     "gamethread", "renderthread", "rhithread", "physics", "physicsthread", "physicstime",

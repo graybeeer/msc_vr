@@ -4,6 +4,7 @@
 #include "AgvTestVehicle.h"
 #include "WarehouseForklift.h"
 #include "WarehousePhysics.h"
+#include "WarehousePerformance.h"
 #include "WarehouseCargo.h"
 #include "WarehousePallet.h"
 #include "WarehouseWorker.h"
@@ -16,6 +17,111 @@
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "HAL/PlatformTime.h"
+#include "HAL/IConsoleManager.h"
+#include "Algo/Sort.h"
+
+namespace
+{
+TAutoConsoleVariable<int32> CVarWarehousePerceptionSpatialIndex(
+	TEXT("wh.PerceptionSpatialIndex"),1,
+	TEXT("Use the published sensor/map broad phase. 0 retains the exhaustive reference path for diagnostics."));
+
+bool IndexableBounds(const FBox& Bounds)
+{
+	return Bounds.IsValid && !Bounds.Min.ContainsNaN() && !Bounds.Max.ContainsNaN();
+}
+
+void ReferenceCandidates(TConstArrayView<FAgvObservedObstacle> Obstacles,const FBox& Bounds,FAgvObstacleIndices& Out)
+{
+	Out.Reset();
+	for (int32 I=0;I<Obstacles.Num();++I)
+		if (!IndexableBounds(Bounds) || !IndexableBounds(Obstacles[I].WorldBounds) || Obstacles[I].WorldBounds.Intersect(Bounds)) Out.Add(I);
+}
+}
+
+void FAgvObstacleSpatialIndex::Reset()
+{
+	Nodes.Reset();PublishedBounds.Reset();Entries.Reset();Unindexed.Reset();
+}
+
+void FAgvObstacleSpatialIndex::Build(TConstArrayView<FAgvObservedObstacle> Obstacles)
+{
+	Reset();
+	PublishedBounds.Reserve(Obstacles.Num());Entries.Reserve(Obstacles.Num());
+	for (int32 I=0;I<Obstacles.Num();++I)
+	{
+		PublishedBounds.Add(Obstacles[I].WorldBounds);
+		if (IndexableBounds(Obstacles[I].WorldBounds)) Entries.Add(I);
+		else Unindexed.Add(I); // Malformed entries still reach the original narrow phase.
+	}
+	Nodes.Reserve(Entries.Num()*2);
+	if (!Entries.IsEmpty()) BuildNode(0,Entries.Num());
+}
+
+int32 FAgvObstacleSpatialIndex::BuildNode(int32 Begin,int32 Count)
+{
+	const int32 Node=Nodes.AddDefaulted();
+	FBox Centers(ForceInit),Bounds(ForceInit);
+	for (int32 I=Begin;I<Begin+Count;++I)
+	{
+		const FBox& Entry=PublishedBounds[Entries[I]];
+		Bounds+=Entry;Centers+=Entry.GetCenter();
+	}
+	Nodes[Node].Bounds=Bounds;
+	if (Count<=8)
+	{
+		Nodes[Node].Begin=Begin;Nodes[Node].Count=Count;
+		return Node;
+	}
+	const FVector Span=Centers.GetSize();
+	const int32 Axis=Span.X>=Span.Y && Span.X>=Span.Z ? 0 : Span.Y>=Span.Z ? 1 : 2;
+	Algo::Sort(MakeArrayView(Entries.GetData()+Begin,Count),[&](int32 A,int32 B)
+	{
+		const double X=PublishedBounds[A].GetCenter()[Axis],Y=PublishedBounds[B].GetCenter()[Axis];
+		return X==Y ? A<B : X<Y;
+	});
+	const int32 Left=BuildNode(Begin,Count/2);
+	const int32 Right=BuildNode(Begin+Count/2,Count-Count/2);
+	Nodes[Node].Left=Left;Nodes[Node].Right=Right;
+	return Node;
+}
+
+void FAgvObstacleSpatialIndex::Query(const FBox& Bounds,FAgvObstacleIndices& Out) const
+{
+	Out.Reset();
+	if (!IndexableBounds(Bounds))
+	{
+		for (int32 I=0;I<PublishedBounds.Num();++I) Out.Add(I);
+		return;
+	}
+	Out.Append(Unindexed);
+	TArray<int32,TInlineAllocator<32>> Stack;
+	if (!Nodes.IsEmpty()) Stack.Add(0);
+	while (!Stack.IsEmpty())
+	{
+		const FNode& Node=Nodes[Stack.Pop(EAllowShrinking::No)];
+		if (!Node.Bounds.Intersect(Bounds)) continue;
+		if (Node.Count)
+		{
+			for (int32 I=Node.Begin;I<Node.Begin+Node.Count;++I)
+				if (PublishedBounds[Entries[I]].Intersect(Bounds)) Out.Add(Entries[I]);
+		}
+		else { Stack.Add(Node.Left);Stack.Add(Node.Right); }
+	}
+	Out.Sort();
+}
+
+void UAgvShadowSensorsComponent::FindKnownCandidates(const FBox& Bounds,FAgvObstacleIndices& Out) const
+{
+	if (CVarWarehousePerceptionSpatialIndex.GetValueOnGameThread()) KnownIndex.Query(Bounds,Out);
+	else ReferenceCandidates(KnownObstacles,Bounds,Out);
+}
+
+void UAgvShadowSensorsComponent::FindObservedCandidates(const FBox& Bounds,FAgvObstacleIndices& Out) const
+{
+	if (CVarWarehousePerceptionSpatialIndex.GetValueOnGameThread()) ObservedIndex.Query(Bounds,Out);
+	else ReferenceCandidates(ObservedObstacles,Bounds,Out);
+}
 
 UAgvShadowSensorsComponent::UAgvShadowSensorsComponent()
 {
@@ -101,6 +207,8 @@ bool UAgvShadowSensorsComponent::IsBuildingMapComponent(const UPrimitiveComponen
 
 void UAgvShadowSensorsComponent::BuildKnownMap()
 {
+	CSV_SCOPED_TIMING_STAT(Warehouse, KnownMapBuild);
+	CSV_CUSTOM_STAT(Warehouse, KnownMapBuilds, 1, ECsvCustomStatOp::Accumulate);
 	KnownObstacles.Reset();
 	KnownComponents.Reset();
 	for (TActorIterator<AActor> It(GetWorld()); It; ++It)
@@ -118,8 +226,10 @@ void UAgvShadowSensorsComponent::BuildKnownMap()
 			KnownComponents.Add(Part);
 		}
 	}
+	KnownIndex.Build(KnownObstacles);
 	bMapDirty = false;
 	++MapRevision;
+	CSV_CUSTOM_STAT(Warehouse, KnownMapComponents, KnownObstacles.Num(), ECsvCustomStatOp::Accumulate);
 }
 
 void UAgvShadowSensorsComponent::InvalidateSnapshot(const FString& Reason)
@@ -128,6 +238,7 @@ void UAgvShadowSensorsComponent::InvalidateSnapshot(const FString& Reason)
 	ObservedObstacles.Reset();
 	KnownObstacles.Reset();
 	KnownComponents.Reset();
+	KnownIndex.Reset();ObservedIndex.Reset();
 	ObservedObstacleCount = 0;
 	bMapDirty = true;
 	SensorStatus = Reason;
@@ -161,6 +272,8 @@ bool UAgvShadowSensorsComponent::RefreshSnapshot(double SimNow, double FloorZCm)
 	}
 	if (!FMath::IsFinite(SimNow) || !FMath::IsFinite(FloorZCm) || !BuildSensors()) return false;
 	if (bSnapshotValid && FMath::Abs(SnapshotFloorZCm-FloorZCm) < 50 && SimNow-LastSnapshotSeconds < 1.-KINDA_SMALL_NUMBER) return true;
+	CSV_SCOPED_TIMING_STAT(Warehouse, SensorSnapshot);
+	CSV_CUSTOM_STAT(Warehouse, SensorSnapshots, 1, ECsvCustomStatOp::Accumulate);
 	const double Start = FPlatformTime::Seconds();
 	// A removed or physically released rack is no longer fixed map geometry.
 	// Check metadata on the ordinary one-second frame; moving debris still requires sensor returns.
@@ -213,11 +326,77 @@ bool UAgvShadowSensorsComponent::RefreshSnapshot(double SimNow, double FloorZCm)
 		Entry.ObservedTransform = FTransform(Entry.WorldBounds.GetCenter());
 		Entry.LocalBounds = Entry.WorldBounds.ShiftBy(-Entry.WorldBounds.GetCenter());
 	}
+	ObservedIndex.Build(ObservedObstacles);
 	LastSnapshotSeconds = SimNow;
 	++SnapshotCount;
 	bSnapshotValid = true;
 	ObservedObstacleCount = ObservedObstacles.Num();
 	LastSensorMilliseconds = float((FPlatformTime::Seconds()-Start)*1000.);
+	CSV_CUSTOM_STAT(Warehouse, SensorBeams, LastBeamCount, ECsvCustomStatOp::Accumulate);
 	SensorStatus = TEXT("FRESH / 1 SIM SECOND");
 	return true;
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgvPublishedObstacleIndexTest,"Warehouse.Navigation.PublishedObstacleIndex",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAgvPublishedObstacleIndexTest::RunTest(const FString& Parameters)
+{
+	TArray<FAgvObservedObstacle> Obstacles;
+	auto Add=[&](const FBox& Bounds) { Obstacles.AddDefaulted_GetRef().WorldBounds=Bounds; };
+	// Many separate rack/column parts, a floor spanning the warehouse and a
+	// column crossing floors exercise overlapping nodes and very large leaves.
+	for (int32 X=-32;X<32;++X) for (int32 Y=-32;Y<32;++Y)
+	{
+		const FVector P(X*150.,Y*150.,((X+Y+64)%4)*400.);
+		Add(FBox(P-FVector(20,30,0),P+FVector(20,30,200)));
+	}
+	Add(FBox(FVector(-6000,-6000,-20),FVector(6000,6000,0)));
+	Add(FBox(FVector(195,-5,0),FVector(205,5,1600)));
+	Add(FBox(FVector::ZeroVector,FVector::ZeroVector));
+	Add(FBox(ForceInit)); // Even malformed published data must not be pruned.
+	FAgvObstacleSpatialIndex Index;
+	Index.Build(Obstacles);
+	auto Check=[&](const FBox& Query)
+	{
+		FAgvObstacleIndices Actual,Expected;
+		Index.Query(Query,Actual);ReferenceCandidates(Obstacles,Query,Expected);
+		if (Actual!=Expected)
+		{
+			AddError(FString::Printf(TEXT("Spatial candidates differ from exhaustive published bounds for %s (%d vs %d)"),
+				*Query.ToString(),Actual.Num(),Expected.Num()));
+			return false;
+		}
+		return true;
+	};
+	FRandomStream Random(142807);
+	for (int32 I=0;I<2000;++I)
+	{
+		const FVector P(Random.FRandRange(-6500,6500),Random.FRandRange(-6500,6500),Random.FRandRange(-30,1650));
+		const FVector Half(Random.FRandRange(0,300),Random.FRandRange(0,300),Random.FRandRange(0,300));
+		if (!Check(FBox(P-Half,P+Half))) return false;
+	}
+	for (const FVector& P : {FVector(20,30,200),FVector(6000,6000,0),FVector(200,0,800),FVector::ZeroVector})
+		if (!Check(FBox(P,P))) return false; // Inclusive face/edge/corner contact.
+	if (!Check(FBox(FVector(-10000),FVector(10000))) || !Check(FBox(ForceInit))) return false;
+	FAgvObstacleIndices Before,After;
+	const FBox Query(FVector(-10,-10,-1),FVector(10,10,1));
+	Index.Query(Query,Before);
+	TestTrue(TEXT("Small local query prunes most of 4096 fixed parts"),Before.Num()<20);
+	// Source actors may move between publications. The index must continue to
+	// expose the immutable old snapshot until an explicit rebuild, like sensors.
+	for (auto& Entry:Obstacles) if (Entry.WorldBounds.IsValid) Entry.WorldBounds=Entry.WorldBounds.ShiftBy(FVector(20000,0,0));
+	Index.Query(Query,After);
+	TestTrue(TEXT("Unpublished source motion cannot change candidates"),Before==After);
+	Index.Build(Obstacles);
+	if (!Check(Query)) return false;
+	Obstacles.RemoveAt(0,Obstacles.Num()/2);
+	Index.Build(Obstacles);
+	if (!Check(FBox(FVector(-10000),FVector(30000)))) return false;
+	Index.Reset();Index.Query(Query,After);
+	TestTrue(TEXT("Invalidating the snapshot removes all candidates"),After.IsEmpty());
+	return true;
+}
+#endif

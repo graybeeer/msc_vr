@@ -3,6 +3,7 @@
 #include "Components/SceneComponent.h"
 #include "WarehouseForklift.h"
 #include "WarehouseChargingStation.h"
+#include "WarehouseChargerWiring.h"
 #include "WarehouseElevator.h"
 #include "WarehousePalletLift.h"
 #include "WarehouseConveyor.h"
@@ -131,7 +132,7 @@ bool AWarehouseLayoutEditor::Eligible(AActor* Actor) const
 {
  if (const auto* Stage=AWarehousePlayStage::Find(this);Stage && Stage->StageIndex>0 && !Stage->CanEditActor(Actor)) return false;
  // Older saved metadata may have marked a charging bay as fixed.
- if (Actor && Actor->ActorHasTag(TEXT("LogisticsInTransit"))) return false;
+ if (Actor && (Actor->ActorHasTag(TEXT("LogisticsInTransit")) || Actor->ActorHasTag(TEXT("PlayerHeldCargo")))) return false;
  if (!Actor || Actor==this || (Actor->ActorHasTag(TEXT("LayoutFixed")) && !Actor->IsA<AWarehouseChargingStation>())) return false;
  if (Actor->IsA<AWarehouseChargingStation>() && Category!=EWarehouseLayoutCategory::Charger && Category!=EWarehouseLayoutCategory::All) return false;
  const auto* PC=GetWorld()->GetFirstPlayerController();
@@ -390,6 +391,8 @@ bool AWarehouseLayoutEditor::BeginDrag(AActor* HitActor,FVector FloorPoint)
  }
  // Move, rotation and deletion all enter this transaction. Check the expanded
  // group before disabling any collision or physics, including rack/zone contents.
+ for (AActor* Member:Members) if (Member->ActorHasTag(TEXT("PlayerHeldCargo")))
+ { Status=TEXT("플레이어가 들고 있는 물체는 내려놓은 뒤 편집하세요.");return false; }
  for (AActor* Member:Members) if (const auto* Conveyor=Cast<AWarehouseConveyor>(Member);Conveyor && !Conveyor->IsIdleForLayout())
  { Status=TEXT("물류가 실려 있거나 승강기 인계 중인 컨베이어는 비운 뒤 편집하세요.");return false; }
  for (AActor* Member:Members) if (HandledByPalletLift(Member))
@@ -413,6 +416,9 @@ bool AWarehouseLayoutEditor::BeginDrag(AActor* HitActor,FVector FloorPoint)
 }
 void AWarehouseLayoutEditor::CaptureMoving(const TArray<AActor*>& Members)
 {
+ // Wiring is derived from the final arrangement, never dragged as cargo or
+ // allowed to block its own charger/structure placement transaction.
+ UWarehouseChargerWiring::SetSuspended(this,true);
  Moving.Reset();
  for (AActor* A:Members)
  {
@@ -537,6 +543,7 @@ bool AWarehouseLayoutEditor::BeginAdd(FVector FloorPoint)
 }
 void AWarehouseLayoutEditor::RefreshAfterEdit(bool PublishTaskLocation)
 {
+ UWarehouseChargerWiring::RefreshConnections(this);
  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) It->RefreshAfterLayout(PublishTaskLocation);
  for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) It->RefreshState();
 }
@@ -740,7 +747,7 @@ bool AWarehouseLayoutEditor::DeleteSelection()
  {
   if (AWarehousePlayStage::IsPlay(this) && (A->IsA<AWarehouseCargo>() || A->IsA<AWarehousePallet>())) {Status=TEXT("물류가 담긴 설비는 먼저 화물을 옮긴 뒤 철거하세요.");Allowed=false;break;}
   if (auto* V=Cast<AWarehouseForklift>(A);V && !V->IsIdleForLayout()) { Status=TEXT("운반·원격 조작 중인 차량은 작업이 끝난 뒤 삭제하세요.");Allowed=false;break; }
-  for (TActorIterator<Amsc_vrCharacter> It(GetWorld());It;++It) if (It->GetHeldCargo()==A) { Status=TEXT("플레이어가 들고 있는 물체는 내려놓은 뒤 삭제하세요.");Allowed=false;break; }
+  for (TActorIterator<Amsc_vrCharacter> It(GetWorld());It;++It) if (It->GetHeldCargoGroup().Contains(A)) { Status=TEXT("플레이어가 들고 있는 물체는 내려놓은 뒤 삭제하세요.");Allowed=false;break; }
   if (!Allowed) break;
   if (A->IsA<AWarehouseCargo>() || A->IsA<AWarehousePallet>())
    for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
@@ -749,12 +756,12 @@ bool AWarehouseLayoutEditor::DeleteSelection()
  if (Allowed) for (AActor* A:Members) if (auto* Cargo=Cast<AWarehouseCargo>(A))
   if (!Store->HoldCargo(Cargo)) { Status=Store->LastMessage;Allowed=false;break; }
  Restore(true);Moving.Reset();bDragging=false;
- if (!Allowed) { Store->HeldCargo.SetNum(HeldBefore);++Store->Revision;return false; }
+ if (!Allowed) { Store->HeldCargo.SetNum(HeldBefore);++Store->Revision;UWarehouseChargerWiring::SetSuspended(this,false);return false; }
  if (Members.ContainsByPredicate([](AActor* A) { return IsShaft(A); }) && !WarehouseElevatorLayout::Rebuild(this,false,Members))
- { Store->HeldCargo.SetNum(HeldBefore);++Store->Revision;Status=TEXT("승강기 삭제 후 층별 바닥을 복원할 수 없어 삭제를 취소했습니다.");return false; }
+ { Store->HeldCargo.SetNum(HeldBefore);++Store->Revision;Status=TEXT("승강기 삭제 후 층별 바닥을 복원할 수 없어 삭제를 취소했습니다.");UWarehouseChargerWiring::SetSuspended(this,false);return false; }
  const bool ConveyorsOnly=!Members.IsEmpty() && !Members.ContainsByPredicate([](AActor* A) { return !A || !A->IsA<AWarehouseConveyor>(); });
  Store->ForgetActors(Members);for (AActor* A:Members) A->Destroy();
- ClearSelection();RefreshAfterEdit(!ConveyorsOnly);Status=FString::Printf(TEXT("%d개 요소 삭제 · 상자 %d개를 보류된 물류에 보관"),Members.Num(),Store->HeldCargo.Num()-HeldBefore);return true;
+ ClearSelection();RefreshAfterEdit(!ConveyorsOnly);UWarehouseChargerWiring::SetSuspended(this,false);Status=FString::Printf(TEXT("%d개 요소 삭제 · 상자 %d개를 보류된 물류에 보관"),Members.Num(),Store->HeldCargo.Num()-HeldBefore);return true;
 }
 bool AWarehouseLayoutEditor::PlacementClear()
 {
@@ -1009,7 +1016,11 @@ bool AWarehouseLayoutEditor::EndDrag(bool Commit)
   Zones.RemoveAll([&](const auto& Z) { return Z.Name==TEXT("Preview") && !AddedActors.IsEmpty() && Z.Members.Contains(AddedActors[0]); });
   for (AActor* A:AddedActors) if (IsValid(A)) A->Destroy();
  }
- Moving.Reset();bDragging=false;bAdding=false;AddedActors.Reset();AddedCargoId=NAME_None;Rotation=FQuat::Identity;return Accepted;
+ Moving.Reset();bDragging=false;bAdding=false;AddedActors.Reset();AddedCargoId=NAME_None;Rotation=FQuat::Identity;
+ UWarehouseChargerWiring::SetSuspended(this,false);
+ if (Accepted && SelectedActors.Num()==1) if (const auto* Station=Cast<AWarehouseChargingStation>(SelectedActors[0]))
+  Status+=TEXT("\n")+Station->SupplyCableStatus;
+ return Accepted;
 }
 void AWarehouseLayoutEditor::PointerDown(APlayerController* PC,FVector2D ViewportPixels,bool Additive)
 {

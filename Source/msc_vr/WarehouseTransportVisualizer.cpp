@@ -1,4 +1,5 @@
 #include "WarehouseTransportVisualizer.h"
+#include "WarehousePerformance.h"
 #include "WarehouseForklift.h"
 #include "WarehouseElevator.h"
 #include "WarehousePallet.h"
@@ -69,6 +70,7 @@ void UWarehouseTransportVisualizer::RestoreDepth(UPrimitiveComponent* Part,const
 
 void UWarehouseTransportVisualizer::Update()
 {
+ CSV_SCOPED_TIMING_STAT(Warehouse,TransportVisuals);
  if (!OutlineMaterial || !ArrowMaterial || !ArrowBar) return;
  if (!Effect)
  {

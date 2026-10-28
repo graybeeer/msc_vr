@@ -178,6 +178,8 @@ private:
  FTransform TaskSourcePose() const;
  UPROPERTY(Transient) TObjectPtr<AWarehouseFleetCoordinator> FleetCoordinator;
  bool bPlanningRoute=false,bAvoidTrafficReservations=false,bTrafficEscape=false;
+ // Valid only within one synchronous game-thread PlanAutonomousRoute call.
+ TOptional<bool> PlanningSensorReadiness;
  bool bObservedPickupEscape=false;
  bool bEndpointDriving=false,bEndpointOrienting=false,bRouteTurning=false;
  int32 EndpointSegment=-1;

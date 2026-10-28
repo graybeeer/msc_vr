@@ -34,7 +34,9 @@ public:
  UFUNCTION(BlueprintCallable,Category="Inbound|Wrap") void CancelInboundWrapping();
  UFUNCTION(BlueprintPure,Category="Inbound") FText GetReceiptDescription() const;
  UFUNCTION(BlueprintPure,Category="Inbound") TArray<AWarehouseCargo*> GetWrappedCargo() const;
- bool ConfirmInbound(const TArray<AActor*>& Loads);
+ bool ConfirmInbound(const TArray<AActor*>& Loads,bool Refresh=true);
+ // Initial rack stock only; invoked once after all actors have begun play.
+ static void InitializeRackWrapping(UWorld* World);
  // External removal/damage opens the whole unit. NPC scans never silently reseal torn film.
  UFUNCTION(BlueprintCallable,Category="Inbound") void TearWrap();
  class UStaticMeshComponent* GetPalletBody() const { return Body; }
@@ -58,7 +60,7 @@ private:
  TArray<FTransform> WrappingPoses;
  TWeakObjectPtr<AWarehouseInboundZone> WrappingZone;
  double WrappingStartedSeconds=-1;
- bool GetWrappableCargo(const TArray<AActor*>& Loads,TArray<AWarehouseCargo*>& Cargo);
+ bool GetWrappableCargo(const TArray<AActor*>& Loads,TArray<AWarehouseCargo*>& Cargo,bool Refresh=true);
  bool bWrapBreakPending=false;
  UFUNCTION() void OnWrapJointBroken(int32 ConstraintIndex);
  void BuildWrapFilm();

@@ -1,4 +1,5 @@
 #include "WarehouseBuildingLayout.h"
+#include "WarehouseChargerWiring.h"
 #include "WarehouseLoading.h"
 #include "WarehousePlayMode.h"
 #include "WarehousePhysics.h"
@@ -31,15 +32,16 @@
 
 namespace
 {
- enum class EPart { Floor,Wall,Roof,Column,Beam,Rail,Pipe,Tray,Light,Stair,Exterior,Cable,Conduit,ServiceSupport,Sprinkler };
+ enum class EPart { Floor,Wall,Roof,Column,Beam,Rail,Pipe,Tray,Light,Stair,Exterior,Cable,Conduit,ServiceSupport,Sprinkler,DistributionCabinet,DistributionDoor };
  bool Service(EPart Role)
- { return Role==EPart::Pipe || Role==EPart::Tray || Role==EPart::Light || Role==EPart::Cable || Role==EPart::Conduit || Role==EPart::ServiceSupport || Role==EPart::Sprinkler; }
+ { return Role==EPart::Pipe || Role==EPart::Tray || Role==EPart::Light || Role==EPart::Cable || Role==EPart::Conduit || Role==EPart::ServiceSupport || Role==EPart::Sprinkler || Role==EPart::DistributionCabinet || Role==EPart::DistributionDoor; }
  const TCHAR* ServiceName(EPart Role)
  {
   switch (Role)
   {
   case EPart::Pipe:return TEXT("Pipe");case EPart::Tray:return TEXT("Tray");case EPart::Cable:return TEXT("Cable");
   case EPart::Conduit:return TEXT("Conduit");case EPart::ServiceSupport:return TEXT("Support");case EPart::Sprinkler:return TEXT("Sprinkler");
+  case EPart::DistributionCabinet:return TEXT("DistributionCabinet");case EPart::DistributionDoor:return TEXT("DistributionDoor");
   default:return TEXT("Light");
   }
  }
@@ -191,6 +193,7 @@ namespace
  { const FString N=Actor->GetActorNameOrLabel();return N.StartsWith(TEXT("EXT_Canopy")) || N==TEXT("EXT_DockPlatform"); }
  bool Architecture(const AActor* Actor)
  {
+  if (Actor->ActorHasTag(TEXT("ChargerSupplyCable"))) return false; // Derived from equipment; never capture as source geometry.
   if (Actor->ActorHasTag(TEXT("LayoutType:Rack"))) return false;
   if (EntranceExterior(Actor)) return true;
   const FString N=Actor->GetActorNameOrLabel();
@@ -589,11 +592,66 @@ namespace
    bool Clear=true;for (const auto& Item:Riser) if (Blocked(Item,Shell,RiserHoles)) { Clear=false;break; }
    if (Clear) Parts.Append(Riser);
   }
+  // Resizing hides the authored wall equipment together with the old shell.
+  // Recreate complete enclosures on real wall faces, only where the current
+  // floor provides a small service-access patch. Never float a cabinet beside
+  // an unpainted mezzanine tile, stair or shaft, or move stock to make it fit.
+  if (MeshFor(TEXT("DistributionCabinet")) && MeshFor(TEXT("DistributionDoor")))
+  {
+   const FBox CabinetBounds=MeshFor(TEXT("DistributionCabinet"))->GetBoundingBox();
+   const FBox DoorBounds=MeshFor(TEXT("DistributionDoor"))->GetBoundingBox();
+   TArray<FPart> ArchitectureParts;for (const auto& Part:Parts) if (!Service(Part.Role)) ArchitectureParts.Add(Part);
+   for (const auto& WallPart:ArchitectureParts)
+   {
+    if (WallPart.Role!=EPart::Wall || WallPart.Size.Z<250) continue;
+    const FBox WallBounds=WallPart.Bounds();const bool AlongX=WallPart.Size.X>WallPart.Size.Y;
+    // The south facade contains the loading entrance; use the other three walls.
+    if (AlongX && WallPart.Centre.Y<Shell.GetCenter().Y) continue;
+    const FVector Normal=AlongX ? FVector(0,-1,0) : FVector(WallPart.Centre.X<Shell.GetCenter().X ? 1 : -1,0,0);
+    const FQuat Rotation(FVector::UpVector,AlongX ? 0. : Normal.X>0 ? HALF_PI : -HALF_PI);
+    const double Low=AlongX ? WallBounds.Min.X : WallBounds.Min.Y,High=AlongX ? WallBounds.Max.X : WallBounds.Max.Y;
+    const int32 Count=FMath::Max(1,FMath::CeilToInt((High-Low)/1800.));
+    for (int32 Floor=0;Floor<4;++Floor)
+    {
+     const double Base=Floor*400.;if (WallBounds.Min.Z>Base+.5 || WallBounds.Max.Z<Base+220) continue;
+     TArray<FBox2D> Supports;for (const auto& Part:ArchitectureParts)
+      if (Part.Role==EPart::Floor && Part.Floor==Floor && FMath::Abs(Part.Bounds().Max.Z-Base)<.5)
+       Supports.Emplace(FVector2D(Part.Bounds().Min),FVector2D(Part.Bounds().Max));
+     if (Supports.IsEmpty()) continue;
+     for (int32 Slot=0;Slot<Count;++Slot) for (double Offset:{0.,150.,-150.,300.,-300.})
+     {
+      const double Along=Low+(Slot+.5)*(High-Low)/Count+Offset;
+      if (Along<Low+70 || Along>High-70) continue;
+      const FVector Face=AlongX ? FVector(Along,WallBounds.Min.Y,Base+145) :
+       FVector(Normal.X>0 ? WallBounds.Max.X : WallBounds.Min.X,Along,Base+145);
+      const FVector Origin=Face+Normal*(CabinetBounds.Max.Y-.2);
+      const FVector DoorOrigin=Origin+Rotation.RotateVector(FVector(-28,CabinetBounds.Min.Y-DoorBounds.Max.Y+.1,0));
+      TArray<FPart> Items{Module(EPart::DistributionCabinet,TEXT("DistributionCabinet"),FTransform(Rotation,Origin),Floor,false),
+       Module(EPart::DistributionDoor,TEXT("DistributionDoor"),FTransform(Rotation,DoorOrigin),Floor,false)};
+      const FVector2D AccessCentre(Face+Normal*70),AccessHalf=AlongX ? FVector2D(50,40) : FVector2D(40,50);
+      const FBox2D Access(AccessCentre-AccessHalf,AccessCentre+AccessHalf);
+      if (!CoveredBy(Access,Supports)) continue;
+      bool Clear=true;
+      for (const auto& Lift:Lifts) if (Overlaps(Access,Lift.Clearance)) { Clear=false;break; }
+      const FBox AccessVolume(FVector(Access.Min,Base+1),FVector(Access.Max,Base+210));
+      for (const auto& Body:Occupied) if (Overlaps(AccessVolume,Body,1)) { Clear=false;break; }
+      for (const auto& Item:Items)
+      {
+       for (const auto& Body:Occupied) if (Overlaps(Item.Bounds(),Body,1)) { Clear=false;break; }
+       for (const auto& Obstacle:ArchitectureParts)
+        if (&Obstacle!=&WallPart && Overlaps(Item.Bounds(),Obstacle.Bounds(),1)) { Clear=false;break; }
+      }
+      if (Clear) { Parts.Append(Items);break; }
+     }
+    }
+   }
+  }
   return Parts;
  }
  bool Preserved(const AWarehouseBuildingLayout* Building,const AActor* Actor)
  {
   return Actor!=Building && !Building->ReplacedStructure.Contains(Actor) && !Actor->ActorHasTag(TEXT("WarehouseBuildingGenerated")) &&
+   !Actor->ActorHasTag(TEXT("ChargerSupplyCable")) &&
    !Actor->ActorHasTag(TEXT("ElevatorRuntimeFloor")) && Actor->GetActorEnableCollision();
  }
  void DestroyParts(TArray<TObjectPtr<AStaticMeshActor>>& Actors)
@@ -675,7 +733,7 @@ void AWarehouseBuildingLayout::CaptureExistingLayout()
  // These owned meshes use +X as the route axis. A previously placed actor may
  // face any direction or be stretched; never use its world bounds as a section.
  for (const TCHAR* Key:{TEXT("FirePipeStraight_2m"),TEXT("TrayStraight_2m"),TEXT("CableBundle_2m"),TEXT("ConduitStraight_1m"),
-      TEXT("TrayHanger"),TEXT("PipeHanger"),TEXT("SprinklerHead"),TEXT("LEDLinear_1200")})
+      TEXT("TrayHanger"),TEXT("PipeHanger"),TEXT("SprinklerHead"),TEXT("LEDLinear_1200"),TEXT("DistributionCabinet"),TEXT("DistributionDoor")})
  {
   const FString Path=FString::Printf(TEXT("/Game/Warehouse/Services/Meshes/SM_WS_%s.SM_WS_%s"),Key,Key);
   if (auto* Asset=LoadObject<UStaticMesh>(nullptr,*Path)) ServiceMeshes.Add(FName(Key),Asset);
@@ -950,6 +1008,10 @@ bool AWarehouseBuildingLayout::ApplySettings(const FWarehouseBuildingSettings& P
  WarehouseLoading::FScopedTask Loading(this,TEXT("건물과 장식을 다시 배치하고 있습니다."));
  CaptureExistingLayout();FString Reason;TArray<AActor*> Removed;TArray<AWarehouseForklift*> Relocate;
  if (!ValidateSettingsInternal(Proposed,Reason,Removed,Relocate)) { Status=Reason;return false; }
+ // Cables are derived services. Rebuild only after the building transaction
+ // (including any failure rollback and vehicle relocation) has finished.
+ UWarehouseChargerWiring::SetSuspended(this,true);
+ ON_SCOPE_EXIT { UWarehouseChargerWiring::SetSuspended(this,false); };
  const bool WasPaused=UGameplayStatics::IsGamePaused(this),GameWorld=GetWorld()->IsGameWorld();
  if (GameWorld && !WasPaused) UGameplayStatics::SetGamePaused(this,true);
  bool Committed=false;
@@ -993,7 +1055,7 @@ bool AWarehouseBuildingLayout::ApplySettings(const FWarehouseBuildingSettings& P
     for (TActorIterator<AActor> It(GetWorld());It;++It) if (Lift->IsHandlingCargo(*It)) Removed.AddUnique(*It);
    if (Pawn && Pawn->IsPlayerControlled())
    { Status=Actor->GetActorNameOrLabel()+TEXT("의 실제 지지/공간을 유지해야 합니다. 남는 바닥으로 먼저 재배치하세요.");return false; }
-   for (TActorIterator<Amsc_vrCharacter> It(GetWorld());It;++It) if (It->GetHeldCargo()==Actor)
+   for (TActorIterator<Amsc_vrCharacter> It(GetWorld());It;++It) if (It->GetHeldCargoGroup().Contains(Actor))
    { Status=TEXT("플레이어가 들고 있는 물건은 내려놓은 뒤 건물을 편집하세요.");return false; }
    for (FName Tag:Actor->Tags) if (Tag.ToString().StartsWith(TEXT("LayoutGroup:")))
     for (TActorIterator<AActor> It(GetWorld());It;++It) if (It->ActorHasTag(Tag) && !ReplacedStructure.Contains(*It)) Removed.AddUnique(*It);
@@ -1040,7 +1102,8 @@ bool AWarehouseBuildingLayout::ApplySettings(const FWarehouseBuildingSettings& P
   if (Service(Part.Role))
   {
    Actor->Tags.Add(TEXT("WarehouseServices"));Actor->Tags.Add(FName(*FString::Printf(TEXT("WarehouseService:%s"),ServiceName(Part.Role))));
-   if (Part.Riser) Actor->Tags.Add(TEXT("WarehouseServiceRiser"));
+   if (Part.Role==EPart::DistributionCabinet || Part.Role==EPart::DistributionDoor) Actor->Tags.Add(TEXT("WarehouseServiceWall"));
+   else if (Part.Riser) Actor->Tags.Add(TEXT("WarehouseServiceRiser"));
    else Actor->Tags.Add(FName(*(Part.RoofService ? FString(TEXT("WarehouseServiceCeiling:Roof")) : FString::Printf(TEXT("WarehouseServiceCeiling:%d"),Part.Floor+1))));
   }
   auto* Component=Actor->GetStaticMeshComponent();Component->SetMobility(EComponentMobility::Movable);Component->SetStaticMesh(Mesh);

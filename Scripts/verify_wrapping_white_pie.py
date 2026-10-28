@@ -138,6 +138,10 @@ def check_film(pallet, torn=False):
 
 def capture(name, next_phase):
     global phase, capture_next, capture_path, capture_frames, capture_ready_at
+    if '-nullrhi' in unreal.SystemLibrary.get_command_line().lower():
+        check('capture_skipped_nullrhi', image=name)
+        phase = next_phase
+        return
     unreal.GameplayStatics.set_game_paused(game, True)
     capture_path = out / (name+'.png')
     if capture_path.exists():

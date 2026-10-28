@@ -16,6 +16,7 @@ class Amsc_vrGameMode : public AGameModeBase
 
 public:
 	Amsc_vrGameMode();
+	virtual void StartPlay() override;
 };
 
 

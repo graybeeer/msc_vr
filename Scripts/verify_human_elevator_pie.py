@@ -217,7 +217,7 @@ def tick(dt):
             human_status = lift.get_editor_property('human_status')
             assert guidance in human_status and '문이 열렸습니다' not in human_status, ('Human guidance contradicts moving/closing state', state, human_status)
             prompt = lift.get_human_interaction_text(pawn)
-            assert not prompt or guidance in prompt, ('Visible interaction hint is stale', state, prompt)
+            assert not prompt or (prompt.startswith('E : ') and '\n' not in prompt and guidance not in prompt), ('Diagnostic guidance leaked into the button-only prompt', state, prompt)
             checked = report.setdefault('human_guidance_states', [])
             if str(state) not in checked:
                 checked.append(str(state))

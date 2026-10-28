@@ -552,8 +552,8 @@ void AWarehouseElevator::SetState(EWarehouseElevatorState Next,const TCHAR* Mess
 {
  State=Next;
  if (Next==EWarehouseElevatorState::AwaitBoarding || Next==EWarehouseElevatorState::AwaitExit) ServeCurrentFloor();
- // Update the live interaction hint only on a real state transition. Rejected
- // requests and active interlock reasons remain visible between transitions.
+ // Keep diagnostic state and rejected-request reasons between transitions.
+ // The player interaction prompt only names the button at the crosshair.
  else if (Next==EWarehouseElevatorState::ClosingForCall || Next==EWarehouseElevatorState::ClosingLoaded || Next==EWarehouseElevatorState::ClosingEmpty)
   HumanStatus=TEXT("문을 닫고 있습니다. 문에서 떨어져 주세요.");
  else if (Next==EWarehouseElevatorState::Calling || Next==EWarehouseElevatorState::Travelling)
@@ -663,13 +663,13 @@ void AWarehouseElevator::UpdateHumanIndicators()
 }
 FString AWarehouseElevator::GetHumanInteractionText(const ACharacter* Person) const
 {
- const bool Inside=CanUseHumanPanel(Person);
+ if (IsHumanInside(Person))
+ {
+  const int32 Button=HumanButtonAtSight(Person);
+  return Button==INDEX_NONE ? FString() : FString::Printf(TEXT("E : %d층"),Button+1);
+ }
  const int32 Floor=HumanLandingFloor(Person);
- if (!Inside && Floor==INDEX_NONE) return FString();
- const int32 Button=Inside ? HumanButtonAtSight(Person) : INDEX_NONE;
- return Inside ? FString::Printf(TEXT("범용 엘리베이터 · %s\n%s"),
-  Button==INDEX_NONE ? TEXT("층 버튼을 바라보고 E") : *FString::Printf(TEXT("E: %d층 버튼"),Button+1),*HumanStatus) :
-  FString::Printf(TEXT("범용 엘리베이터 · %d층\nE: 이 층으로 호출\n%s"),Floor+1,*HumanStatus);
+ return Floor==INDEX_NONE ? FString() : FString::Printf(TEXT("E : %d층 호출"),Floor+1);
 }
 bool AWarehouseElevator::HumanPayloadFits(AActor* Actor) const
 {
@@ -700,14 +700,20 @@ bool AWarehouseElevator::CaptureHumanPayload()
   AActor* Actor=Hit.GetActor();
   if (!IsValid(Actor) || Actor==this || Cast<AWarehouseForklift>(Actor) || VehicleLoads.Contains(Actor) || !HumanPayloadFits(Actor)) continue;
   TArray<UPrimitiveComponent*> Parts;Actor->GetComponents(Parts);
-  bool Dynamic=false;
-  for (auto* Part:Parts) if (Part->IsSimulatingPhysics() && WarehousePhysics::IsPhysicalContact(Part))
+  const ACharacter* Person=Cast<ACharacter>(Actor);
+  const bool HeldCargo=Actor->ActorHasTag(TEXT("PlayerHeldCargo"));
+  bool Passenger=false;
+  // A swept CharacterMovement capsule rides the moving platform without Chaos
+  // simulation. Held cargo is likewise temporarily kinematic, but both retain
+  // physical collision and their real body masses (the player's capsule is 80 kg).
+  for (auto* Part:Parts) if (WarehousePhysics::IsPhysicalContact(Part) &&
+      (Part->IsSimulatingPhysics() || HeldCargo || (Person && Part==Person->GetCapsuleComponent())))
   {
-   Dynamic=true;
+   Passenger=true;
    auto* Body=Part->GetBodyInstance();
-   if (Body && !Bodies.Contains(Body)) { Bodies.Add(Body);HumanPayloadMassKg+=Part->GetMass(); }
+   if (Body && !Bodies.Contains(Body)) { Bodies.Add(Body);HumanPayloadMassKg+=Body->GetBodyMass(); }
   }
-  if (Dynamic) HumanPayload.AddUnique(Actor);
+  if (Passenger) HumanPayload.AddUnique(Actor);
  }
  // Anything not wholly contained and physically carried remains an obstruction.
  return CabinClear();

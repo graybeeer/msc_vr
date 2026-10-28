@@ -1,4 +1,5 @@
 #include "WarehouseChargingStation.h"
+#include "WarehouseChargerWiring.h"
 #include "WarehouseForklift.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
@@ -58,6 +59,11 @@ AWarehouseChargingStation::AWarehouseChargingStation()
  Display->SetVisibility(!bUseAuthoredModel);
  Display->SetHiddenInGame(bUseAuthoredModel);
 }
+
+void AWarehouseChargingStation::BeginPlay()
+{ Super::BeginPlay();UWarehouseChargerWiring::RequestRefresh(this); }
+void AWarehouseChargingStation::EndPlay(const EEndPlayReason::Type Reason)
+{ UWarehouseChargerWiring::RequestRefresh(this);Super::EndPlay(Reason); }
 
 bool AWarehouseChargingStation::IsDocked(const AWarehouseForklift* Vehicle) const
 {

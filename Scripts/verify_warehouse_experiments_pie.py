@@ -13,6 +13,8 @@ import traceback
 
 import unreal
 
+unreal.EditorPythonScripting.set_keep_python_script_alive(True)
+
 ROOT = Path(unreal.Paths.project_dir()).resolve()
 OUT = ROOT / 'Saved/Testing/WarehouseExperiments'
 OUT.mkdir(parents=True, exist_ok=True)
@@ -130,6 +132,11 @@ def verify(key):
     static_count = 0
     for row in expected['actors']:
         actor = live[row['id']]
+        if 'receipt' in row:
+            states = (unreal.WarehouseReceiptState.PENDING, unreal.WarehouseReceiptState.CONFIRMED,
+                      unreal.WarehouseReceiptState.WRAP_TORN)
+            assert actor.get_editor_property('receipt_state') == states[int(row['receipt'])], ('Saved receipt state changed', row['id'])
+            assert {stable_id(a) for a in actor.get_wrapped_cargo()} == set(row['wrapped']), ('Saved wrapping membership changed', row['id'])
         if row['class'].endswith('.WarehouseCargo'):
             props = row['properties']
             assert abs(actor.get_editor_property('gross_mass_kg') - float(props['GrossMassKg'])) < .001
@@ -248,6 +255,16 @@ def tick(_dt):
                 return
             assert not subsystem.save_layout(TAG + '_Unpaused'), 'Running world was accepted as an initial condition'
             ensure_edit()
+            # Fresh-level startup must not pre-wrap pending stock or reseal a
+            # torn unit when a saved layout supplies the receipt states.
+            units = [p for p in allof(unreal.WarehousePallet)
+                     if p.get_editor_property('receipt_state') == unreal.WarehouseReceiptState.CONFIRMED]
+            assert len(units) >= 2, 'Expected pre-wrapped saved-map stock'
+            units[0].tear_wrap()
+            pending = [p for p in allof(unreal.WarehousePallet)
+                       if p.get_editor_property('receipt_state') == unreal.WarehouseReceiptState.PENDING]
+            assert pending, 'Expected existing unconfirmed stock'
+            check('saved_states_include_confirmed_torn_and_pending', torn=stable_id(units[0]), pending_count=len(pending))
             # Save the authored preference without starting a vehicle. A fresh
             # ordinary load must suppress BeginPlay's automatic startup timer.
             allof(unreal.WarehouseForklift)[0].set_editor_property('auto_start', True)

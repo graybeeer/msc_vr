@@ -39,6 +39,7 @@
 #include "WarehouseSimulationClock.h"
 #include "WarehouseTransportVisualizer.h"
 #include "WarehouseObserverWallFade.h"
+#include "WarehousePerformance.h"
 #include "Misc/App.h"
 #include "HAL/PlatformTime.h"
 #include "Widgets/SBoxPanel.h"
@@ -860,8 +861,14 @@ bool Amsc_vrPlayerController::ConfigureLayoutConveyor(int32 Field,float Value)
 
 void Amsc_vrPlayerController::SetObserverRoofVisibility(bool Hide)
 {
+	CSV_SCOPED_TIMING_STAT(Warehouse,ObserverVisibility);
+	TSet<TWeakObjectPtr<AActor>> Owned;
+	for (const auto& Actor:ObserverHiddenRoofs) Owned.Add(Actor);
 	if (Hide)
 	{
+		TSet<TWeakObjectPtr<AActor>> Wanted;
+		TSet<AActor*> AlreadyHidden;
+		for (AActor* Actor:HiddenActors) AlreadyHidden.Add(Actor);
         for (TActorIterator<AActor> It(GetWorld()); It; ++It)
         {
             const bool Dynamic=It->IsA<AWarehouseForklift>() || It->IsA<AWarehousePallet>() || It->IsA<AWarehouseCargo>();
@@ -876,16 +883,29 @@ void Amsc_vrPlayerController::SetObserverRoofVisibility(bool Hide)
                 // floor remain visible as the real obstacles they still are.
                 if (Extent.Z>50.f && Center.Z-Extent.Z<=ObserverFloor*400.f+10.f) Above=false;
             }
-            if ((Above || It->ActorHasTag(TEXT("ObserverRoof"))) && !HiddenActors.Contains(*It))
+            if (Above || It->ActorHasTag(TEXT("ObserverRoof")))
             {
-                HiddenActors.Add(*It);
-                ObserverHiddenRoofs.Add(*It);
+                Wanted.Add(TWeakObjectPtr<AActor>(*It));
+                if (!AlreadyHidden.Contains(*It))
+                {
+                    HiddenActors.Add(*It);
+                    AlreadyHidden.Add(*It);
+                    ObserverHiddenRoofs.Add(*It);
+                }
             }
         }
+		// A floor refresh changes only membership. Keep other systems' hidden
+		// actors and avoid remove/re-add searches for every roof on every scan.
+		HiddenActors.RemoveAll([&](const AActor* Actor)
+		{
+			const TWeakObjectPtr<AActor> Key(const_cast<AActor*>(Actor));
+			return Owned.Contains(Key) && !Wanted.Contains(Key);
+		});
+		ObserverHiddenRoofs.RemoveAll([&](const TWeakObjectPtr<AActor>& Actor){return !Actor.IsValid() || !Wanted.Contains(Actor);});
 	}
 	else
 	{
-		for (const auto& Roof : ObserverHiddenRoofs) if (Roof.IsValid()) HiddenActors.Remove(Roof.Get());
+		HiddenActors.RemoveAll([&](const AActor* Actor){return Owned.Contains(TWeakObjectPtr<AActor>(const_cast<AActor*>(Actor)));});
 		ObserverHiddenRoofs.Reset();
 	}
 }
@@ -920,7 +940,7 @@ void Amsc_vrPlayerController::PlayerTick(float Dt)
         if (ObserverVisibilityElapsed>=.25f)
         {
             ObserverVisibilityElapsed=0;
-            SetObserverRoofVisibility(false); SetObserverRoofVisibility(true);
+            SetObserverRoofVisibility(true);
         }
     }
 	ObserverCamera->GetCameraComponent()->SetFieldOfView(ViewFOV);
@@ -952,6 +972,10 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
    return FText::FromString(TEXT("W/S 전후진 · A/D 조향·제자리 회전 · 좌클릭 포크 올림 · 우클릭 내림\n마우스 둘러보기 · Space 제동 · G 원격 조작 종료"));
  if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn()))
  {
+  // E prioritizes the elevator panel even while carrying cargo.
+  if (!bObserverView)
+   if (auto* Elevator=Cast<AWarehouseElevator>(OperatorCharacter->GetInteractionTarget()))
+    return FText::FromString(Elevator->GetHumanInteractionText(OperatorCharacter));
   if (auto* Cargo=Cast<AWarehouseCargo>(OperatorCharacter->GetHeldCargo()))
    return OperatorCharacter->IsPlacingCargo() ? FText::FromString(Cargo->GetCargoDescription().ToString()+TEXT("\n내려놓는 중 · E : 취소")) : Cargo->GetCargoDescription();
   if (auto* Pallet=Cast<AWarehousePallet>(OperatorCharacter->GetHeldCargo()))
@@ -960,9 +984,6 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
   if (!bObserverView)
    if (Cast<AWarehouseComputer>(OperatorCharacter->GetInteractionTarget()))
     return FText::FromString(TEXT("E : 관제 컴퓨터 접속\n실시간 재고 · 운반 작업 · 지게차 관리"));
-  if (!bObserverView)
-   if (auto* Elevator=Cast<AWarehouseElevator>(OperatorCharacter->GetInteractionTarget()))
-    return FText::FromString(Elevator->GetHumanInteractionText(OperatorCharacter));
   if (!bObserverView)
    if (auto* Lift=Cast<AWarehousePalletLift>(OperatorCharacter->GetInteractionTarget()))
     return Lift->GetInteractionText(FMath::Clamp(FMath::FloorToInt((OperatorCharacter->GetActorLocation().Z-Lift->GetActorLocation().Z)/400.f),0,Lift->FloorCount-1));
@@ -981,7 +1002,7 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
   if (auto* Cargo=Cast<AWarehouseCargo>(Hit.GetActor())) return Cargo->GetCargoDescription();
   if (!bObserverView && Hit.Distance<=250.f)
    if (auto* Pallet=Cast<AWarehousePallet>(Hit.GetActor()))
-    return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\n%s\nE : 빈 팔레트 들기"),Pallet->PalletMassKg,*Pallet->GetReceiptDescription().ToString()));
+    return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\n%s\nE : 팔레트와 적재물 함께 들기"),Pallet->PalletMassKg,*Pallet->GetReceiptDescription().ToString()));
  }
  return FText::GetEmpty();
 }

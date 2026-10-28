@@ -49,6 +49,25 @@ void UAgvLidarComponent::CaptureSnapshot()
 	RotationHz = SavedHz;
 }
 
+void UAgvLidarComponent::EnsureBeamDirections(int32 Columns)
+{
+	if (CachedColumns==Columns && CachedChannels==Channels && CachedFov==HorizontalFovDeg &&
+		CachedVerticalMin==VerticalMinDeg && CachedVerticalMax==VerticalMaxDeg) return;
+	CachedColumns=Columns;CachedChannels=Channels;CachedFov=HorizontalFovDeg;
+	CachedVerticalMin=VerticalMinDeg;CachedVerticalMax=VerticalMaxDeg;
+	BeamDirections.Reset();BeamDirections.Reserve(Columns*FMath::Max(0,Channels));
+	const double FirstAzimuth=HorizontalFovDeg>=360.f ? 0.0 : -HorizontalFovDeg*0.5;
+	for (int32 Wrapped=0;Wrapped<Columns;++Wrapped)
+	{
+		const double Azimuth=FMath::DegreesToRadians(FirstAzimuth+(Wrapped+0.5)*HorizontalFovDeg/Columns);
+		for (int32 Channel=0;Channel<Channels;++Channel)
+		{
+			const double Elevation=FMath::DegreesToRadians(Channels==1 ? VerticalMinDeg : FMath::Lerp((double)VerticalMinDeg,(double)VerticalMaxDeg,Channel/double(Channels-1)));
+			BeamDirections.Add(FVector(FMath::Cos(Elevation)*FMath::Cos(Azimuth),FMath::Cos(Elevation)*FMath::Sin(Azimuth),FMath::Sin(Elevation)));
+		}
+	}
+}
+
 void UAgvLidarComponent::Step(float Dt)
 {
 	UWorld* World = GetWorld();
@@ -66,27 +85,18 @@ void UAgvLidarComponent::Step(float Dt)
 	const int32 Columns = FMath::Max(1, FMath::RoundToInt32(HorizontalFovDeg / HorizontalResolutionDeg));
 	const double Target = Column + Columns * RotationHz * Dt;
 
-	// Beams swept this step, in firing order. Columns sweep the field of view from one edge; a full circle starts
-	// straight ahead.
-	struct FBeam
-	{
-		FVector Local;
-		int32 Column;
-		double Distance = 0.0;
-		uint8 Result = 0; // 0 nothing, 1 own body, 2 return
-		TWeakObjectPtr<UPrimitiveComponent> Component;
-	};
-	TArray<FBeam> Beams;
+	// Reuse fixed ray directions and scratch storage. Firing order and the
+	// per-scan result reset remain identical, including partial revolutions.
+	EnsureBeamDirections(Columns);
+	auto& Beams=BeamScratch;
+	Beams.Reset();
 	Beams.Reserve(FMath::Max(0,FMath::FloorToInt32(Target)-FMath::FloorToInt32(Column))*FMath::Max(0,Channels));
-	const double FirstAzimuth = HorizontalFovDeg >= 360.f ? 0.0 : -HorizontalFovDeg * 0.5;
 	for (int32 Index = FMath::FloorToInt32(Column); Index < FMath::FloorToInt32(Target); ++Index)
 	{
 		const int32 Wrapped = Index % Columns;
-		const double Azimuth = FMath::DegreesToRadians(FirstAzimuth + (Wrapped + 0.5) * HorizontalFovDeg / Columns);
 		for (int32 Channel = 0; Channel < Channels; ++Channel)
 		{
-			const double Elevation = FMath::DegreesToRadians(Channels == 1 ? VerticalMinDeg : FMath::Lerp((double)VerticalMinDeg, (double)VerticalMaxDeg, Channel / double(Channels - 1)));
-			Beams.Add({ FVector(FMath::Cos(Elevation) * FMath::Cos(Azimuth), FMath::Cos(Elevation) * FMath::Sin(Azimuth), FMath::Sin(Elevation)), Wrapped });
+			Beams.Add({BeamDirections[Wrapped*Channels+Channel],Wrapped});
 		}
 	}
 
@@ -176,3 +186,57 @@ void UAgvLidarComponent::Step(float Dt)
 	Column = FMath::Fmod(Target, (double)Columns);
 	LastStepMilliseconds = (float)((FPlatformTime::Seconds() - StartTime) * 1000.0);
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgvLidarDirectionCacheTest,"Warehouse.Sensors.LidarDirectionCache",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAgvLidarDirectionCacheTest::RunTest(const FString& Parameters)
+{
+	UAgvLidarComponent* Sensor=NewObject<UAgvLidarComponent>();
+	auto Check=[&](int32 Columns)
+	{
+		Sensor->EnsureBeamDirections(Columns);
+		if (!TestEqual(TEXT("One direction per firing column/channel"),Sensor->BeamDirections.Num(),Columns*Sensor->Channels)) return false;
+		const double FirstAzimuth=Sensor->HorizontalFovDeg>=360.f ? 0.0 : -Sensor->HorizontalFovDeg*0.5;
+		// Reference is the original per-scan computation, including operation
+		// order. No tolerance: a cache must not alter a traced ray or noise order.
+		for (int32 Wrapped=0;Wrapped<Columns;++Wrapped) for (int32 Channel=0;Channel<Sensor->Channels;++Channel)
+		{
+			const double Azimuth=FMath::DegreesToRadians(FirstAzimuth+(Wrapped+0.5)*Sensor->HorizontalFovDeg/Columns);
+			const double Elevation=FMath::DegreesToRadians(Sensor->Channels==1 ? Sensor->VerticalMinDeg : FMath::Lerp((double)Sensor->VerticalMinDeg,(double)Sensor->VerticalMaxDeg,Channel/double(Sensor->Channels-1)));
+			const FVector Expected(FMath::Cos(Elevation)*FMath::Cos(Azimuth),FMath::Cos(Elevation)*FMath::Sin(Azimuth),FMath::Sin(Elevation));
+			if (Sensor->BeamDirections[Wrapped*Sensor->Channels+Channel]!=Expected)
+			{
+				AddError(FString::Printf(TEXT("Cached ray differs from original at column %d channel %d"),Wrapped,Channel));
+				return false;
+			}
+		}
+		return true;
+	};
+	if (!Check(900)) return false;
+	const FVector* Allocation=Sensor->BeamDirections.GetData();
+	Sensor->EnsureBeamDirections(900);
+	TestTrue(TEXT("Unchanged scan reuses direction storage"),Allocation==Sensor->BeamDirections.GetData());
+	Sensor->HorizontalFovDeg=270.f;if (!Check(900)) return false;
+	Sensor->VerticalMinDeg=-4.5f;if (!Check(900)) return false;
+	Sensor->VerticalMaxDeg=23.f;if (!Check(900)) return false;
+	Sensor->Channels=1;if (!Check(675)) return false;
+	Sensor->Channels=8;Sensor->HorizontalFovDeg=360.f;if (!Check(37)) return false;
+	// Partial revolutions wrap columns without changing channel/firing order.
+	for (int32 I=35;I<41;++I) for (int32 C=0;C<Sensor->Channels;++C)
+		Sensor->BeamScratch.Add({Sensor->BeamDirections[(I%37)*Sensor->Channels+C],I%37});
+	TestEqual(TEXT("Partial sweep emits every requested beam"),Sensor->BeamScratch.Num(),6*Sensor->Channels);
+	for (int32 I=0;I<Sensor->BeamScratch.Num();++I)
+	{
+		const auto& Beam=Sensor->BeamScratch[I];
+		if (!TestEqual(TEXT("Firing column order"),Beam.Column,(35+I/Sensor->Channels)%37)) return false;
+		if (!TestTrue(TEXT("A new beam has no previous hit"),Beam.Result==0 && Beam.Distance==0. && !Beam.Component.IsValid())) return false;
+	}
+	Sensor->BeamScratch[0].Result=2;Sensor->BeamScratch[0].Distance=123.;
+	Sensor->BeamScratch.Reset();Sensor->BeamScratch.Add({FVector::ForwardVector,0});
+	TestTrue(TEXT("Reused scratch clears the previous result"),Sensor->BeamScratch[0].Result==0 && Sensor->BeamScratch[0].Distance==0.);
+	return true;
+}
+#endif

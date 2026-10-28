@@ -1,6 +1,7 @@
 #include "WarehouseExperimentStorage.h"
 #include "WarehousePlayMode.h"
 #include "WarehouseBuildingLayout.h"
+#include "WarehouseChargerWiring.h"
 #include "WarehouseCargo.h"
 #include "WarehouseComputer.h"
 #include "WarehouseConstructionEditor.h"
@@ -549,6 +550,7 @@ bool WarehouseExperimentStorage::FinalizeAfterBeginPlay(UWorld* World,const TSha
   { TArray<AActor*> Loads;for (const auto& Id:Row->GetArrayField(TEXT("wrapped"))) { AActor* Cargo=ResolveActorId(World,Id->AsString());if (!Cargo) return Fail(Error,TEXT("랩 안의 화물 참조가 끊어졌습니다."));Loads.Add(Cargo); }if (!Pallet->ConfirmInbound(Loads)) return Fail(Error,TEXT("팔레트 랩 초기화 실패: ")+Pallet->GetName()); }
   else if (int32(Receipt)==int32(EWarehouseReceiptState::WrapTorn)) Pallet->ReceiptState=EWarehouseReceiptState::WrapTorn;
  }
+ UWarehouseChargerWiring::RefreshConnections(World);
  return true;
 }
 void WarehouseExperimentStorage::ResetInitialVelocities(UWorld* World)

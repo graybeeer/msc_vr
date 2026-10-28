@@ -143,7 +143,7 @@ FString AWarehouseComputer::Locate(AActor* Object) const
   if (FMath::Abs(Local.X)<=Zone.HalfSize.X && FMath::Abs(Local.Y)<=Zone.HalfSize.Y && FMath::Abs(Local.Z)<20)
    return Zone.Name==TEXT("Outbound") ? TEXT("출고 대기 구역") : TEXT("입고 대기 구역");
  }
- for (AWarehouseForklift* Vehicle : Fleet) if (IsValid(Vehicle) && Vehicle->GetLoadMassKg()>0 && Vehicle->ActiveJob.Pallet==Object)
+ for (AWarehouseForklift* Vehicle : Fleet) if (IsValid(Vehicle) && Vehicle->ActiveJob.Pallet==Object && Vehicle->GetLoadMassKg()>0)
   return Vehicle->VehicleName+TEXT(" · 운반 중");
  for (TActorIterator<AWarehouseInboundZone> It(GetWorld());It;++It)
  {

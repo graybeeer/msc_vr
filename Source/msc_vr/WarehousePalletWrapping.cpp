@@ -33,7 +33,7 @@ TArray<AWarehouseCargo*> AWarehousePallet::GetWrappedCargo() const
  return Result;
 }
 
-bool AWarehousePallet::GetWrappableCargo(const TArray<AActor*>& Loads,TArray<AWarehouseCargo*>& Cargo)
+bool AWarehousePallet::GetWrappableCargo(const TArray<AActor*>& Loads,TArray<AWarehouseCargo*>& Cargo,bool Refresh)
 {
  if (ReceiptState!=EWarehouseReceiptState::Pending || !Body->IsSimulatingPhysics()) return false;
  auto* Strength=AWarehouseDamageSystem::Find(this);
@@ -48,7 +48,10 @@ bool AWarehousePallet::GetWrappableCargo(const TArray<AActor*>& Loads,TArray<AWa
  }
  if (Cargo.IsEmpty()) return false;
  // Confirm only the current physical stack, never arbitrary nearby parcels.
- const TArray<AActor*> Supported=Strength->GetSupportedActors(this);
+ // Start/commit retain an exact fresh query. The 10 Hz progress poll shares
+ // that physics interval's graph with inventory, dispatch and damage checks.
+ if (!Refresh) Strength->EnsureSupportSnapshot();
+ const TArray<AActor*> Supported=Strength->GetSupportedActors(this,Refresh);
  for (auto* Box:Cargo) if (!Supported.Contains(Box)) return false;
  for (auto* Actor:Supported) if (auto* Box=Cast<AWarehouseCargo>(Actor);Box && !Cargo.Contains(Box)) return false;
  for (TActorIterator<Amsc_vrCharacter> It(GetWorld());It;++It)
@@ -94,10 +97,37 @@ void AWarehousePallet::CancelInboundWrapping()
  if (ReceiptState!=EWarehouseReceiptState::Confirmed) SetActorTickEnabled(false);
 }
 
-bool AWarehousePallet::ConfirmInbound(const TArray<AActor*>& Loads)
+void AWarehousePallet::InitializeRackWrapping(UWorld* World)
+{
+ if (!World || !World->IsGameWorld()) return;
+ int32 Count=0;
+ for (TActorIterator<AWarehouseDamageSystem> It(World);It;++It)
+ {
+  auto* Strength=*It;
+  // One exact graph for the whole initial scene, not one full scan per pallet.
+  Strength->GetSupportedActors(nullptr,true);
+  TSet<AWarehousePallet*> RackPallets;
+  for (const auto& Spec:Strength->Objects)
+  {
+   if (Spec.Failure!=EWarehouseFailure::Rack || Spec.bFailed) continue;
+   for (AActor* Member:Spec.Members) if (IsValid(Member))
+   {
+    for (auto* Load:Strength->GetSupportedActors(Member,false))
+     if (auto* Pallet=Cast<AWarehousePallet>(Load)) RackPallets.Add(Pallet);
+    break; // All members of this rack share one support profile.
+   }
+  }
+  for (auto* Pallet:RackPallets)
+   if (Pallet->ReceiptState==EWarehouseReceiptState::Pending &&
+       Pallet->ConfirmInbound(Strength->GetSupportedActors(Pallet,false),false)) ++Count;
+ }
+ UE_LOG(LogTemp,Log,TEXT("INITIAL_RACK_WRAPPING pallets=%d"),Count);
+}
+
+bool AWarehousePallet::ConfirmInbound(const TArray<AActor*>& Loads,bool Refresh)
 {
  TArray<AWarehouseCargo*> Cargo;
- if (bWrapping || !GetWrappableCargo(Loads,Cargo)) return false;
+ if (bWrapping || !GetWrappableCargo(Loads,Cargo,Refresh)) return false;
  WrappedCargo=Cargo;
  for (auto* Box:Cargo)
  {
@@ -234,7 +264,7 @@ void AWarehousePallet::Tick(float Dt)
  {
   TArray<AActor*> Loads;for (AWarehouseCargo* Box:WrappingCargo) Loads.Add(Box);
   TArray<AWarehouseCargo*> Validated;
-  bool Stable=WrappingZone.IsValid() && WrappingZone->ContainsPallet(this) && GetWrappableCargo(Loads,Validated);
+  bool Stable=WrappingZone.IsValid() && WrappingZone->ContainsPallet(this) && GetWrappableCargo(Loads,Validated,false);
   for (int32 I=0;I<WrappingParts.Num();++I)
   {
    const auto* Part=WrappingParts[I].Get();

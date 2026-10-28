@@ -448,6 +448,9 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  ON_SCOPE_EXIT { CSV_CUSTOM_STAT(Warehouse,NavigationQueries,int32(WarehouseNavigationQueryCount-QueryStart),ECsvCustomStatOp::Accumulate); };
  if (!FleetCoordinator) FleetCoordinator=AWarehouseFleetCoordinator::Find(this);
  TGuardValue<bool> Planning(bPlanningRoute,true);
+ // No game-thread sensor/layout/time update can interleave this synchronous
+ // search. Restore the optional on every exit; never reuse it in another tick.
+ TGuardValue<TOptional<bool>> Readiness(PlanningSensorReadiness,TOptional<bool>(AutonomousSensorsReady()));
  auto Query=BuildNavigationQuery();
  ON_SCOPE_EXIT { CSV_CUSTOM_STAT(Warehouse,GeometryRejectedCandidates,int32(Query.GeometryRejectedCandidates),ECsvCustomStatOp::Accumulate); };
  const FVector RouteStart=GetActorLocation();

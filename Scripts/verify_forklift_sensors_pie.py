@@ -91,7 +91,10 @@ block('WH_SensorBuildingWall', (600, -735, 150), (240, 10, 300), ('WarehouseMapS
 # Full-height opaque occluder hides rack contents and collapsed rack bodies.
 # Fixed rack frames/decks are published map geometry even behind the wall.
 block('WH_SensorOccluderWall', (310, 0, 250), (30, 360, 500), ('WarehouseMapStructure', 'LayoutFixed'), movable=True)
-rack_tags = ('LayoutType:Rack', 'LayoutGroup:SensorRack', 'WarehouseFloor0')
+# The unified catalogue prefers the warehouse's storage-rack group over
+# isolated collapse probes. Keep this complete three-part fixture as that
+# single template; the displayed name is no longer an individual frame label.
+rack_tags = ('LayoutType:Rack', 'LayoutGroup:WH_InboundRack_SensorFixture', 'WarehouseFloor0')
 block('SensorKnownRackLeft', (600, 0, 92.5), (10, 90, 185), rack_tags)
 block('SensorKnownRackRight', (700, 0, 92.5), (10, 90, 185), rack_tags)
 block('SensorKnownRackDeck', (650, 0, 180), (110, 90, 10), rack_tags)
@@ -459,11 +462,9 @@ def tick(dt):
             layout.set_editing(True, 0)
             layout.set_category(unreal.WarehouseLayoutCategory.RACK)
             layout.set_action(unreal.WarehouseLayoutAction.ADD)
-            for _ in range(4):
-                if layout.get_add_choice_label() == 'SensorKnownRackLeft':
-                    break
-                layout.cycle_add_choice()
-            assert layout.get_add_choice_label() == 'SensorKnownRackLeft', 'Native fixed-rack prototype is unavailable'
+            assert layout.get_add_choice_label() == '팔레트 보관 랙', ('Unified storage rack prototype is unavailable', layout.get_add_choice_label())
+            layout.cycle_add_choice()
+            assert layout.get_add_choice_label() == '팔레트 보관 랙', 'Rack catalogue no longer has one storage template'
             before = set(unreal.GameplayStatics.get_all_actors_of_class(game, unreal.Actor))
             point = unreal.Vector(1600, 0, 0)
             assert layout.begin_add(point), prop(layout, 'status')

@@ -29,10 +29,11 @@
 #include "WarehouseElevator.h"
 #include "WarehouseComputer.h"
 #include "WarehouseCarryAnimInstance.h"
-#include "WarehouseWorker.h"
+#include "WarehousePlayerMovement.h"
 #include "WarehousePhysics.h"
 #include "PhysicsEngine/PhysicsConstraintComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/OverlapResult.h"
 #include "Engine/GameViewportClient.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "UObject/ConstructorHelpers.h"
@@ -47,25 +48,16 @@ namespace
  }
 }
 
-Amsc_vrCharacter::Amsc_vrCharacter()
+Amsc_vrCharacter::Amsc_vrCharacter(const FObjectInitializer& ObjectInitializer)
+ : Super(ObjectInitializer.SetDefaultSubobjectClass<UWarehousePlayerMovement>(ACharacter::CharacterMovementComponentName))
 {
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> CarryMaterial(TEXT("/Game/Warehouse/Materials/M_CarryTransparent"));
 	CarryTransparentMaterial=CarryMaterial.Object;
-	Tags.Add(TEXT("WarehousePhysicalHuman"));
-	bUseControllerRotationYaw=false;
+	bUseControllerRotationYaw=true;
 	CarryGrip=CreateDefaultSubobject<UPhysicsConstraintComponent>(TEXT("TwoHandPhysicalGrip"));
 	CarryGrip->SetupAttachment(GetRootComponent());
-	CarryGrip->SetLinearXLimit(LCM_Free,0); CarryGrip->SetLinearYLimit(LCM_Free,0); CarryGrip->SetLinearZLimit(LCM_Free,0);
-	CarryGrip->SetAngularSwing1Limit(ACM_Free,0); CarryGrip->SetAngularSwing2Limit(ACM_Free,0); CarryGrip->SetAngularTwistLimit(ACM_Free,0);
-	CarryGrip->SetLinearPositionDrive(true,true,true); CarryGrip->SetLinearVelocityDrive(true,true,true);
-	CarryGrip->SetLinearDriveAccelerationMode(false); CarryGrip->SetLinearDriveParams(90000.f,3200.f,120000.f);
-	CarryGrip->SetAngularDriveMode(EAngularDriveMode::SLERP); CarryGrip->SetOrientationDriveSLERP(true); CarryGrip->SetAngularVelocityDriveSLERP(true);
-	CarryGrip->SetAngularDriveAccelerationMode(false); CarryGrip->SetAngularDriveParams(2000000.f,250000.f,1200000.f);
-	CarryGrip->SetDisableCollision(false);
-	CarryGrip->ConstraintInstance.ProfileInstance.bEnableProjection=false;
-	CarryGrip->ConstraintInstance.ProfileInstance.bEnableMassConditioning=false;
-	CarryGrip->ConstraintInstance.DisableMassConditioning();
-	CarryGrip->ConstraintInstance.DisableParentDominates();
+	// Retain the saved Blueprint subobject name; carrying no longer drives a joint.
+	CarryGrip->SetComponentTickEnabled(false);
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(55.f, 96.0f);
  GetCharacterMovement()->InitialPushForceFactor=50.f;
@@ -131,8 +123,9 @@ Amsc_vrCharacter::Amsc_vrCharacter()
 
 	// Create the Camera Component	
 	FirstPersonCameraComponent = CreateDefaultSubobject<UCameraComponent>(TEXT("First Person Camera"));
-	FirstPersonCameraComponent->SetupAttachment(GetMesh(), FName("head"));
-	FirstPersonCameraComponent->SetRelativeLocationAndRotation(FVector(-2.8f, 5.89f, 0.0f), FRotator(0.0f, 90.0f, -90.0f));
+	FirstPersonCameraComponent->SetupAttachment(GetCapsuleComponent());
+	BaseEyeHeight=74.f; CrouchedEyeHeight=40.f;
+	FirstPersonCameraComponent->SetRelativeLocationAndRotation(FVector(0,0,BaseEyeHeight),FRotator::ZeroRotator);
 	FirstPersonCameraComponent->bUsePawnControlRotation = true;
 	FirstPersonCameraComponent->bEnableFirstPersonFieldOfView = true;
 	FirstPersonCameraComponent->bEnableFirstPersonScale = true;
@@ -215,7 +208,7 @@ void Amsc_vrCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void Amsc_vrCharacter::ToggleCarry()
 {
-	if (bPhysicalRagdoll || IsValid(RemoteForklift)) return;
+	if (IsValid(RemoteForklift)) return;
 	if (Controller && Controller->IsMoveInputIgnored()) return;
 	if (PlacementTime >= 0.f) { CancelCarryAction(TEXT("놓기를 취소했습니다.")); return; }
 	AActor* Target=GetInteractionTarget();
@@ -234,7 +227,7 @@ void Amsc_vrCharacter::ToggleCarry()
 		const FVector Eye=FirstPersonCameraComponent->GetComponentLocation();
 		FHitResult Hit;
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(PlaceAim),true,this);
-		Params.AddIgnoredActor(HeldCargo);
+		Params.AddIgnoredActors(GetHeldCargoGroup());
 		if (GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+FirstPersonCameraComponent->GetForwardVector()*250.f,ECC_Visibility,Params))
 		{
 			AWarehousePallet* TargetPallet=Cast<AWarehousePallet>(Hit.GetActor());
@@ -290,8 +283,7 @@ void Amsc_vrCharacter::ToggleCarry()
 
 AActor* Amsc_vrCharacter::GetInteractionTarget(float RangeCm) const
 {
- if (bPhysicalRagdoll) return nullptr;
- const FVector Eye=FirstPersonCameraComponent->GetComponentLocation();
+  const FVector Eye=FirstPersonCameraComponent->GetComponentLocation();
  const FVector End=Eye+FirstPersonCameraComponent->GetForwardVector()*FMath::Clamp(RangeCm,0.f,400.f);
  FCollisionQueryParams Params(SCENE_QUERY_STAT(WarehouseInteraction),false,this);
  FHitResult Hit;
@@ -340,178 +332,63 @@ bool Amsc_vrCharacter::InitializeCarryMesh()
 
 void Amsc_vrCharacter::BeginPlay()
 {
-	Super::BeginPlay();
-	SetRemotePhoneVisible(false); // Also reset visibility saved in the player Blueprint.
-	bUseControllerRotationYaw=false; bUseControllerRotationPitch=false; bUseControllerRotationRoll=false;
-	Tags.AddUnique(TEXT("WarehousePhysicalHuman"));
-	GetCapsuleComponent()->SetCapsuleSize(30.f,96.f);
-	StandingMeshRelative=GetMesh()->GetRelativeTransform();
-	// The first-person render copy has template head stabilization. Its socket
-	// must not keep the eyes at standing height while the real body crouches.
-	FirstPersonCameraComponent->AttachToComponent(GetMesh(),FAttachmentTransformRules::KeepRelativeTransform,TEXT("head"));
-	auto* Movement=GetCharacterMovement();
-	Movement->bEnablePhysicsInteraction=false;
-	Movement->SetComponentTickEnabled(false);
-	WarehousePhysics::ConfigureContact(GetCapsuleComponent(),EWarehouseSurface::Rubber,HumanMassKg);
-	GetCapsuleComponent()->SetCollisionObjectType(ECC_Pawn);
-	GetCapsuleComponent()->SetCollisionResponseToAllChannels(ECR_Block);
-	GetCapsuleComponent()->SetEnableGravity(true);
-	GetCapsuleComponent()->SetSimulatePhysics(true);
-	// The first-person copy and carry IK must receive a live locomotion pose,
-	// including when the third-person source is hidden from its owner.
-	GetMesh()->VisibilityBasedAnimTickOption=EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
-	GetMesh()->AddTickPrerequisiteActor(this);
-	FirstPersonMesh->VisibilityBasedAnimTickOption=EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
-	FirstPersonMesh->AddTickPrerequisiteComponent(GetMesh());
-	CarryGrip->BreakConstraint();
+ Super::BeginPlay();
+ SetRemotePhoneVisible(false);
+ Tags.Remove(TEXT("WarehousePhysicalHuman"));
+ bUseControllerRotationYaw=true; bUseControllerRotationPitch=false; bUseControllerRotationRoll=false;
+ auto* Capsule=GetCapsuleComponent();
+ Capsule->SetSimulatePhysics(false);
+ Capsule->SetCapsuleSize(30.f,96.f);
+ Capsule->SetCollisionProfileName(TEXT("Pawn"));
+ Capsule->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+ Capsule->SetCollisionResponseToAllChannels(ECR_Block);
+ Capsule->SetMassOverrideInKg(NAME_None,HumanMassKg,true);
+ GetMesh()->SetAllBodiesSimulatePhysics(false);
+ GetMesh()->SetPhysicsBlendWeight(0.f);
+ GetMesh()->SetCollisionProfileName(TEXT("NoCollision"));
+ auto* Movement=GetCharacterMovement();
+ Movement->SetComponentTickEnabled(true);
+ Movement->SetMovementMode(MOVE_Walking);
+ Movement->MaxWalkSpeed=350.f;
+ Movement->MaxWalkSpeedCrouched=150.f;
+ Movement->SetCrouchedHalfHeight(58.f);
+ Movement->GetNavAgentPropertiesRef().bCanCrouch=true;
+ Movement->GravityScale=1.f;
+ Movement->JumpZVelocity=420.f;
+ Movement->AirControl=1.f;
+ Movement->AirControlBoostMultiplier=0.f;
+ Movement->MinAnalogWalkSpeed=0.f;
+ Movement->bOrientRotationToMovement=false;
+ Movement->bUseControllerDesiredRotation=false;
+ Movement->bEnablePhysicsInteraction=true;
+ Movement->InitialPushForceFactor=50.f;
+ Movement->PushForceFactor=250.f;
+ Movement->bPushForceScaledToMass=false;
+ Movement->bScalePushForceToVelocity=false;
+ Movement->Mass=HumanMassKg;
+ // A stable capsule-mounted view is independent of the animated head and hands.
+ BaseEyeHeight=74.f; CrouchedEyeHeight=40.f;
+ FirstPersonCameraComponent->AttachToComponent(Capsule,FAttachmentTransformRules::KeepRelativeTransform);
+ FirstPersonCameraComponent->SetRelativeLocationAndRotation(FVector(0,0,BaseEyeHeight),FRotator::ZeroRotator);
+ FirstPersonCameraComponent->bUsePawnControlRotation=true;
+ GetMesh()->VisibilityBasedAnimTickOption=EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+ GetMesh()->AddTickPrerequisiteComponent(Movement);
+ FirstPersonMesh->VisibilityBasedAnimTickOption=EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+ FirstPersonMesh->AddTickPrerequisiteComponent(GetMesh());
+ CarryGrip->BreakConstraint();
 }
 
-FVector Amsc_vrCharacter::GetVelocity() const
+void Amsc_vrCharacter::UpdatePlayerMovement()
 {
-	return bPhysicalRagdoll ? GetMesh()->GetPhysicsLinearVelocity(TEXT("pelvis")) : GetCapsuleComponent()->GetPhysicsLinearVelocity();
-}
-
-void Amsc_vrCharacter::UpdatePhysicalMovement(float DeltaSeconds)
-{
-	if (bPhysicalRagdoll) { UpdateRagdollRecovery(DeltaSeconds);return; }
-	JumpSupportDelay=FMath::Max(0.f,JumpSupportDelay-DeltaSeconds);
-	FVector Input=ConsumeMovementInputVector().GetClampedToMaxSize(1.f);
-	if (IsValid(RemoteForklift) || bObserverPresentation || (Controller && Controller->IsMoveInputIgnored())) Input=FVector::ZeroVector;
-	const float Speed=bIsCrouched ? 60.f : (IsValid(HeldCargo) ? 120.f : (bPhysicalSprint ? 500.f : 350.f));
-	float GroundDistance=-1.f;
-	const float DesiredHalf=bPhysicalCrouchRequested ? 58.f : 96.f;
-	const float HeldMass=IsValid(HeldCargo) ? CarryBody(HeldCargo)->GetMass() : 0.f;
-	const FVector LoadOffset=IsValid(HeldCargo) ? CarryBody(HeldCargo)->GetCenterOfMass()-GetCapsuleComponent()->GetCenterOfMass() : FVector::ZeroVector;
-	bPhysicalGround=WarehouseHumanPhysics::DriveCapsule(this,Input*Speed,650.f,JumpSupportDelay<=0.f,DesiredHalf,&GroundDistance,HeldMass,LoadOffset);
-	auto* Movement=GetCharacterMovement();
-	Movement->Velocity=GetVelocity();
-	// Chaos owns displacement; retain the template's animation telemetry only.
-	Movement->UpdateProxyAcceleration();
-	Movement->MovementMode=bPhysicalGround ? MOVE_Walking : MOVE_Falling;
-	Movement->MaxWalkSpeed=Speed;
-	const float CurrentHalf=GetCapsuleComponent()->GetUnscaledCapsuleHalfHeight();
-	float ClearHalf=DesiredHalf;
-	if (GroundDistance<0.f) ClearHalf=CurrentHalf; // Defer stance geometry changes while truly airborne.
-	else if (DesiredHalf>CurrentHalf)
-		ClearHalf=FMath::Min(DesiredHalf,FMath::Max(CurrentHalf,GroundDistance-1.f));
-	else if (DesiredHalf<CurrentHalf)
-		// Lower the physical centre with gravity before shortening its feet. Shrinking
-		// ahead of it lost floor support and played a fall/landing in the crouch.
-		ClearHalf=FMath::Max(DesiredHalf,FMath::Min(CurrentHalf,GroundDistance-FMath::Clamp(DeltaSeconds*150.f+1.f,1.f,6.f)));
-	const float Half=FMath::FInterpConstantTo(CurrentHalf,ClearHalf,DeltaSeconds,150.f);
-	// Resizing rewrites Chaos geometry and contacts. Preserve them when unchanged.
-	if (Half!=CurrentHalf)
-	{
-		GetCapsuleComponent()->SetCapsuleHalfHeight(Half,true);
-	}
-	// During a stance change the capsule may have a small support gap. Keep the
-	// visual soles on the same physical floor, not floating at the shortened shape.
-	const float FeetHeight=bPhysicalGround ? GroundDistance-1.f : Half;
-	GetMesh()->SetRelativeLocation(StandingMeshRelative.GetLocation()+FVector(0,0,96.f-FeetHeight));
-	SetIsCrouched(bPhysicalCrouchRequested || Half<95.f);
-	if (IsValid(HeldCargo) && (bPickupPending || PlacementTime>=0.f))
-	{
-		const float Upright=GetCapsuleComponent()->GetUpVector().Z;
-		const bool Confined=bPickupPending && PickupTime>.15f &&
-			FVector::Dist(HeldCargo->GetActorLocation(),PickupTransform.GetLocation())<3.f;
-		if (Upright<.75f || (Upright<.94f && (Confined || CarryStallTime>.15f)))
-			CancelCarryAction(TEXT("무리하게 당겨 균형을 잃기 전에 동작을 취소했습니다."));
-	}
-	const bool LostBalance=GetCapsuleComponent()->GetUpVector().Z<.5f ||
-		(GetVelocity().Size()>650.f && (bPhysicalGround || GetVelocity().Size2D()>650.f));
-	BalanceLostSeconds=LostBalance ? BalanceLostSeconds+DeltaSeconds : 0.f;
-	if (BalanceLostSeconds>.12f)
-	{
-		DropCargo(); EndRemoteControl();
-		WarehouseHumanPhysics::StartRagdoll(this,HumanMassKg);
-		bPhysicalRagdoll=GetMesh()->IsSimulatingPhysics();
-		if (bPhysicalRagdoll)
-		{
-			RagdollElapsed=RagdollStableSeconds=RagdollRetrySeconds=0.f;bGetUpRequested=false;
-			FirstPersonMesh->SetHiddenInGame(true,true);GetMesh()->SetOwnerNoSee(false);
-			GetMesh()->FirstPersonPrimitiveType=EFirstPersonPrimitiveType::None;GetMesh()->MarkRenderStateDirty();
-			if (GEngine) GEngine->AddOnScreenDebugMessage(43,4.f,FColor::Yellow,TEXT("넘어졌습니다. 안전한 공간에서 자동으로 일어납니다. Space로 다시 시도할 수 있습니다."));
-		}
-	}
-}
-
-void Amsc_vrCharacter::CalcCamera(float DeltaSeconds,FMinimalViewInfo& OutResult)
-{
-	if (!bPhysicalRagdoll) { Super::CalcCamera(DeltaSeconds,OutResult);return; }
-	FirstPersonCameraComponent->GetCameraView(DeltaSeconds,OutResult);
-	// Sweep from the physical pelvis, not an elevated pivot that can already be
-	// inside a low ceiling. Prefer the rear view, then a level view with headroom.
-	const FVector Aim=GetMesh()->GetSocketLocation(TEXT("pelvis"));
-	const FRotator Heading(-20,GetControlRotation().Yaw,0);
-	FCollisionQueryParams Query(SCENE_QUERY_STAT(FallenPlayerCamera),false,this);
-	auto ClearEye=[&](const FVector& Desired)
-	{
-		FHitResult Hit;
-		return GetWorld()->SweepSingleByChannel(Hit,Aim,Desired,FQuat::Identity,ECC_Visibility,FCollisionShape::MakeSphere(12),Query) ? Hit.Location+Hit.Normal*2.f : Desired;
-	};
-	FVector Eye=ClearEye(Aim-Heading.Vector()*260.f);
-	if (FVector::DistSquared(Eye,Aim)<FMath::Square(60.f))
-		for (const float Side : {0.f,90.f,-90.f,180.f})
-		{
-			const FVector Candidate=ClearEye(Aim-FRotator(0,Heading.Yaw+Side,0).Vector()*180.f);
-			if (FVector::DistSquared(Candidate,Aim)>FVector::DistSquared(Eye,Aim)) Eye=Candidate;
-			if (FVector::DistSquared(Eye,Aim)>=FMath::Square(60.f)) break;
-		}
-	// If the whole body is confined, hide only its owner's render copy rather
-	// than showing its interior; physical bodies and other viewers are unchanged.
-	GetMesh()->SetOwnerNoSee(FVector::DistSquared(Eye,Aim)<FMath::Square(45.f));
-	OutResult.Location=Eye;OutResult.Rotation=(Aim-Eye).Rotation();OutResult.bUseFirstPersonParameters=false;
-}
-
-void Amsc_vrCharacter::UpdateRagdollRecovery(float DeltaSeconds)
-{
-	RagdollElapsed+=DeltaSeconds;RagdollRetrySeconds-=DeltaSeconds;
-	const bool Settled=GetMesh()->GetPhysicsLinearVelocity(TEXT("pelvis")).Size()<80.f &&
-		GetMesh()->GetPhysicsAngularVelocityInRadians(TEXT("pelvis")).Size()<1.5f;
-	RagdollStableSeconds=Settled ? RagdollStableSeconds+DeltaSeconds : 0.f;
-	if (auto* PC=Cast<APlayerController>(Controller);PC && PC->IsInputKeyDown(EKeys::SpaceBar)) bGetUpRequested=true;
-	if ((RagdollElapsed<1.5f && !bGetUpRequested) || RagdollStableSeconds<.4f || RagdollRetrySeconds>0.f) return;
-	RagdollRetrySeconds=1.f;
-	if (!TryRecoverFromRagdoll() && GEngine)
-		GEngine->AddOnScreenDebugMessage(43,2.f,FColor::Yellow,TEXT("일어날 바닥이나 머리 위 공간이 없습니다. 주변 공간을 확보하면 다시 시도합니다. Space: 일어서기 재시도"));
-}
-
-bool Amsc_vrCharacter::TryRecoverFromRagdoll()
-{
-	const FVector Pelvis=GetMesh()->GetSocketLocation(TEXT("pelvis"));
-	const FQuat Upright=FRotator(0,GetControlRotation().Yaw,0).Quaternion();
-	FCollisionQueryParams Query(SCENE_QUERY_STAT(PlayerGetUp),false,this);
-	FVector SafeCenter=FVector::ZeroVector;bool Found=false;
-	for (int I=0;I<9 && !Found;++I)
-	{
-		const FVector Offset=I==0 ? FVector::ZeroVector : FVector(FMath::Cos((I-1)*PI/4),FMath::Sin((I-1)*PI/4),0)*60.f;
-		FHitResult Floor;
-		if (!GetWorld()->LineTraceSingleByChannel(Floor,Pelvis+Offset+FVector(0,0,35),Pelvis+Offset-FVector(0,0,220),ECC_Visibility,Query) ||
-			Floor.ImpactNormal.Z<.65f || !WarehousePhysics::IsPhysicalContact(Floor.GetComponent())) continue;
-		const FVector Candidate=Floor.ImpactPoint+FVector(0,0,98);
-		if (GetWorld()->OverlapBlockingTestByChannel(Candidate,Upright,ECC_Pawn,FCollisionShape::MakeCapsule(30,96),Query)) continue;
-		SafeCenter=Candidate;Found=true;
-	}
-	if (!Found) return false;
-	FVector MomentumVelocity=GetMesh()->GetPhysicsLinearVelocity(TEXT("pelvis"));MomentumVelocity.Z=0;
-	GetMesh()->SetAllBodiesSimulatePhysics(false);GetMesh()->SetPhysicsBlendWeight(0.f);GetMesh()->SetEnablePhysicsBlending(false);
-	GetMesh()->SetCollisionProfileName(TEXT("NoCollision"));
-	auto* Capsule=GetCapsuleComponent();Capsule->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
-	SetRootComponent(Capsule);GetMesh()->AttachToComponent(Capsule,FAttachmentTransformRules::KeepWorldTransform);
-	Capsule->SetWorldLocationAndRotation(SafeCenter,Upright,false,nullptr,ETeleportType::TeleportPhysics);
-	Capsule->SetCapsuleSize(30,96);Capsule->SetCollisionProfileName(TEXT("Pawn"));
-	WarehousePhysics::ConfigureContact(Capsule,EWarehouseSurface::Rubber,HumanMassKg);
-	Capsule->SetCollisionResponseToAllChannels(ECR_Block);Capsule->SetEnableGravity(true);Capsule->SetSimulatePhysics(true);
-	Capsule->SetPhysicsLinearVelocity(MomentumVelocity);
-	GetMesh()->SetRelativeTransform(StandingMeshRelative);GetMesh()->SetOwnerNoSee(!bObserverPresentation);
-	GetMesh()->FirstPersonPrimitiveType=EFirstPersonPrimitiveType::WorldSpaceRepresentation;GetMesh()->MarkRenderStateDirty();
-	FirstPersonMesh->SetHiddenInGame(bObserverPresentation,true);
-	SetRemotePhoneVisible(false);
-	bPhysicalRagdoll=bPhysicalCrouchRequested=bPhysicalGround=bGetUpRequested=false;
-	BalanceLostSeconds=JumpSupportDelay=0.f;SetIsCrouched(false);
-	GetCharacterMovement()->MovementMode=MOVE_Walking;GetCharacterMovement()->Velocity=MomentumVelocity;
-	if (GEngine) GEngine->AddOnScreenDebugMessage(43,2.f,FColor::Green,TEXT("안전한 바닥에서 일어났습니다."));
-	return true;
+ if (IsValid(RemoteForklift) || bObserverPresentation || PlacementTime>=0.f || (Controller && Controller->IsMoveInputIgnored()))
+ {
+  ConsumeMovementInputVector();
+  // No new horizontal input; CharacterMovement still integrates falling and
+  // moving floors while a menu, placement or remote control owns the input.
+ }
+ if (Controller)
+  SetActorRotation(FRotator(0,GetControlRotation().Yaw,0));
+ FirstPersonCameraComponent->SetRelativeLocation(FVector(0,0,BaseEyeHeight));
 }
 
 bool Amsc_vrCharacter::InitializeCarryPresentation()
@@ -595,7 +472,7 @@ bool Amsc_vrCharacter::BeginRemoteControl(AWarehouseForklift* Forklift)
 		if (GEngine) GEngine->AddOnScreenDebugMessage(42,2.f,FColor::Yellow,TEXT("짐을 먼저 내려놓은 뒤 G키로 원격 조작하세요."));
 		return false;
 	}
-	if (bPhysicalRagdoll || PlacementTime>=0 || bObserverPresentation || (Controller && Controller->IsMoveInputIgnored())) return false;
+	if (PlacementTime>=0 || bObserverPresentation || (Controller && Controller->IsMoveInputIgnored())) return false;
 	if (auto* PC=Cast<Amsc_vrPlayerController>(Controller); PC && (PC->IsObserverView() || PC->IsWarehouseMenuOpen())) return false;
 	if (GetInteractionTarget()!=Forklift) return false;
 	if (!InitializeCarryPresentation() || !Forklift->BeginRemoteControl(this)) return false;
@@ -678,133 +555,193 @@ FQuat Amsc_vrCharacter::GetHandFacing(int Index) const
 	return FRotationMatrix::MakeFromXZ(CarryFacing.GetAxisZ(),Index==0 ? CarryFacing.GetAxisY() : CarryFacing.GetAxisX()).ToQuat();
 }
 
-bool Amsc_vrCharacter::TryPickupCargo(AWarehouseCargo* Cargo) { return TryPickupObject(Cargo); }
-bool Amsc_vrCharacter::TryPickupPallet(AWarehousePallet* Pallet)
+TArray<AActor*> Amsc_vrCharacter::GetHeldCargoGroup() const
 {
- if (!IsValid(Pallet) || Pallet->PayloadMassKg>0) return false;
- if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->GetSupportedMass(Pallet)>.01f) return false;
- return TryPickupObject(Pallet);
+ TArray<AActor*> Result;
+ for (const auto& Saved:HeldBodies) if (auto* Actor=Saved.Actor.Get()) Result.Add(Actor);
+ return Result;
 }
+
+bool Amsc_vrCharacter::TryPickupCargo(AWarehouseCargo* Cargo)
+{
+ if (IsValid(Cargo)) if (auto* Pallet=Cargo->GetWrappedPallet()) return TryPickupPallet(Pallet);
+ return TryPickupObject(Cargo);
+}
+
+bool Amsc_vrCharacter::TryPickupPallet(AWarehousePallet* Pallet) { return TryPickupObject(Pallet); }
+
 bool Amsc_vrCharacter::TryPickupObject(AActor* Cargo)
 {
-	if (bPhysicalRagdoll || IsValid(RemoteForklift)) return false;
- if (IsValid(Cargo) && Cargo->ActorHasTag(TEXT("LogisticsInTransit"))) return false;
- if (auto* Box=Cast<AWarehouseCargo>(Cargo);Box && Box->GetWrappedPallet())
+ if (IsValid(RemoteForklift) || IsValid(HeldCargo) || !IsValid(Cargo) || !CarryBody(Cargo) ||
+     Cargo->GetAttachParentActor() || !CarryBody(Cargo)->GetStaticMesh() || !InitializeCarryPresentation()) return false;
+ FVector Center,Extent;Cargo->GetActorBounds(false,Center,Extent);
+ if (FVector::Dist(Center,FirstPersonCameraComponent->GetComponentLocation())>300.f) return false;
+ auto* Strength=AWarehouseDamageSystem::Find(this);
+ TArray<AActor*> Members{Cargo};
+ if (auto* Pallet=Cast<AWarehousePallet>(Cargo))
  {
-  if (GEngine) GEngine->AddOnScreenDebugMessage(41,2.f,FColor::Yellow,TEXT("입고 확정된 랩 포장 물류입니다. 팔레트 전체를 지게차로 운반하세요."));
-  return false;
+  if (Strength) for (auto* Actor:Strength->GetSupportedActors(Pallet)) Members.AddUnique(Actor);
+  for (auto* Box:Pallet->GetWrappedCargo()) Members.AddUnique(Box);
  }
- if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->HasFailed(Cargo)) return false;
-	if (IsValid(HeldCargo) || !IsValid(Cargo) || Cargo->GetAttachParentActor() || !CarryBody(Cargo)->GetStaticMesh() || !InitializeCarryPresentation()) return false;
-	FVector Center, Extent;
-	Cargo->GetActorBounds(false,Center,Extent);
-	if (FVector::Dist(Center,FirstPersonCameraComponent->GetComponentLocation())>300.f) return false;
-	UStaticMeshComponent* Body=CarryBody(Cargo);
-	if (Body->GetMass()>30.f)
-	{
-		if (GEngine) GEngine->AddOnScreenDebugMessage(41,2.f,FColor::Yellow,TEXT("30kg을 넘는 화물은 지게차로 운반하세요."));
-		return false;
-	}
-	Body->SetSimulatePhysics(true);
-	Body->SetEnableGravity(true);
-	Body->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-	if (auto* Box=Cast<AWarehouseCargo>(Cargo)) Box->WakeStackAbove();
- else for (TActorIterator<AWarehouseCargo> It(GetWorld());It;++It) It->GetCargoBody()->WakeAllRigidBodies();
-	GripBodyOffset=Body->GetComponentQuat().UnrotateVector(Center-Body->GetComponentLocation());
-	CarryGrip->SetWorldLocationAndRotation(Center,Body->GetComponentQuat());
-	// Firm, damped hands, still limited to 1200 N / 120 Nm with real collisions.
-	// A broad 25 kg pallet has greater inertia than a small carton.
-	const bool CarryingPallet=Cast<AWarehousePallet>(Cargo)!=nullptr;
-	CarryGrip->SetLinearDriveParams(90000.f,3200.f,120000.f);
-	CarryGrip->SetAngularDriveParams(CarryingPallet ? 6000000.f : 2000000.f,CarryingPallet ? 800000.f : 250000.f,1200000.f);
-	CarryGrip->SetConstrainedComponents(GetCapsuleComponent(),NAME_None,Body,NAME_None);
-	CarryGrip->SetConstraintReferenceFrame(EConstraintFrame::Frame2,FTransform(FQuat::Identity,GripBodyOffset));
-	GripSlipTime=0.f;
-	HeldCargo=Cargo;
-	HeldDisallowedNanite=Body->bDisallowNanite;
-	Body->bDisallowNanite=true; // Translucency uses the conventional mesh renderer while carried.
-	HeldOriginalMaterials.Reset();
-	for (int32 Index=0; Index<Body->GetNumMaterials(); ++Index)
-	{
-		UMaterialInterface* Original=Body->GetMaterial(Index);
-		HeldOriginalMaterials.Add(Original);
-		if (Original && CarryTransparentMaterial)
-		{
-			auto* Transparent=UMaterialInstanceDynamic::Create(CarryTransparentMaterial,this);
-			UTexture* Albedo=nullptr;
-			if (Original->GetTextureParameterValue(FMaterialParameterInfo(TEXT("Albedo")),Albedo) && Albedo)
-				Transparent->SetTextureParameterValue(TEXT("Albedo"),Albedo);
-			float SamplingScale=1.f;
-			Original->GetScalarParameterValue(FMaterialParameterInfo(TEXT("SamplingScale")),SamplingScale);
-			Transparent->SetScalarParameterValue(TEXT("SamplingScale"),SamplingScale);
-			Transparent->SetScalarParameterValue(TEXT("CarryOpacity"),FMath::Clamp(CarryOpacity,.05f,1.f));
-			Body->SetMaterial(Index,Transparent);
-		}
-	}
-	PickupTransform=Cargo->GetActorTransform();
-	CarryProgressPose=PickupTransform;
-	CarryStallTime=0.f;
-	bPickupPending=true;
-	PickupTime=0.f;
-	CarryTargetYaw=FirstPersonCameraComponent->GetComponentRotation().Yaw;
-	CarryPhase=0.f;
-	NormalWalkSpeed=GetCharacterMovement()->MaxWalkSpeed;
-	GetCharacterMovement()->MaxWalkSpeed=FMath::Min(NormalWalkSpeed,260.f);
-	Body->FirstPersonPrimitiveType=EFirstPersonPrimitiveType::None;
-	Body->MarkRenderStateDirty();
-	CarryMesh->SetComponentTickEnabled(true);
-	CarryMesh->SetVisibility(true);
-	FirstPersonMesh->SetVisibility(false,false);
-	RemoteWorldMesh->SetComponentTickEnabled(true); RemoteWorldMesh->SetVisibility(true);
-	GetMesh()->SetVisibility(false,false);
-	FirstPersonCameraComponent->FirstPersonFieldOfView=90.f;
-	UpdateCarryPose(0.f);
-	return true;
+ // A held unit is a player tool. Preserve the complete unit and its real mass;
+ // only its temporary motion source changes, never the warehouse's physics rules.
+ for (auto* Actor:Members)
+ {
+  if (!IsValid(Actor) || !CarryBody(Actor) || !CarryBody(Actor)->GetStaticMesh() || Actor->GetAttachParentActor() ||
+      Actor->ActorHasTag(TEXT("LogisticsInTransit")) || Actor->ActorHasTag(TEXT("PlayerHeldCargo")) ||
+      (Strength && Strength->HasFailed(Actor))) return false;
+  if (auto* Box=Cast<AWarehouseCargo>(Actor);Box && Box->GetWrappedPallet() && !Members.Contains(Box->GetWrappedPallet())) return false;
+ }
+ HeldBodies.Reset();HeldJoints.Reset();HeldOriginalMaterials.Reset();
+ const FTransform Initial=Cargo->GetActorTransform();
+ for (auto* Actor:Members)
+ {
+  if (auto* Pallet=Cast<AWarehousePallet>(Actor);Pallet && Pallet->bWrapping) Pallet->CancelInboundWrapping();
+  auto* Body=CarryBody(Actor);
+  FHeldBodyState Saved;
+  Saved.Actor=Actor;Saved.Body=Body;Saved.RelativePose=Actor->GetActorTransform().GetRelativeTransform(Initial);
+  Saved.bSimulated=Body->IsSimulatingPhysics();Saved.bGravity=Body->IsGravityEnabled();Saved.Collision=Body->GetCollisionEnabled();
+  Saved.MassKg=Body->GetMass();Saved.bMassOverride=Body->BodyInstance.bOverrideMass;
+  Saved.bTickEnabled=Actor->IsActorTickEnabled();Saved.bNanite=Body->bDisallowNanite;
+  Saved.bIgnoredByPlayer=GetCapsuleComponent()->GetMoveIgnoreActors().Contains(Actor);
+  Saved.bHadHeldTag=Actor->ActorHasTag(TEXT("PlayerHeldCargo"));
+  Saved.MaterialStart=HeldOriginalMaterials.Num();Saved.MaterialCount=Body->GetNumMaterials();
+  for (int32 Index=0;Index<Saved.MaterialCount;++Index) HeldOriginalMaterials.Add(Body->GetMaterial(Index));
+  HeldBodies.Add(Saved);
+  TArray<UPhysicsConstraintComponent*> Joints;Actor->GetComponents(Joints);
+  for (auto* Joint:Joints) if (!Joint->IsBroken())
+   HeldJoints.Add({Joint,Joint->ConstraintInstance.GetRefFrame(EConstraintFrame::Frame1),Joint->ConstraintInstance.GetRefFrame(EConstraintFrame::Frame2)});
+ }
+ // Terminate, not BreakConstraint: player manipulation must not emit a torn-wrap event.
+ for (const auto& Saved:HeldJoints) if (auto* Joint=Saved.Joint.Get()) Joint->TermComponentConstraint();
+ CarryGrip->TermComponentConstraint();
+ HeldCargo=Cargo;
+ HeldMovementMass=GetCharacterMovement()->Mass;
+ for (const auto& Saved:HeldBodies) GetCharacterMovement()->Mass+=Saved.MassKg;
+ for (const auto& Saved:HeldBodies)
+ {
+  auto* Actor=Saved.Actor.Get();auto* Body=Saved.Body.Get();
+  Actor->Tags.AddUnique(TEXT("PlayerHeldCargo"));Actor->SetActorTickEnabled(false);
+  Body->SetSimulatePhysics(false);Body->SetEnableGravity(false);
+  GetCapsuleComponent()->IgnoreActorWhenMoving(Actor,true);
+  Body->bDisallowNanite=true;
+  for (int32 Index=0;Index<Saved.MaterialCount;++Index)
+  {
+   auto* Original=HeldOriginalMaterials[Saved.MaterialStart+Index].Get();
+   if (!Original || !CarryTransparentMaterial) continue;
+   auto* Transparent=UMaterialInstanceDynamic::Create(CarryTransparentMaterial,this);
+   UTexture* Albedo=nullptr;
+   if (Original->GetTextureParameterValue(FMaterialParameterInfo(TEXT("Albedo")),Albedo) && Albedo)
+    Transparent->SetTextureParameterValue(TEXT("Albedo"),Albedo);
+   float SamplingScale=1.f;Original->GetScalarParameterValue(FMaterialParameterInfo(TEXT("SamplingScale")),SamplingScale);
+   Transparent->SetScalarParameterValue(TEXT("SamplingScale"),SamplingScale);
+   Transparent->SetScalarParameterValue(TEXT("CarryOpacity"),FMath::Clamp(CarryOpacity,.05f,1.f));
+   Body->SetMaterial(Index,Transparent);
+  }
+  Body->FirstPersonPrimitiveType=EFirstPersonPrimitiveType::None;Body->MarkRenderStateDirty();
+ }
+ if (auto* Box=Cast<AWarehouseCargo>(Cargo)) Box->WakeStackAbove();
+ PickupTransform=Initial;CarryProgressPose=Initial;CarryStallTime=0.f;PickupTime=0.f;bPickupPending=true;
+ CarryMesh->SetComponentTickEnabled(true);CarryMesh->SetVisibility(true);
+ FirstPersonMesh->SetVisibility(false,false);
+ RemoteWorldMesh->SetComponentTickEnabled(true);RemoteWorldMesh->SetVisibility(true);
+ GetMesh()->SetVisibility(false,false);FirstPersonCameraComponent->FirstPersonFieldOfView=90.f;
+ UpdateCarryPose(0.f);
+ return IsValid(HeldCargo);
 }
 
 void Amsc_vrCharacter::DropCargo()
 {
- PlacementTime=-1.f; PlacementRotateTime=-1.f; PlacementLowerTime=-1.f; PlacementPallet=nullptr;
- bPickupPending=false; CarryStallTime=0.f; PlacementContactTime=0.f; GripSlipTime=0.f;
- CarryGrip->BreakConstraint();
- if (IsValid(HeldCargo))
+ PlacementTime=-1.f;PlacementPallet=nullptr;bPickupPending=false;CarryStallTime=0.f;
+ // Restore every body before restarting film joints. No stored pickup momentum
+ // or synthetic grip velocity is injected into the released unit.
+ for (const auto& Saved:HeldBodies) if (auto* Body=Saved.Body.Get())
  {
-  auto* Body=CarryBody(HeldCargo);
-  Body->bDisallowNanite=HeldDisallowedNanite;
-  for (int32 I=0;I<HeldOriginalMaterials.Num();++I) Body->SetMaterial(I,HeldOriginalMaterials[I]);
-  Body->FirstPersonPrimitiveType=EFirstPersonPrimitiveType::None;
-  Body->MarkRenderStateDirty();
-  Body->WakeAllRigidBodies();
+  Body->bDisallowNanite=Saved.bNanite;
+  for (int32 Index=0;Index<Saved.MaterialCount;++Index)
+   if (HeldOriginalMaterials.IsValidIndex(Saved.MaterialStart+Index)) Body->SetMaterial(Index,HeldOriginalMaterials[Saved.MaterialStart+Index]);
+  Body->FirstPersonPrimitiveType=EFirstPersonPrimitiveType::None;Body->MarkRenderStateDirty();
+  Body->SetCollisionEnabled(Saved.Collision);Body->SetEnableGravity(Saved.bGravity);
+  Body->SetMassOverrideInKg(NAME_None,Saved.MassKg,Saved.bMassOverride);
+  Body->SetSimulatePhysics(Saved.bSimulated);
+  if (Saved.bSimulated)
+  {
+   Body->SetPhysicsLinearVelocity(FVector::ZeroVector);Body->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);
+   Body->WakeAllRigidBodies();
+  }
  }
- HeldCargo=nullptr; HeldOriginalMaterials.Reset();
- if (NormalWalkSpeed>0.f) { GetCharacterMovement()->MaxWalkSpeed=NormalWalkSpeed; NormalWalkSpeed=0.f; }
+ for (const auto& Saved:HeldJoints) if (auto* Joint=Saved.Joint.Get())
+ {
+  Joint->InitComponentConstraint();
+  Joint->SetConstraintReferenceFrame(EConstraintFrame::Frame1,Saved.Frame1);
+  Joint->SetConstraintReferenceFrame(EConstraintFrame::Frame2,Saved.Frame2);
+ }
+ for (const auto& Saved:HeldBodies) if (auto* Actor=Saved.Actor.Get())
+ {
+  if (!Saved.bHadHeldTag) Actor->Tags.Remove(TEXT("PlayerHeldCargo"));
+  GetCapsuleComponent()->IgnoreActorWhenMoving(Actor,Saved.bIgnoredByPlayer);
+  Actor->SetActorTickEnabled(Saved.bTickEnabled);
+ }
+ if (HeldMovementMass>=0.f) GetCharacterMovement()->Mass=HeldMovementMass;
+ HeldMovementMass=-1.f;
+ HeldCargo=nullptr;HeldBodies.Reset();HeldJoints.Reset();HeldOriginalMaterials.Reset();
+ UpdateCarryPose(0.f);
 }
 
 void Amsc_vrCharacter::CancelCarryAction(const TCHAR* Reason)
 {
  UE_LOG(Logmsc_vr,Log,TEXT("Carry action cancelled: %s object=%s pickup=%.2f placement=%.2f"),
-     Reason,*GetNameSafe(HeldCargo),PickupTime,PlacementTime);
+  Reason,*GetNameSafe(HeldCargo),PickupTime,PlacementTime);
  if (GEngine) GEngine->AddOnScreenDebugMessage(41,3.f,FColor::Yellow,Reason);
- // Release at the actual contact pose with its existing momentum. Never pull
- // through an obstruction or teleport back to a previously clear transform.
  DropCargo();
 }
 
-void Amsc_vrCharacter::UpdateGripTarget(const FTransform& Pose)
+bool Amsc_vrCharacter::MoveHeldGroup(const FTransform& Target)
 {
- const FQuat Parent=GetCapsuleComponent()->GetComponentQuat();
- const FVector Center=Pose.TransformPosition(CarryBody(HeldCargo)->GetStaticMesh()->GetBounds().Origin);
- CarryGrip->SetConstraintReferenceFrame(EConstraintFrame::Frame1,FTransform(Parent.Inverse()*Pose.GetRotation(),Parent.UnrotateVector(Center-GetCapsuleComponent()->GetComponentLocation())));
- CarryGrip->SetLinearPositionTarget(FVector::ZeroVector);
- CarryGrip->SetAngularOrientationTarget(FRotator::ZeroRotator);
- // Placement aims at a stationary world support. Damping relative to a swaying
- // player instead of the world makes the cargo follow that sway and overshoot.
- // Compensate only the drive target; both bodies still receive the reaction.
- const bool Placing=PlacementTime>=0.f;
- // Chaos solves Body1 relative to Body2 (the held body's frame here).
- const FQuat DriveFrame=CarryBody(HeldCargo)->GetComponentQuat();
- CarryGrip->SetLinearVelocityTarget(Placing ? DriveFrame.UnrotateVector(GetCapsuleComponent()->GetPhysicsLinearVelocityAtPoint(Center)) : FVector::ZeroVector);
- CarryGrip->SetAngularVelocityTarget(Placing ? DriveFrame.UnrotateVector(GetCapsuleComponent()->GetPhysicsAngularVelocityInRadians())/(2.f*PI) : FVector::ZeroVector);
+ if (!IsValid(HeldCargo) || HeldBodies.IsEmpty()) return false;
+ const FTransform Start=HeldCargo->GetActorTransform();
+ const float Distance=FVector::Dist(Start.GetLocation(),Target.GetLocation());
+ const float Angle=FMath::RadiansToDegrees(Start.GetRotation().AngularDistance(Target.GetRotation()));
+ if (Distance<.01f && Angle<.01f) return true;
+ FComponentQueryParams Params(SCENE_QUERY_STAT(PlayerCarrySweep),this);
+ for (const auto& Saved:HeldBodies) if (auto* Actor=Saved.Actor.Get()) Params.AddIgnoredActor(Actor);
+ // Translation sweeps use the actual convex model. Rotation is sampled at two
+ // degrees, checking every member, so a box atop a pallet cannot cross a wall.
+ const int32 Steps=FMath::Clamp(FMath::CeilToInt(FMath::Max(Distance/12.f,Angle/2.f)),1,180);
+ FTransform Previous=Start;
+ for (int32 Step=1;Step<=Steps;++Step)
+ {
+  FTransform Next;Next.Blend(Start,Target,float(Step)/Steps);
+  bool Clear=true;
+  for (const auto& Saved:HeldBodies)
+  {
+   auto* Body=Saved.Body.Get();
+   if (!Body || !Saved.Actor.IsValid()) { Clear=false;break; }
+   const FTransform From=Saved.RelativePose*Previous,To=Saved.RelativePose*Next;
+   const FVector Delta=To.GetLocation()-From.GetLocation();
+   TArray<FHitResult> Sweeps;
+   GetWorld()->ComponentSweepMulti(Sweeps,Body,From.GetLocation(),To.GetLocation(),From.GetRotation(),Params);
+   for (const auto& Hit:Sweeps)
+   {
+    if (!Hit.bBlockingHit || !WarehousePhysics::IsPhysicalContact(Hit.GetComponent())) continue;
+    const float Away=FVector::DotProduct(Delta,Hit.Normal);
+    if ((Hit.bStartPenetrating || Hit.Time<=KINDA_SMALL_NUMBER) &&
+        (Away>.001f || (Away>=-.001f && Hit.PenetrationDepth<=.25f))) continue;
+    Clear=false;break;
+   }
+   if (!Clear) break;
+   TArray<FOverlapResult> Overlaps;
+   GetWorld()->ComponentOverlapMultiByChannel(Overlaps,Body,To.GetLocation(),To.GetRotation(),Body->GetCollisionObjectType(),Params);
+   for (const auto& Hit:Overlaps) if (Hit.bBlockingHit && WarehousePhysics::IsPhysicalContact(Hit.GetComponent())) { Clear=false;break; }
+   if (!Clear) break;
+  }
+  if (!Clear) return false;
+  // All members passed before any is moved; the stored relative poses never stretch.
+  for (const auto& Saved:HeldBodies) if (auto* Actor=Saved.Actor.Get())
+   Actor->SetActorTransform(Saved.RelativePose*Next,false,nullptr,ETeleportType::TeleportPhysics);
+  Previous=Next;
+ }
+ return true;
 }
 
 void Amsc_vrCharacter::Tick(float DeltaSeconds)
@@ -812,7 +749,7 @@ void Amsc_vrCharacter::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 	UpdateRemoteControl();
 	UpdateLocomotion();
-	UpdatePhysicalMovement(DeltaSeconds);
+	UpdatePlayerMovement();
 	UpdateCarryPose(DeltaSeconds);
 }
 
@@ -841,31 +778,23 @@ void Amsc_vrCharacter::SetObserverPresentation(bool Observing)
 
 void Amsc_vrCharacter::SetLocomotionInput(bool Sprint, bool Crouching)
 {
-	if (bPhysicalRagdoll || IsValid(RemoteForklift)) return;
-	bPhysicalSprint=Sprint;
-	if (!Crouching && (bIsCrouched || bPhysicalCrouchRequested || GetCapsuleComponent()->GetUnscaledCapsuleHalfHeight()<95.f))
-	{
-		FCollisionQueryParams Params(SCENE_QUERY_STAT(PhysicalStandClearance),false,this);
-		FVector StandingCenter=GetActorLocation();
-		FHitResult Floor;
-		if (GetWorld()->LineTraceSingleByChannel(Floor,StandingCenter,StandingCenter-FVector(0,0,GetCapsuleComponent()->GetScaledCapsuleHalfHeight()+8.f),ECC_Visibility,Params)) StandingCenter.Z=Floor.ImpactPoint.Z+97.f;
-		const FCollisionResponseParams Responses(GetCapsuleComponent()->GetCollisionResponseToChannels());
-		if (GetWorld()->OverlapBlockingTestByChannel(StandingCenter,GetActorQuat(),ECC_Pawn,FCollisionShape::MakeCapsule(30,96),Params,Responses)) { bPhysicalCrouchRequested=true; return; }
-	}
-	bPhysicalCrouchRequested=Crouching;
+ if (IsValid(RemoteForklift)) return;
+ GetCharacterMovement()->MaxWalkSpeed=Sprint ? 500.f : 350.f;
+ if (Crouching) Crouch(); else UnCrouch();
 }
 
 void Amsc_vrCharacter::OnStartCrouch(float HeightAdjust, float ScaledHeightAdjust)
 {
-	Super::OnStartCrouch(HeightAdjust,ScaledHeightAdjust);
-	// The camera is on the head mesh, so undo Character's mesh-height compensation.
-	FirstPersonMesh->AddLocalOffset(FVector(0,0,-HeightAdjust));
+ Super::OnStartCrouch(HeightAdjust,ScaledHeightAdjust);
+ BaseEyeHeight=40.f;
+ FirstPersonCameraComponent->SetRelativeLocation(FVector(0,0,BaseEyeHeight));
 }
 
 void Amsc_vrCharacter::OnEndCrouch(float HeightAdjust, float ScaledHeightAdjust)
 {
-	Super::OnEndCrouch(HeightAdjust,ScaledHeightAdjust);
-	FirstPersonMesh->AddLocalOffset(FVector(0,0,HeightAdjust));
+ Super::OnEndCrouch(HeightAdjust,ScaledHeightAdjust);
+ BaseEyeHeight=74.f;
+ FirstPersonCameraComponent->SetRelativeLocation(FVector(0,0,BaseEyeHeight));
 }
 
 bool Amsc_vrCharacter::FindPlacement(AWarehousePallet* Pallet, const FVector& Aim, FTransform& Target) const
@@ -877,7 +806,7 @@ bool Amsc_vrCharacter::FindPlacement(AWarehousePallet* Pallet, const FVector& Ai
 	const auto* HeldPallet=Cast<AWarehousePallet>(HeldCargo);
 	if (HeldPallet)
 	{
-		if (HeldPallet->PayloadMassKg>0 || Pallet->PayloadMassKg>0 || Pallet->GetVelocity().Size()>15.f ||
+		if (Pallet->PayloadMassKg>0 || Pallet->GetVelocity().Size()>15.f ||
 			Pallet->GetPalletBody()->GetPhysicsAngularVelocityInDegrees().Size()>5.f) return false;
 		if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->GetSupportedMass(Pallet)>.01f) return false;
 	}
@@ -894,7 +823,7 @@ bool Amsc_vrCharacter::FindPlacement(AWarehousePallet* Pallet, const FVector& Ai
 	Local.Y=HeldPallet ? 0.f : FMath::Clamp(Local.Y,-Half.Y+Extent.Y+2,Half.Y-Extent.Y-2);
 	FVector Center=Pallet->GetActorLocation()+Rotation.RotateVector(FVector(Local.X,Local.Y,0));
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(PalletPlacement),true,this);
-	Params.AddIgnoredActor(HeldCargo);
+	Params.AddIgnoredActors(GetHeldCargoGroup());
 	const float DeckTop=Pallet->GetPalletBody()->Bounds.Origin.Z+Pallet->GetPalletBody()->Bounds.BoxExtent.Z;
 	float High=-FLT_MAX;
 	TArray<FVector> Supports;
@@ -937,207 +866,109 @@ bool Amsc_vrCharacter::TryPlaceOnPallet(AWarehousePallet* Pallet, FVector Aim)
 	PlacementPalletPose=Pallet->GetActorTransform();
 	PlacementStart=HeldCargo->GetActorTransform();
 	PlacementTime=0.f;
-	PlacementRotateTime=-1.f;
-	PlacementLowerTime=-1.f;
 	bPickupPending=false;
 	CarryStallTime=0.f;
-	PlacementContactTime=0.f;
 	CarryProgressPose=PlacementStart;
+	UpdateCarryPose(0.f);
 	return true;
 }
 
 void Amsc_vrCharacter::UpdateCarryPose(float DeltaSeconds)
 {
-	const bool Carrying=IsValid(HeldCargo);
-	const bool UsingPhone=IsValid(RemoteForklift);
-	CarryBlend=FMath::FInterpConstantTo(CarryBlend,Carrying || UsingPhone ? 1.f : 0.f,DeltaSeconds,5.f);
-	if (UsingPhone)
-	{
-		const FQuat Facing=FRotator(0,FirstPersonCameraComponent->GetComponentRotation().Yaw,0).Quaternion();
-		// Keep the phone below eye height while the operator watches the vehicle.
-		const FVector Center=GetActorLocation()+Facing.RotateVector(FVector(30,10,45));
-		const FQuat PhoneFacing=Facing*FRotator(-20,0,0).Quaternion();
-		RemotePhone->SetWorldLocationAndRotation(Center,PhoneFacing);
-		RemoteWorldPhone->SetWorldLocationAndRotation(Center,PhoneFacing);
-		CarryFacing=PhoneFacing;
-		CarryHands[0]=Center+PhoneFacing.RotateVector(FVector(-1,-6,-5));
-		CarryHands[1]=Center+PhoneFacing.RotateVector(FVector(-3,7.5,-5));
-		CarryElbows[0]=GetActorLocation()+Facing.RotateVector(FVector(5,-23,15));
-		CarryElbows[1]=GetActorLocation()+Facing.RotateVector(FVector(7,26,20));
-		return;
-	}
-	if (!Carrying)
-	{
-		if (NormalWalkSpeed>0.f) DropCargo(); // Also recover if a carried actor is destroyed.
-		if (CarryBlend<=0.f && CarryMesh->IsVisible())
-		{
-			CarryMesh->SetVisibility(false);
-			CarryMesh->SetComponentTickEnabled(false);
-			FirstPersonMesh->SetVisibility(true,false);
-			RemoteWorldMesh->SetVisibility(false); RemoteWorldMesh->SetComponentTickEnabled(false);
-			GetMesh()->SetVisibility(true,false);
-			FirstPersonCameraComponent->FirstPersonFieldOfView=NormalFirstPersonFOV;
-		}
-		return;
-	}
- // The grip is a finite force between two dynamic bodies; only its target moves.
+ const bool Carrying=IsValid(HeldCargo),UsingPhone=IsValid(RemoteForklift);
+ // Carry is an immediate player tool: a fixed hand pose, no pickup/drop blend wait.
+ CarryBlend=Carrying ? 1.f : UsingPhone ? FMath::FInterpConstantTo(CarryBlend,1.f,DeltaSeconds,5.f) : 0.f;
+ if (UsingPhone)
+ {
+  const FQuat Facing=FRotator(0,FirstPersonCameraComponent->GetComponentRotation().Yaw,0).Quaternion();
+  const FVector Center=GetActorLocation()+Facing.RotateVector(FVector(30,10,45));
+  const FQuat PhoneFacing=Facing*FRotator(-20,0,0).Quaternion();
+  RemotePhone->SetWorldLocationAndRotation(Center,PhoneFacing);
+  RemoteWorldPhone->SetWorldLocationAndRotation(Center,PhoneFacing);
+  CarryFacing=PhoneFacing;
+  CarryHands[0]=Center+PhoneFacing.RotateVector(FVector(-1,-6,-5));
+  CarryHands[1]=Center+PhoneFacing.RotateVector(FVector(-3,7.5,-5));
+  CarryElbows[0]=GetActorLocation()+Facing.RotateVector(FVector(5,-23,15));
+  CarryElbows[1]=GetActorLocation()+Facing.RotateVector(FVector(7,26,20));
+  return;
+ }
+ if (!Carrying)
+ {
+  if (!HeldBodies.IsEmpty()) DropCargo();
+  if (CarryBlend<=0.f && CarryMesh->IsVisible())
+  {
+   CarryMesh->SetVisibility(false);CarryMesh->SetComponentTickEnabled(false);
+   FirstPersonMesh->SetVisibility(true,false);
+   RemoteWorldMesh->SetVisibility(false);RemoteWorldMesh->SetComponentTickEnabled(false);
+   GetMesh()->SetVisibility(true,false);FirstPersonCameraComponent->FirstPersonFieldOfView=NormalFirstPersonFOV;
+  }
+  return;
+ }
  auto* Body=CarryBody(HeldCargo);
  const auto Bounds=Body->GetStaticMesh()->GetBounds();
  const FVector NativeExtent=Bounds.BoxExtent*HeldCargo->GetActorScale3D().GetAbs();
  const FVector Origin=GetActorLocation();
  const bool Pallet=Cast<AWarehousePallet>(HeldCargo)!=nullptr;
- // Limit target slew without adding the old slow, floating follow motion.
- CarryTargetYaw=FMath::FixedTurn(CarryTargetYaw,FirstPersonCameraComponent->GetComponentRotation().Yaw,DeltaSeconds*(Pallet ? 90.f : 360.f));
- const FQuat Facing=FRotator(0,CarryTargetYaw,0).Quaternion();
- const FQuat DesiredRotation=Facing*(Pallet ? FRotator(90,0,0).Quaternion() : FQuat::Identity);
- const float Depth=Pallet ? NativeExtent.Z : NativeExtent.X;
- const float Height=Pallet ? 15.f : 10.f+NativeExtent.Z;
- const FVector GoalCenter=Origin+Facing.RotateVector(FVector(GetCapsuleComponent()->GetScaledCapsuleRadius()+8.f+Depth,0,Height));
- FTransform Goal(DesiredRotation,GoalCenter-DesiredRotation.RotateVector(Bounds.Origin*HeldCargo->GetActorScale3D()),HeldCargo->GetActorScale3D());
+ // Read control yaw directly: the camera component may not have updated until
+ // CalcCamera later in this frame. No spring, turn-rate cap or mass lag.
+ const FQuat Facing=FRotator(0,Controller ? Controller->GetControlRotation().Yaw : FirstPersonCameraComponent->GetComponentRotation().Yaw,0).Quaternion();
+ // Pallets stay level, including their complete loose or wrapped payload.
+ const FVector GoalCenter=Origin+Facing.RotateVector(FVector(GetCapsuleComponent()->GetScaledCapsuleRadius()+8.f+NativeExtent.X,0,10.f+NativeExtent.Z));
+ FTransform Goal(Facing,GoalCenter-Facing.RotateVector(Bounds.Origin*HeldCargo->GetActorScale3D()),HeldCargo->GetActorScale3D());
  PickupTime+=DeltaSeconds;
+ bool Reached=false;
  if (PlacementTime>=0.f)
  {
   if (!IsValid(PlacementPallet) || !PlacementPallet->GetActorLocation().Equals(PlacementPalletPose.GetLocation(),2.f) ||
       PlacementPallet->GetActorQuat().AngularDistance(PlacementPalletPose.GetRotation())>FMath::DegreesToRadians(2.f) ||
       !PlacementPallet->GetActorScale3D().Equals(PlacementPalletPose.GetScale3D(),.01f))
-  { CancelCarryAction(TEXT("받침 위치가 바뀌어 놓기를 취소했습니다.")); return; }
-  else
-  {
-   PlacementTime+=DeltaSeconds;
-   Goal=PlacementTarget;
-   {
-    // Centre the load above the deck before lowering with the finite grip.
-    // A diagonal carton descent can strike a board edge and move its support.
-    const FVector StartCenter=PlacementStart.TransformPosition(Bounds.Origin);
-    const FVector EndCenter=PlacementTarget.TransformPosition(Bounds.Origin);
-    // Move the upright pallet above its support before rotating. Rotating while
-    // crossing the support can hook a foot underneath a board and lift both pallets.
-    const float Transit=FMath::Max(.4f,FVector::Dist2D(StartCenter,EndCenter)/120.f);
-    const float Across=FMath::SmoothStep(0.f,1.f,FMath::Min(PlacementTime/Transit,1.f));
-    FVector Center=FMath::Lerp(StartCenter,EndCenter,Across);
-    Center.Z=FMath::Max(StartCenter.Z,EndCenter.Z+(Pallet ? NativeExtent.Size() : NativeExtent.Z)+8.f);
-    const FQuat ActualRotation=HeldCargo->GetActorQuat();
-    if (PlacementRotateTime<0.f && PlacementTime>=Transit &&
-        FVector::Dist2D(Body->Bounds.Origin,EndCenter)<4.f &&
-        FMath::Abs(Body->Bounds.Origin.Z-Center.Z)<5.f && Body->GetPhysicsLinearVelocity().Size()<25.f)
-     PlacementRotateTime=0.f;
-    if (PlacementRotateTime<0.f) Goal.SetRotation(PlacementStart.GetRotation());
-    else
-    {
-     PlacementRotateTime+=DeltaSeconds;
-     Goal.SetRotation(FQuat::Slerp(PlacementStart.GetRotation(),PlacementTarget.GetRotation(),
-       FMath::SmoothStep(0.f,1.f,FMath::Min(PlacementRotateTime/(Pallet ? .9f : .25f),1.f))));
-    }
-    if (PlacementLowerTime<0.f && PlacementRotateTime>(Pallet ? .9f : .25f) &&
-        ActualRotation.AngularDistance(PlacementTarget.GetRotation())<FMath::DegreesToRadians(3.f) &&
-        FVector::Dist2D(Body->Bounds.Origin,EndCenter)<3.f && Body->GetPhysicsLinearVelocity().Size2D()<20.f)
-    {
-     PlacementLowerTime=0.f;
-     PlacementLowerStartZ=Body->Bounds.Origin.Z;
-     // Lower with support from gravity, without driving a blocked load hard
-     // downward and levering the carrier upward at full extraction strength.
-     CarryGrip->SetLinearDriveParams(90000.f,3200.f,60000.f);
-    }
-    if (PlacementLowerTime<0.f)
-    {
-     const float VerticalExtent=FMath::Abs(ActualRotation.GetAxisX().Z)*NativeExtent.X+
-         FMath::Abs(ActualRotation.GetAxisY().Z)*NativeExtent.Y+FMath::Abs(ActualRotation.GetAxisZ().Z)*NativeExtent.Z;
-     // Finish rotating, centring and braking above the deck before making contact.
-     // Otherwise the wooden feet can catch a board gap while still sliding sideways.
-     Center.Z=FMath::Max(Center.Z,EndCenter.Z+VerticalExtent-NativeExtent.Z+8.f);
-    }
-    else
-    {
-     PlacementLowerTime+=DeltaSeconds;
-     // Leave enough braking distance for a 30 kg load at the finite 600 N
-     // support limit, rather than accelerating it into the deck at the end.
-     Center.Z=FMath::Lerp(PlacementLowerStartZ,EndCenter.Z,FMath::SmoothStep(0.f,1.f,FMath::Min(PlacementLowerTime/.8f,1.f)));
-    }
-    Goal.SetLocation(Center-Goal.GetRotation().RotateVector(Bounds.Origin*Goal.GetScale3D()));
-   }
-   const FVector Actual=HeldCargo->GetActorTransform().TransformPosition(Bounds.Origin);
-   const FVector Target=PlacementTarget.TransformPosition(Bounds.Origin);
-   FCollisionQueryParams Query(SCENE_QUERY_STAT(HandPlacementSupport),true,this); Query.AddIgnoredActor(HeldCargo);
-   bool Supported=false;
-   const bool Aligned=!Pallet || HeldCargo->GetActorQuat().AngularDistance(PlacementTarget.GetRotation())<FMath::DegreesToRadians(2.f);
-   const bool Arrived=FVector::Dist2D(Actual,Target)<3.f && FMath::Abs(Actual.Z-Target.Z)<2.f;
-   const bool Settled=Body->GetPhysicsLinearVelocity().Size()<12.f && Body->GetPhysicsAngularVelocityInDegrees().Size()<20.f;
-   if (Arrived && Settled && Aligned)
-   {
-    bool Quadrants[4]={false,false,false,false};
-    for (float X : {-.9f,-.5f,-.15f,.15f,.5f,.9f}) for (float Y : {-.9f,-.5f,-.15f,.15f,.5f,.9f})
-    {
-     const FVector Point=Actual+HeldCargo->GetActorQuat().RotateVector(FVector(X*NativeExtent.X,Y*NativeExtent.Y,0));
-     FHitResult Contact;
-     if (GetWorld()->LineTraceSingleByChannel(Contact,Point,Point-FVector(0,0,NativeExtent.Z+5.f),ECC_Visibility,Query) &&
-         (Contact.GetActor()==PlacementPallet || (!Pallet && Cast<AWarehouseCargo>(Contact.GetActor()))) &&
-         Contact.ImpactNormal.Z>.95f && Contact.ImpactPoint.Z>=Actual.Z-NativeExtent.Z-2.5f)
-      Quadrants[(X>0 ? 1 : 0)+(Y>0 ? 2 : 0)]=true;
-    }
-    Supported=Quadrants[0] && Quadrants[1] && Quadrants[2] && Quadrants[3];
-   }
-   if (PlacementTime>.65f && Arrived && Settled && Supported && Aligned)
-   { DropCargo(); return; }
-   if (PlacementTime>6.f) { CancelCarryAction(TEXT("놓기가 지연되어 취소했습니다. 주변 공간을 확인하세요.")); return; }
-  }
+  { CancelCarryAction(TEXT("받침 위치가 바뀌어 놓기를 취소했습니다."));return; }
+  PlacementTime+=DeltaSeconds;
+  const FVector StartCenter=PlacementStart.TransformPosition(Bounds.Origin);
+  const FVector EndCenter=PlacementTarget.TransformPosition(Bounds.Origin);
+  const float ClearZ=FMath::Max(StartCenter.Z,EndCenter.Z+NativeExtent.Z+8.f);
+  // Retain the clearance path and every native sweep, but execute it in the
+  // input call instead of playing a timed lift/travel/lower animation.
+  FTransform AboveStart=PlacementStart,AboveEnd=PlacementTarget;
+  AboveStart.AddToTranslation(FVector(0,0,ClearZ-StartCenter.Z));
+  AboveEnd.AddToTranslation(FVector(0,0,ClearZ-EndCenter.Z));
+  Reached=MoveHeldGroup(AboveStart) && MoveHeldGroup(AboveEnd) && MoveHeldGroup(PlacementTarget);
  }
+ else Reached=MoveHeldGroup(Goal);
+ const FTransform ActualPose=HeldCargo->GetActorTransform();
+ const FVector ActualCenter=ActualPose.TransformPosition(Bounds.Origin);
+ if (Reached) { CarryStallTime=0.f;bPickupPending=false; }
  else
  {
-  const float Alpha=FMath::SmoothStep(0.f,1.f,FMath::Min(PickupTime/.3f,1.f));
-  FTransform Interpolated; Interpolated.Blend(PickupTransform,Goal,Alpha); Goal=Interpolated;
+  const bool Progress=FVector::Dist(ActualPose.GetLocation(),CarryProgressPose.GetLocation())>1.f ||
+      ActualPose.GetRotation().AngularDistance(CarryProgressPose.GetRotation())>FMath::DegreesToRadians(1.f);
+  CarryStallTime=Progress ? 0.f : CarryStallTime+DeltaSeconds;
  }
- UpdateGripTarget(Goal);
- const FVector ActualCenter=HeldCargo->GetActorTransform().TransformPosition(Bounds.Origin);
- const float Error=FVector::Dist(ActualCenter,Goal.TransformPosition(Bounds.Origin));
- const float AngleError=HeldCargo->GetActorQuat().AngularDistance(Goal.GetRotation());
- const bool LoweringBlocked=PlacementLowerTime>=0.f &&
-     ActualCenter.Z-Goal.TransformPosition(Bounds.Origin).Z>5.f && Body->GetPhysicsLinearVelocity().Z>-5.f;
- PlacementContactTime=LoweringBlocked ? PlacementContactTime+DeltaSeconds : 0.f;
- if (PlacementContactTime>.05f)
- { CancelCarryAction(TEXT("내려놓는 경로가 막혀 취소했습니다. 받침 위 공간을 확인하세요.")); return; }
- // A trapped load must not lever the carrier over while the stronger hands
- // wait for the ordinary timeout. Detect failed extraction before that impulse builds.
- if (bPickupPending && PickupTime>.12f && Error>15.f &&
-     FVector::Dist(HeldCargo->GetActorLocation(),PickupTransform.GetLocation())<3.f)
- { CancelCarryAction(TEXT("물체가 끼어 집기를 취소했습니다. 주변 공간을 확인하세요.")); return; }
- if (bPickupPending && PickupTime>=.3f && Error<4.f && AngleError<FMath::DegreesToRadians(5.f)) bPickupPending=false;
- if (bPickupPending && PickupTime>3.f)
- { CancelCarryAction(TEXT("집기가 지연되어 취소했습니다. 끼인 물체를 확인하세요.")); return; }
- // Measure actual progress, not elapsed target animation. Small contact jitter
- // cannot keep a blocked action alive; the absolute deadlines also bound drift.
- const bool Progress=FVector::Dist(ActualCenter,CarryProgressPose.TransformPosition(Bounds.Origin))>1.f ||
-     HeldCargo->GetActorQuat().AngularDistance(CarryProgressPose.GetRotation())>FMath::DegreesToRadians(1.f);
- if (Progress || (Error<4.f && AngleError<FMath::DegreesToRadians(5.f)))
- { CarryProgressPose=HeldCargo->GetActorTransform(); CarryStallTime=0.f; }
- else CarryStallTime+=DeltaSeconds;
- if (CarryStallTime>1.5f || (PlacementTime>=0.f && CarryStallTime>.15f && Error>10.f))
- { CancelCarryAction(TEXT("물체가 막혀 동작을 취소했습니다. 공간을 확보한 뒤 다시 시도하세요.")); return; }
- GripSlipTime=PickupTime>1.f && Error>40.f ? GripSlipTime+DeltaSeconds : 0.f;
- if (GripSlipTime>.35f)
+ CarryProgressPose=ActualPose;
+ if (CarryStallTime>1.5f || (bPickupPending && PickupTime>3.f) || PlacementTime>3.f)
+ { CancelCarryAction(TEXT("물체를 옮길 공간이 없어 동작을 취소했습니다."));return; }
+ if (PlacementTime>=0.f && Reached)
  {
-  UE_LOG(Logmsc_vr,Warning,TEXT("Physical grip slipped: %s placement=%.2f error=%.2f actual=%s goal=%s"),
-      *HeldCargo->GetName(),PlacementTime,Error,*ActualCenter.ToString(),*Goal.TransformPosition(Bounds.Origin).ToString());
-  if (GEngine) GEngine->AddOnScreenDebugMessage(41,2.f,FColor::Yellow,TEXT("충돌 또는 하중 때문에 손의 지지가 풀렸습니다."));
-  DropCargo(); return;
+  // Verify the final contact before releasing independent physical bodies.
+  FTransform Checked;
+  if (FindPlacement(PlacementPallet,PlacementTarget.TransformPosition(Bounds.Origin),Checked) &&
+      Checked.GetLocation().Equals(PlacementTarget.GetLocation(),2.f))
+  { DropCargo();return; }
+  CancelCarryAction(TEXT("받침 위 공간이 바뀌어 놓기를 취소했습니다."));return;
  }
  CarryFacing=HeldCargo->GetActorQuat();
  for (int I=0;I<2;++I)
  {
   const float Side=I==0 ? -1.f : 1.f;
-  const FVector Grip=Pallet ? FVector(15.f,Side*23.f,NativeExtent.Z) : FVector(-NativeExtent.X+2.f,Side*FMath::Clamp(NativeExtent.Y-4.f,5.f,22.f),FMath::Clamp(20.f-NativeExtent.Z,-NativeExtent.Z+2.f,NativeExtent.Z-2.f));
+  const FVector Grip=Pallet ? FVector(-NativeExtent.X+5.f,Side*23.f,0.f) :
+      FVector(-NativeExtent.X+2.f,Side*FMath::Clamp(NativeExtent.Y-4.f,5.f,22.f),FMath::Clamp(20.f-NativeExtent.Z,-NativeExtent.Z+2.f,NativeExtent.Z-2.f));
   CarryHands[I]=ActualCenter+CarryFacing.RotateVector(Grip);
   CarryElbows[I]=Origin+Facing.RotateVector(FVector(5,Side*28.f,18));
  }
 #if WITH_EDITOR
-	// Allow the same carry pose to be previewed and checked without starting PIE.
-	if (!GetWorld()->IsGameWorld())
-	{
-		for (USkeletalMeshComponent* PreviewMesh : {GetMesh(),FirstPersonMesh,CarryMesh.Get()})
-		{
-			PreviewMesh->TickAnimation(DeltaSeconds,false);
-			PreviewMesh->RefreshBoneTransforms();
-		}
-	}
+ if (!GetWorld()->IsGameWorld())
+  for (USkeletalMeshComponent* PreviewMesh:{GetMesh(),FirstPersonMesh,CarryMesh.Get()})
+  { PreviewMesh->TickAnimation(DeltaSeconds,false);PreviewMesh->RefreshBoneTransforms(); }
 #endif
 }
 
@@ -1179,7 +1010,7 @@ void Amsc_vrCharacter::DoAim(float Yaw, float Pitch)
 
 void Amsc_vrCharacter::DoMove(float Right, float Forward)
 {
-	if (bPhysicalRagdoll || IsValid(RemoteForklift) || PlacementTime>=0.f) return;
+	if (IsValid(RemoteForklift) || bObserverPresentation || PlacementTime>=0.f) return;
 	if (GetController())
 	{
 		// pass the move inputs
@@ -1191,13 +1022,8 @@ void Amsc_vrCharacter::DoMove(float Right, float Forward)
 
 void Amsc_vrCharacter::DoJumpStart()
 {
-	if (bPhysicalRagdoll) { bGetUpRequested=true;RagdollRetrySeconds=0.f;return; }
-	if (bPhysicalRagdoll || !bPhysicalGround || bIsCrouched || IsValid(RemoteForklift) || PlacementTime>=0.f || (Controller && Controller->IsMoveInputIgnored())) return;
-	// Input callbacks may run twice before the next physics/movement tick.
-	// Consume the supported state now so one take-off adds only one impulse.
-	bPhysicalGround=false;
-	GetCapsuleComponent()->AddImpulse(FVector(0,0,GetCapsuleComponent()->GetMass()*360.f));
-	JumpSupportDelay=.35f;
+ if (bIsCrouched || IsValid(RemoteForklift) || bObserverPresentation || PlacementTime>=0.f || (Controller && Controller->IsMoveInputIgnored())) return;
+ Jump();
 }
 
 FQuat Amsc_vrCharacter::GetCarryTorsoLean() const
