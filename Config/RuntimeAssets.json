@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "generated_utc": "2026-10-28T09:37:15.277080+00:00",
+  "generated_utc": "2026-10-28T18:18:35.110042+00:00",
   "seeds": {
     "/Game/Characters/Mannequins/Rigs/PA_Mannequin": [
       "Source/msc_vr/WarehouseWorker.cpp"
@@ -17,6 +17,7 @@
       "shipped map"
     ],
     "/Game/Warehouse/AGV/Materials/M_Graphite_powder-coated_steel": [
+      "Source/msc_vr/WarehouseChargerWiring.cpp",
       "Source/msc_vr/WarehouseChargingStation.cpp",
       "Source/msc_vr/WarehouseComputer.cpp",
       "Source/msc_vr/WarehouseElevator.cpp"
@@ -99,7 +100,8 @@
       "Source/msc_vr/WarehouseLocomotionAnimInstance.cpp"
     ],
     "/Game/Warehouse/Cargo/BoxesPalletsPack/Meshes/SM_Carton_Intact_2": [
-      "Source/msc_vr/WarehouseLayoutInventory.cpp"
+      "Source/msc_vr/WarehouseLayoutInventory.cpp",
+      "Source/msc_vr/WarehouseShippingOperations.cpp"
     ],
     "/Game/Warehouse/ChargingStation/Meshes/SM_Charger_GameCabinet_Final": [
       "Source/msc_vr/WarehouseChargingStation.cpp"
@@ -268,9 +270,6 @@
     ],
     "/Game/Warehouse/PalletLift/Meshes/SM_PalletLift_Gate": [
       "Source/msc_vr/WarehousePalletLift.cpp"
-    ],
-    "/Game/Warehouse/Physics/SM_Ind_War_Storage_Pallet_Wood_Worn_01": [
-      "Source/msc_vr/WarehousePallet.cpp"
     ],
     "/Game/Warehouse/Physics/SM_Pallet_110": [
       "Source/msc_vr/WarehousePallet.cpp"
@@ -5904,6 +5903,7 @@
       "asset_class": "Material",
       "bytes": 13016,
       "roots": [
+        "Source/msc_vr/WarehouseChargerWiring.cpp",
         "Source/msc_vr/WarehouseChargingStation.cpp",
         "Source/msc_vr/WarehouseComputer.cpp",
         "Source/msc_vr/WarehouseElevator.cpp"
@@ -6979,7 +6979,8 @@
       "asset_class": "StaticMesh",
       "bytes": 20313,
       "roots": [
-        "Source/msc_vr/WarehouseLayoutInventory.cpp"
+        "Source/msc_vr/WarehouseLayoutInventory.cpp",
+        "Source/msc_vr/WarehouseShippingOperations.cpp"
       ],
       "dependencies": [
         "/Game/Warehouse/Cargo/BoxesPalletsPack/Materials/M_Box_worn",
@@ -8787,21 +8788,6 @@
       "roots": [],
       "dependencies": [
         "/Game/Scene_Warehouse/Assets/MS/3D/Ind_War_Storage_Barrel_Plastic_Blue_01/MI_Ind_War_Storage_Barrel_Plastic_Blue_01",
-        "/Script/NavigationSystem"
-      ],
-      "source_group": "warehouse",
-      "git_inclusion": "runtime_dependency_subset"
-    },
-    {
-      "package": "/Game/Warehouse/Physics/SM_Ind_War_Storage_Pallet_Wood_Worn_01",
-      "path": "Content/Warehouse/Physics/SM_Ind_War_Storage_Pallet_Wood_Worn_01.uasset",
-      "asset_class": "StaticMesh",
-      "bytes": 77536644,
-      "roots": [
-        "Source/msc_vr/WarehousePallet.cpp"
-      ],
-      "dependencies": [
-        "/Game/Scene_Warehouse/Assets/MS/3D/Ind_War_Storage_Pallet_Wood_Worn_01/MI_Ind_War_Storage_Pallet_Wood_Worn_01",
         "/Script/NavigationSystem"
       ],
       "source_group": "warehouse",
@@ -59436,7 +59422,7 @@
     "/Script/UnrealEd",
     "/Script/msc_vr"
   ],
-  "total_bytes": 2481940930,
+  "total_bytes": 2404404286,
   "git_policy": {
     "scope": "runtime_dependency_subset",
     "package_storage": "Git; files >=1MiB use Git LFS",

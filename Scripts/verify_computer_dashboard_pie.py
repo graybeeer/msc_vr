@@ -15,6 +15,7 @@ import time
 import traceback
 
 import unreal
+unreal.EditorPythonScripting.set_keep_python_script_alive(True)
 
 
 LEVEL = '/Game/FirstPerson/Lvl_FirstPerson'
@@ -26,7 +27,7 @@ KEEP = '-keeptesteditoropen' in COMMAND
 EXTERNAL = '-dashboardexternalpie' in COMMAND
 STRICT_RESOLUTION = '-dashboardstrictresolution' in COMMAND
 RESOLUTIONS = ((1600, 900), (1280, 720))
-PAGE_NAMES = ('Dispatch', 'Shipping', 'TasksAndFleet', 'Held')
+PAGE_NAMES = ('Dispatch', 'Shipping', 'TasksAndFleet', 'Held', 'Experiments', 'WarehouseProcesses')
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)

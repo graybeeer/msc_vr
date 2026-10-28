@@ -29,6 +29,31 @@
 
 아래 절차는 **원본 팩 변경·재생성 또는 사용 에셋 추가를 맡은 팀원**을 위한 것입니다. 일반 설치에서는 실행하지 않습니다. 맵을 저장하는 스크립트와 에셋만 만드는 스크립트를 아래 표에서 구분합니다.
 
+## 로컬 용량 정리
+
+`Scripts/optimize_project_storage.py`는 최신 사용 목록을 기준으로 내려받은 팩의 미사용 파일과 재생성 가능한 프로젝트 캐시를 정리합니다. 에디터·컴파일러를 닫고 Unreal Python에서 `Scripts/audit_runtime_assets.py`를 먼저 실행합니다. 소스·설정·필수 에셋이 검사 후 변경됐거나 목록이 24시간보다 오래되면 정리를 거부합니다.
+
+```powershell
+python Scripts/optimize_project_storage.py --caches
+python Scripts/optimize_project_storage.py --archive-only --caches
+```
+
+첫 명령은 미리보기이고 두 번째는 삭제 없이 미사용 패키지를 `Saved/StorageArchives/`의 ZIP으로 보관합니다. 보관본과 원본을 SHA-256으로 비교한 뒤 보고서의 `verified_archive.path`를 다음 명령에 전달합니다.
+
+```powershell
+python Scripts/optimize_project_storage.py --apply --caches --archive "Saved/StorageArchives/UnusedPackages_검사에서생성된이름.zip"
+```
+
+적용 직전에도 보관본을 다시 검증합니다. 정리 대상은 지정된 외부 팩의 **미사용·Git 미추적·무시 파일**과 `Intermediate`, `.vs`, 프로젝트 `DerivedDataCache`, `Saved/Cooked`, `Saved/Shaders`, `Saved/ShaderDebugInfo`입니다. 필수 에셋, Git 추적 파일, 자체 제작 원본, 사용자 배치·성과 기록, 검사 결과·GIF·캡처는 보존합니다. 충돌용·동적 물리용 메시가 모두 사용 중이면 양쪽을 유지합니다.
+
+보관본도 로컬 용량에 포함되며 Git에는 올리지 않습니다. 원본 팩 재생성이 필요하면 프로젝트 루트에서 `python -m zipfile -e "보관본의 실제 경로.zip" .`으로 원래 `Content/` 경로에 복원하거나 위 원본 팩을 다시 받습니다. 캐시는 다음 빌드·실행에서 다시 생성되므로 첫 준비 시간이 늘 수 있습니다. 공용 Unreal/Zen 캐시와 Git 이력은 이 도구가 삭제하지 않습니다. 과거 LFS 캐시는 원격 보관 확인 후 `git lfs prune --verify-remote`로 별도 정리합니다.
+
+검사·정리의 실제 파일 목록과 삭제한 바이트 수는 `Saved/Testing/StorageOptimization_20261029/` 보고서에 남깁니다. 게임 사용 목록과 Git 선별 기준은 [RUNTIME_ASSETS.md](RUNTIME_ASSETS.md)를 따릅니다.
+
+**2026-10-29 적용·검증:** 지정된 미사용 패키지1,202개16.13GiB를 원본과 SHA-256이 일치하는15.75GiB ZIP으로 보관하고 생성 캐시를 포함해2,137개22.56GiB를 정리했습니다. 원격 보관을 확인한 과거 LFS 캐시23개1.13GiB도 제거했습니다. 로컬 파일 길이 합계는34.96→27.06GiB, `Content`는18.78→2.58GiB입니다. 전체 합계에는 복구 ZIP·저장 기록·캡처를 포함하며 마지막 측정은 운반 검사 중 수행한 근삿값입니다. Git 이력을 다시 쓰지 않았으며 현재 사용 목록은 구형 팔레트73.94MiB를 제외한3,853개2.24GiB, LFS113개입니다.
+
+Editor 빌드 성공, 정리 보호 조건7개, Git 인덱스의 모든 필수 에셋과 LFS SHA-256, 새 프로세스의 맵5개·사용 모션32개·공통 팔레트 로딩 및 패키지 비변경, 실제 지게차 포크 삽입·승강·하역과 양방향 트럭 인계17개 검사를 통과했습니다. 결과는 같은 폴더의 `CleanupGuards.json`, `GitIndexAssets.json`, `AssetLoadReport.json`, `ShippingReport.json`에 있습니다. 저장 맵을 수정하지 않았고, OS 키 입력·다른 PC의 신규 빌드·패키징 실행 검사는 아닙니다. 지게차 주행·센서·충돌 계수와 사용 중인 동적/고정 충돌 형상은 변경하지 않았습니다.
+
 ## 1. 현재 사용 에셋의 원본 팩 4개 — 재생성 시 확보
 
 현재 게임에서 사용하는 창고·트럭·상자·애니메이션의 출처입니다. 결과 파일은 Git/LFS로 받고, 원본이 필요한 재생성 작업을 맡았을 때 본인 계정으로 해당 팩을 확보합니다. 에셋 이름을 누르면 Fab 페이지로 이동합니다. 창고·트럭·상자 팩은2026-10-06, Game Animation Sample은2026-10-16 무료 표시를 확인했습니다. 원본을 새로 받을 때 선택한 형식과 표시 가격을 확인합니다.

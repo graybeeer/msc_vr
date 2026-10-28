@@ -33,6 +33,14 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Inbound") int32 CompletedCount=0;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Inbound") int32 ConfirmedCount=0;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Inbound") FString Status;
+ // Training assumptions for an abstract receiving worker; seconds use the simulation clock.
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Inbound|Inspection",meta=(ClampMin="0.1")) float InspectionSeconds=3.f;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Inbound|Inspection",meta=(ClampMin="1",ClampMax="16")) int32 InspectionWorkers=1;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Inbound|Inspection") int32 WaitingInspectionCount=0;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Inbound|Inspection") int32 ActiveInspectionCount=0;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Inbound|Inspection") int32 QuarantinedCount=0;
+ UFUNCTION(BlueprintCallable, Category="Inbound|Inspection") bool RequestReinspection(AWarehousePallet* Pallet);
+ UFUNCTION(BlueprintCallable, Category="Inbound|Inspection") bool SetExpectedManifest(AWarehousePallet* Pallet,int32 CartonCount,const TMap<FString,int32>& CargoByKind);
  UFUNCTION(BlueprintCallable, Category="Inbound") void ScanInbound();
  UFUNCTION(BlueprintPure, Category="Inbound") bool ContainsPallet(const AWarehousePallet* Pallet) const;
  void RecordInboundConfirmed(AWarehousePallet* Pallet);
@@ -54,7 +62,12 @@ private:
   FTransform Pallet;
   TMap<TWeakObjectPtr<AActor>,FTransform> Cargo;
   bool bWrapping=false;
+  int64 QueueSequence=0;
+  double InspectionStarted=-1;
  };
  TMap<TWeakObjectPtr<AWarehousePallet>, FStableLoad> StableLoads;
+ int64 NextInspectionSequence=0;
+ bool IsBeingHandled(AWarehousePallet* Pallet,const TArray<AActor*>& Loads) const;
+ FString CheckReceivingManifest(AWarehousePallet* Pallet,const TArray<AActor*>& Loads) const;
  bool SlotClear(int32 Index, AWarehousePallet* Pallet, const TArray<AActor*>& Loads, float Height, float Mass) const;
 };

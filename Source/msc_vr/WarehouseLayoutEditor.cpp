@@ -14,6 +14,7 @@
 #include "WarehouseWorker.h"
 #include "WarehouseComputer.h"
 #include "WarehouseInboundZone.h"
+#include "WarehouseLogisticsTruck.h"
 #include "WarehouseFleetCoordinator.h"
 #include "WarehouseDamageSystem.h"
 #include "WarehousePhysics.h"
@@ -393,6 +394,18 @@ bool AWarehouseLayoutEditor::BeginDrag(AActor* HitActor,FVector FloorPoint)
  // group before disabling any collision or physics, including rack/zone contents.
  for (AActor* Member:Members) if (Member->ActorHasTag(TEXT("PlayerHeldCargo")))
  { Status=TEXT("플레이어가 들고 있는 물체는 내려놓은 뒤 편집하세요.");return false; }
+ for (TActorIterator<AWarehouseLogisticsTruck> Truck(GetWorld());Truck;++Truck)
+ {
+  const bool Busy=Truck->State==EWarehouseTruckState::Loading || Truck->State==EWarehouseTruckState::Departing ||
+   Truck->State==EWarehouseTruckState::Returning || Truck->DockServiceState==EWarehouseDockServiceState::Securing ||
+   Truck->DockServiceState==EWarehouseDockServiceState::Clearing;
+  if (!Busy) continue;
+  const FName TruckGroup=GroupOf(*Truck);
+  if (Members.ContainsByPredicate([&](AActor* Member)
+   { return Member==*Truck || Member==Truck->DockAnchor || Truck->TruckParts.Contains(Member) ||
+     (TruckGroup!=NAME_None && Member->ActorHasTag(TruckGroup)); }))
+  { Status=TEXT("트럭 진출입·상하차·도크 준비가 진행 중입니다. 도크 대기 상태에서 편집하세요.");return false; }
+ }
  for (AActor* Member:Members) if (const auto* Conveyor=Cast<AWarehouseConveyor>(Member);Conveyor && !Conveyor->IsIdleForLayout())
  { Status=TEXT("물류가 실려 있거나 승강기 인계 중인 컨베이어는 비운 뒤 편집하세요.");return false; }
  for (AActor* Member:Members) if (HandledByPalletLift(Member))

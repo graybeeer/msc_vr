@@ -14,11 +14,11 @@
 
 목록은 에셋 파일의 하드/소프트 참조를 보존하는 보수적인 의존성 폐쇄이며, 파일 내부의 미리보기·기본 재질 참조도 포함될 수 있다. 실제 Cook 결과의 바이트별 최소 목록을 뜻하지 않는다. 에디터 전용 설정의 예제 맵·콘텐츠 브라우저 폴더는 시작점에서 제외한다. 직접 로딩 경로가 없으면 보고서의 `unresolved_direct_references`에 기록하고 최신 목록 발행을 중단한다.
 
-총 3,854개 파일 · 2.31 GiB. C++ 동적 경로·맵 참조가 달라지면 `Scripts/audit_runtime_assets.py`를 Unreal Python에서 다시 실행한다. 새 목록만으로 Git에 자동 추가하지 않는다.
+총 3,853개 파일 · 2.24 GiB. C++ 동적 경로·맵 참조가 달라지면 `Scripts/audit_runtime_assets.py`를 Unreal Python에서 다시 실행한다. 새 목록만으로 Git에 자동 추가하지 않는다.
 
 | 분류 / 출처 | 용도 | 파일 수 | MiB |
 | --- | --- | ---: | ---: |
-| [Warehouse / Quixel Megascans](https://www.fab.com/listings/a3149fab-3906-4043-b6ee-3937b752a06c) | 창고 랙·팔레트·바닥·설비와 파생 충돌 | 75 | 1817.07 |
+| [Warehouse / Quixel Megascans](https://www.fab.com/listings/a3149fab-3906-4043-b6ee-3937b752a06c) | 창고 랙·팔레트·바닥·설비와 파생 충돌 | 74 | 1743.13 |
 | [Vehicle Variety Pack / Switchboard Studios](https://www.fab.com/listings/dc1ada50-2523-44b1-b0e2-a72d14076fb4) | 물류 트럭과 파생 적재함 | 29 | 323.36 |
 | [European Beech / Quixel Megascans](https://www.fab.com/listings/d11cc01d-9422-41b7-950f-416c9ce79caf) | 현재 미사용 · 과거 출처 | 0 | 0.00 |
 | [Free Shrubs Pack / Greenleaf Vision](https://www.fab.com/listings/7ca465ab-fb9c-4d6b-bddb-82c20f604657) | 현재 미사용 · 과거 출처 | 0 | 0.00 |
@@ -106,7 +106,6 @@
 | `Content/Warehouse/Physics/SM_Ind_War_Pallet_Shelf_Metal_Modular_01_G.uasset` | StaticMesh | 29.138 |
 | `Content/Warehouse/Physics/SM_Ind_War_Pallet_Shelf_Metal_Modular_01_H.uasset` | StaticMesh | 56.680 |
 | `Content/Warehouse/Physics/SM_Ind_War_Storage_Barrel_Plastic_Blue_01.uasset` | StaticMesh | 71.578 |
-| `Content/Warehouse/Physics/SM_Ind_War_Storage_Pallet_Wood_Worn_01.uasset` | StaticMesh | 73.945 |
 | `Content/Warehouse/Physics/SM_Pallet_110.uasset` | StaticMesh | 73.933 |
 
 ## Vehicle Variety Pack / Switchboard Studios

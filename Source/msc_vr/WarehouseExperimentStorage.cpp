@@ -106,6 +106,17 @@ namespace
  {
   auto Copy=MakeShared<FJsonObject>();Copy->Values=O->Values;Copy->RemoveField(TEXT("hash"));return StorageDigest(Canonical(Object(Copy)));
  }
+ EWarehouseReceivingState ReceivingOnRestore(const FObject& Row,EWarehouseReceiptState Receipt)
+ {
+  if (Receipt==EWarehouseReceiptState::WrapTorn) return EWarehouseReceivingState::Quarantined;
+  double Value=0;
+  if (!Row->TryGetNumberField(TEXT("receiving"),Value))
+   return Receipt==EWarehouseReceiptState::Confirmed ? EWarehouseReceivingState::Accepted : EWarehouseReceivingState::Awaiting;
+  const auto State=EWarehouseReceivingState(int32(Value));
+  // A layout is an initial condition, not a suspended worker coroutine. Never
+  // restore a completed timer or accept parcels without checking their new support.
+  return State==EWarehouseReceivingState::Inspecting ? EWarehouseReceivingState::Queued : State;
+ }
  FObject PoseJson(const FTransform& Pose)
  {
   auto VectorText=[](const FVector& V) { return FString::Printf(TEXT("X=%.9f Y=%.9f Z=%.9f"),V.X,V.Y,V.Z); };
@@ -332,9 +343,13 @@ bool WarehouseExperimentStorage::CanCapture(UWorld* World,FString& Error)
  for (TActorIterator<AWarehouseElevator> It(World);It;++It) if (It->State!=EWarehouseElevatorState::Idle || It->ReservedVehicle || It->CurrentFloor!=0) return Fail(Error,TEXT("범용 승강기를 빈 1층 대기 상태로 두세요."));
  for (TActorIterator<AWarehousePalletLift> It(World);It;++It) if (!It->IsIdleForLayout() || It->CurrentFloor!=0) return Fail(Error,TEXT("화물 승강기를 빈 1층 대기 상태로 두세요."));
  for (TActorIterator<AWarehouseConveyor> It(World);It;++It) if (!It->IsIdleForLayout()) return Fail(Error,TEXT("컨베이어 화물과 진행 중인 인계를 정리한 뒤 저장하세요."));
- for (TActorIterator<AWarehouseShippingSystem> It(World);It;++It) if (!It->Shipments.IsEmpty()) return Fail(Error,TEXT("배송편 실행 전 초기 조건만 저장할 수 있습니다. 새 실행에서 준비하세요."));
+ for (TActorIterator<AWarehouseShippingSystem> It(World);It;++It)
+  if (!It->Shipments.IsEmpty() || It->bContinuousOperations || It->GeneratedUnits>0)
+   return Fail(Error,TEXT("배송편·반복 입고 실행 전 초기 조건만 저장할 수 있습니다. 새 실행에서 준비하세요."));
  for (TActorIterator<AWarehouseComputer> It(World);It;++It) if (!It->Tasks.IsEmpty()) return Fail(Error,TEXT("관제 작업 실행 전 초기 조건만 저장할 수 있습니다. 새 실행에서 준비하세요."));
- for (TActorIterator<AWarehouseLogisticsTruck> It(World);It;++It) if (It->State!=EWarehouseTruckState::AtDock) return Fail(Error,TEXT("모든 트럭이 도크 대기 상태여야 합니다."));
+ for (TActorIterator<AWarehouseLogisticsTruck> It(World);It;++It)
+  if (It->State!=EWarehouseTruckState::AtDock || It->DockServiceState!=EWarehouseDockServiceState::Awaiting || It->VisitNumber!=1)
+   return Fail(Error,TEXT("모든 트럭이 첫 방문의 도크 작업 시작 전 대기 상태여야 합니다."));
  return true;
 }
 bool WarehouseExperimentStorage::Capture(UWorld* World,const FString& Name,TSharedPtr<FJsonObject>& Snapshot,FString& Error)
@@ -355,6 +370,10 @@ bool WarehouseExperimentStorage::Capture(UWorld* World,const FString& Name,TShar
   if (auto* Pallet=Cast<AWarehousePallet>(Actor))
   {
    Row->SetNumberField(TEXT("receipt"),int32(Pallet->ReceiptState));TArray<FValue> Wrapped,Supported;
+   Row->SetNumberField(TEXT("receiving"),int32(Pallet->ReceivingState));
+   const auto Receiving=ReceivingOnRestore(Row,Pallet->ReceiptState);
+   Row->SetNumberField(TEXT("receiving"),int32(Receiving));
+   Row->SetStringField(TEXT("receivingStatus"),Receiving==EWarehouseReceivingState::Queued ? TEXT("입고 NPC 검수 순서 대기") : Pallet->ReceivingStatus);
    for (auto* Cargo:Pallet->GetWrappedCargo()) Wrapped.Add(String(StableActorId(Cargo)));Row->SetArrayField(TEXT("wrapped"),Wrapped);
    if (auto* Strength=AWarehouseDamageSystem::Find(Actor))
    { Strength->EnsureSupportSnapshot();for (auto* Cargo:Strength->GetSupportedActors(Actor,false)) if (Cargo->IsA<AWarehouseCargo>() || Cargo->IsA<AWarehousePallet>()) Supported.Add(String(StableActorId(Cargo))); }
@@ -394,8 +413,8 @@ FString WarehouseExperimentStorage::CargoFingerprint(const TSharedPtr<FJsonObjec
   }
   else if (Class.EndsWith(TEXT(".WarehousePallet")))
   {
-   Data->SetStringField(TEXT("id"),Row->GetStringField(TEXT("id")));for (const TCHAR* Key:{TEXT("PalletMassKg"),TEXT("PayloadMassKg")}) if (Props->HasField(Key)) Data->SetField(Key,Props->TryGetField(Key));
-   for (const TCHAR* Key:{TEXT("receipt"),TEXT("wrapped"),TEXT("supported")}) if (Row->HasField(Key)) Data->SetField(Key,Row->TryGetField(Key));Items.Add(Canonical(Object(Data)));
+   Data->SetStringField(TEXT("id"),Row->GetStringField(TEXT("id")));for (const TCHAR* Key:{TEXT("PalletMassKg"),TEXT("PayloadMassKg"),TEXT("ExpectedCartonCount"),TEXT("ExpectedCargoByKind")}) if (Props->HasField(Key)) Data->SetField(Key,Props->TryGetField(Key));
+   for (const TCHAR* Key:{TEXT("receipt"),TEXT("receiving"),TEXT("wrapped"),TEXT("supported")}) if (Row->HasField(Key)) Data->SetField(Key,Row->TryGetField(Key));Items.Add(Canonical(Object(Data)));
   }
   else if (Class.EndsWith(TEXT(".WarehouseLayoutInventory")) && Props->HasField(TEXT("HeldCargo"))) Items.Add(Canonical(Props->TryGetField(TEXT("HeldCargo"))));
  }
@@ -416,6 +435,13 @@ bool WarehouseExperimentStorage::Validate(UWorld* World,const TSharedPtr<FJsonOb
       !Row->TryGetObjectField(TEXT("pose"),Transform) || !PoseFrom(*Transform,Pose) || !Row->TryGetArrayField(TEXT("parts"),Parts)) return Fail(Error,TEXT("중복 ID 또는 유효하지 않은 액터 자세: ")+ActorId);
   UClass* Type=AssetAllowed(Class) ? LoadObject<UClass>(nullptr,*Class) : nullptr;
   if (!AllowedActorClass(Type)) return Fail(Error,TEXT("지원하지 않거나 누락된 액터 클래스: ")+Class);
+  if (Type->IsChildOf(AWarehousePallet::StaticClass()) && Row->HasField(TEXT("receiving")))
+  {
+   double Receiving=0;FString ReceivingStatus;
+   if (!Row->TryGetNumberField(TEXT("receiving"),Receiving) || !FMath::IsFinite(Receiving) || Receiving!=FMath::FloorToDouble(Receiving) ||
+       Receiving<0 || Receiving>int32(EWarehouseReceivingState::Accepted) || !Row->TryGetStringField(TEXT("receivingStatus"),ReceivingStatus))
+    return Fail(Error,TEXT("유효하지 않은 입고 검수 기록: ")+ActorId);
+  }
   if ((Type->IsChildOf(AStaticMeshActor::StaticClass()) || Type->IsChildOf(ALight::StaticClass())) && Parts->IsEmpty())
    return Fail(Error,TEXT("배치의 메시·조명 부품 기록이 없습니다. 배치를 다시 저장하세요: ")+ActorId);
   Ids.Add(ActorId);TSet<FString> PartNames;
@@ -549,6 +575,11 @@ bool WarehouseExperimentStorage::FinalizeAfterBeginPlay(UWorld* World,const TSha
   if (int32(Receipt)==int32(EWarehouseReceiptState::Confirmed))
   { TArray<AActor*> Loads;for (const auto& Id:Row->GetArrayField(TEXT("wrapped"))) { AActor* Cargo=ResolveActorId(World,Id->AsString());if (!Cargo) return Fail(Error,TEXT("랩 안의 화물 참조가 끊어졌습니다."));Loads.Add(Cargo); }if (!Pallet->ConfirmInbound(Loads)) return Fail(Error,TEXT("팔레트 랩 초기화 실패: ")+Pallet->GetName()); }
   else if (int32(Receipt)==int32(EWarehouseReceiptState::WrapTorn)) Pallet->ReceiptState=EWarehouseReceiptState::WrapTorn;
+  Pallet->ReceivingState=ReceivingOnRestore(Row,Pallet->ReceiptState);
+  Row->TryGetStringField(TEXT("receivingStatus"),Pallet->ReceivingStatus);
+  if (Pallet->ReceivingState==EWarehouseReceivingState::Queued) Pallet->ReceivingStatus=TEXT("입고 NPC 검수 순서 대기");
+  else if (Pallet->ReceivingState==EWarehouseReceivingState::Quarantined && Pallet->ReceivingStatus.IsEmpty())
+   Pallet->ReceivingStatus=TEXT("품질 확인 후 재검수 요청 필요");
  }
  UWarehouseChargerWiring::RefreshConnections(World);
  return true;
@@ -696,6 +727,27 @@ bool FWarehouseExperimentStorageValues::RunTest(const FString& Parameters)
  TestTrue(TEXT("Legacy rectangular layout remains readable"),Decode(BuildingProperty,&LegacyRestored,Legacy,Actors,Error));
  TestFalse(TEXT("Legacy layout keeps rectangle mode"),LegacyRestored.Floor2.bUseTileMask || LegacyRestored.Floor3.bUseTileMask || LegacyRestored.Floor4.bUseTileMask);
  TestTrue(TEXT("Legacy layout has no implicit tile data"),LegacyRestored.Floor2.Tiles.IsEmpty() && LegacyRestored.Floor3.Tiles.IsEmpty());
+ TMap<FString,int32> Expected,RestoredExpected;Expected.Add(TEXT("상품 A"),2);Expected.Add(TEXT("상품 B"),1);
+ RoundTrip(FindFProperty<FProperty>(AWarehousePallet::StaticClass(),TEXT("ExpectedCargoByKind")),&Expected,&RestoredExpected,TEXT("Receiving manifest kind/count map"));
+ auto ReceivingRow=MakeShared<FJsonObject>();
+ TestEqual(TEXT("Old confirmed inventory stays accepted"),ReceivingOnRestore(ReceivingRow,EWarehouseReceiptState::Confirmed),EWarehouseReceivingState::Accepted);
+ TestEqual(TEXT("Old torn film requires explicit reinspection"),ReceivingOnRestore(ReceivingRow,EWarehouseReceiptState::WrapTorn),EWarehouseReceivingState::Quarantined);
+ ReceivingRow->SetNumberField(TEXT("receiving"),int32(EWarehouseReceivingState::Inspecting));
+ TestEqual(TEXT("Worker timer restarts queued after loading"),ReceivingOnRestore(ReceivingRow,EWarehouseReceiptState::Pending),EWarehouseReceivingState::Queued);
+ ReceivingRow->SetNumberField(TEXT("receiving"),int32(EWarehouseReceivingState::Quarantined));
+ TestEqual(TEXT("Quality hold survives loading"),ReceivingOnRestore(ReceivingRow,EWarehouseReceiptState::Pending),EWarehouseReceivingState::Quarantined);
+ ReceivingRow->SetStringField(TEXT("id"),TEXT("pallet-test"));ReceivingRow->SetStringField(TEXT("class"),TEXT("/Script/msc_vr.WarehousePallet"));
+ auto ReceivingProperties=MakeShared<FJsonObject>();ReceivingProperties->SetNumberField(TEXT("ExpectedCartonCount"),3);
+ ReceivingProperties->SetField(TEXT("ExpectedCargoByKind"),Encode(FindFProperty<FProperty>(AWarehousePallet::StaticClass(),TEXT("ExpectedCargoByKind")),&Expected,Actors,Error));
+ ReceivingRow->SetObjectField(TEXT("properties"),ReceivingProperties);
+ auto ReceivingSnapshot=MakeShared<FJsonObject>();ReceivingSnapshot->SetArrayField(TEXT("actors"),{Object(ReceivingRow)});
+ const FString InitialCargoHash=WarehouseExperimentStorage::CargoFingerprint(ReceivingSnapshot);
+ ReceivingProperties->SetNumberField(TEXT("ExpectedCartonCount"),4);
+ TestNotEqual(TEXT("Expected quantity is a common experiment condition"),WarehouseExperimentStorage::CargoFingerprint(ReceivingSnapshot),InitialCargoHash);
+ ReceivingProperties->SetNumberField(TEXT("ExpectedCartonCount"),3);ReceivingRow->SetNumberField(TEXT("receiving"),int32(EWarehouseReceivingState::Awaiting));
+ TestNotEqual(TEXT("Quality availability is a common experiment condition"),WarehouseExperimentStorage::CargoFingerprint(ReceivingSnapshot),InitialCargoHash);
+ const FString InitialStorageHash=SnapshotHash(ReceivingSnapshot);ReceivingRow->SetStringField(TEXT("receivingStatus"),TEXT("수량 불일치"));
+ TestNotEqual(TEXT("Inspection message participates in storage checksum"),SnapshotHash(ReceivingSnapshot),InitialStorageHash);
  return !HasAnyErrors();
 }
 #endif

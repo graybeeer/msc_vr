@@ -3,6 +3,7 @@
 #include "WarehouseDamageSystem.h"
 #include "WarehousePhysics.h"
 #include "WarehouseInboundZone.h"
+#include "WarehouseForklift.h"
 #include "msc_vrCharacter.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SplineMeshComponent.h"
@@ -20,6 +21,10 @@ AWarehousePallet* AWarehouseCargo::GetWrappedPallet() const
 
 FText AWarehousePallet::GetReceiptDescription() const
 {
+ if (ReceivingState==EWarehouseReceivingState::Quarantined)
+  return FText::FromString(TEXT("품질 격리 · ")+ReceivingStatus);
+ if (!bWrapping && ReceiptState==EWarehouseReceiptState::Pending && !ReceivingStatus.IsEmpty())
+  return FText::FromString(ReceivingStatus);
  return FText::FromString(bWrapping ? TEXT("입고 검수 완료 · 랩 포장 중") : ReceiptState==EWarehouseReceiptState::Confirmed ?
   TEXT("입고 확정 · 랩 포장") : ReceiptState==EWarehouseReceiptState::WrapTorn ?
   TEXT("랩 파손 · 재검수 필요") : TEXT("입고 미확정"));
@@ -35,7 +40,8 @@ TArray<AWarehouseCargo*> AWarehousePallet::GetWrappedCargo() const
 
 bool AWarehousePallet::GetWrappableCargo(const TArray<AActor*>& Loads,TArray<AWarehouseCargo*>& Cargo,bool Refresh)
 {
- if (ReceiptState!=EWarehouseReceiptState::Pending || !Body->IsSimulatingPhysics()) return false;
+ if (ReceiptState!=EWarehouseReceiptState::Pending || ReceivingState==EWarehouseReceivingState::Quarantined ||
+     ActorHasTag(TEXT("LogisticsInTransit")) || !Body->IsSimulatingPhysics()) return false;
  auto* Strength=AWarehouseDamageSystem::Find(this);
  if (!Strength || Strength->HasFailed(this)) return false;
  for (auto* Load:Loads) if (!IsValid(Load)) return false;
@@ -56,6 +62,11 @@ bool AWarehousePallet::GetWrappableCargo(const TArray<AActor*>& Loads,TArray<AWa
  for (auto* Actor:Supported) if (auto* Box=Cast<AWarehouseCargo>(Actor);Box && !Cargo.Contains(Box)) return false;
  for (TActorIterator<Amsc_vrCharacter> It(GetWorld());It;++It)
   if (It->GetHeldCargo()==this || Supported.Contains(It->GetHeldCargo())) return false;
+ for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
+ {
+  if (It->GetSupportedPallet()==this || It->ActiveJob.Pallet==this) return false;
+  for (const auto& Job:It->PendingJobs) if (Job.Pallet==this) return false;
+ }
  return true;
 }
 
@@ -94,6 +105,8 @@ void AWarehousePallet::CancelInboundWrapping()
   if (WrappingPreviousForceDisableNanite.IsValidIndex(I)) WrappingParts[I]->SetForceDisableNanite(WrappingPreviousForceDisableNanite[I]);
  }
  WrappingParts.Reset();WrappingPreviousOverlays.Reset();WrappingPreviousForceDisableNanite.Reset();WrappingPoses.Reset();WrappingCargo.Reset();WrappingZone.Reset();WrappingStartedSeconds=-1;bWrapping=false;
+ if (ReceiptState==EWarehouseReceiptState::Pending && ReceivingState==EWarehouseReceivingState::Inspecting)
+ { ReceivingState=EWarehouseReceivingState::Awaiting;ReceivingStatus=TEXT("랩 포장 중단 · 적재 안정 후 검수 재개"); }
  if (ReceiptState!=EWarehouseReceiptState::Confirmed) SetActorTickEnabled(false);
 }
 
@@ -155,6 +168,7 @@ bool AWarehousePallet::ConfirmInbound(const TArray<AActor*>& Loads,bool Refresh)
   Box->WrappedPallet=this;WrapJoints.Add(Joint);
  }
  ReceiptState=EWarehouseReceiptState::Confirmed;
+ ReceivingState=EWarehouseReceivingState::Accepted;ReceivingStatus=TEXT("입고 검수 완료 · 수락 재고");
  BuildWrapFilm();SetActorTickEnabled(true);
  UE_LOG(LogTemp,Log,TEXT("INBOUND_CONFIRMED %s cartons=%d"),*GetName(),WrappedCargo.Num());
  return true;
@@ -250,6 +264,7 @@ void AWarehousePallet::TearWrap()
  if (bWrapping) CancelInboundWrapping();
  if (ReceiptState!=EWarehouseReceiptState::Confirmed) return;
  ReceiptState=EWarehouseReceiptState::WrapTorn;
+ ReceivingState=EWarehouseReceivingState::Quarantined;ReceivingStatus=TEXT("랩 파손 · 적재 확인 후 재검수 요청 필요 [WRAP_TORN]");
  for (UPhysicsConstraintComponent* Joint:WrapJoints) if (Joint) Joint->DestroyComponent();
  WrapJoints.Reset();
  for (AWarehouseCargo* Box:WrappedCargo) if (IsValid(Box)) { Box->WrappedPallet.Reset();Box->GetCargoBody()->WakeAllRigidBodies(); }

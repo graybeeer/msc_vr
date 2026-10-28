@@ -112,7 +112,6 @@ Content/Warehouse/Physics/SM_Ind_War_Pallet_Shelf_Metal_Modular_01_F.uasset filt
 Content/Warehouse/Physics/SM_Ind_War_Pallet_Shelf_Metal_Modular_01_G.uasset filter=lfs diff=lfs merge=lfs -text
 Content/Warehouse/Physics/SM_Ind_War_Pallet_Shelf_Metal_Modular_01_H.uasset filter=lfs diff=lfs merge=lfs -text
 Content/Warehouse/Physics/SM_Ind_War_Storage_Barrel_Plastic_Blue_01.uasset filter=lfs diff=lfs merge=lfs -text
-Content/Warehouse/Physics/SM_Ind_War_Storage_Pallet_Wood_Worn_01.uasset filter=lfs diff=lfs merge=lfs -text
 Content/Warehouse/Physics/SM_Pallet_110.uasset filter=lfs diff=lfs merge=lfs -text
 Content/Warehouse/Services/SupportBatches/SM_SM_Support_0_Roof.uasset filter=lfs diff=lfs merge=lfs -text
 Content/Warehouse/Services/SupportBatches/SM_SM_Support_1.uasset filter=lfs diff=lfs merge=lfs -text

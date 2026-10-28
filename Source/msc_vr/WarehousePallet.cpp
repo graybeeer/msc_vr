@@ -17,22 +17,12 @@ AWarehousePallet::AWarehousePallet()
  WrapMaterial=TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Warehouse/Materials/M_PalletWrap.M_PalletWrap")));
  WrappingHighlightMaterial=TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Warehouse/Materials/M_PalletWrappingWhite.M_PalletWrappingWhite")));
  RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
- static ConstructorHelpers::FObjectFinder<UStaticMesh> Pallet(TEXT("/Game/Warehouse/Physics/SM_Ind_War_Storage_Pallet_Wood_Worn_01"));
+ // Use the prepared 110 cm mesh directly; loading its source copy first doubles resident geometry.
+ static ConstructorHelpers::FObjectFinder<UStaticMesh> Pallet(TEXT("/Game/Warehouse/Physics/SM_Pallet_110"));
  Body=CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PalletMesh"));
  Body->SetupAttachment(RootComponent);
  Body->SetCollisionProfileName(TEXT("PhysicsActor"));
  Body->SetStaticMesh(Pallet.Object);
- if (auto* Prepared=LoadObject<UStaticMesh>(nullptr,TEXT("/Game/Warehouse/Physics/SM_Pallet_110")))
- {
-  Body->SetStaticMesh(Prepared);
- }
- else if (Pallet.Succeeded())
- {
-  const FBox Bounds=Pallet.Object->GetBoundingBox();
-  const FVector Scale=FVector(110,110,15)/Bounds.GetSize();
-  Body->SetRelativeScale3D(Scale);
-  Body->SetRelativeLocation(FVector(-Bounds.GetCenter().X,-Bounds.GetCenter().Y,-Bounds.Min.Z)*Scale);
- }
 }
 void AWarehousePallet::BeginPlay()
 {

@@ -47,7 +47,7 @@ AWarehouseShippingSystem* AWarehouseShippingSystem::Find(const AActor* Context)
  for (TActorIterator<AWarehouseShippingSystem> It(Context->GetWorld());It;++It) return *It;
  return Context->GetWorld()->SpawnActor<AWarehouseShippingSystem>();
 }
-void AWarehouseShippingSystem::Tick(float Dt) { Super::Tick(Dt);RefreshShipping(); }
+void AWarehouseShippingSystem::Tick(float Dt) { Super::Tick(Dt);RefreshShipping();AdvanceOperations(); }
 FString AWarehouseShippingSystem::GetPalletShipment(AWarehousePallet* P) const
 {
  for (const auto& S:Shipments) if (!Finished(S))
@@ -78,7 +78,7 @@ bool AWarehouseShippingSystem::Create(const FString& Name,const TArray<AWarehous
  const auto* Zone=Zones.FindByPredicate([&](const auto& Z) { return Z.ZoneId==ZoneId; });
  if (!Zone || !IsValid(Zone->Anchor) || Zone->Slots.IsEmpty()) return Fail(TEXT("입출고 구역 또는 팔레트 자리가 없습니다. [NO_STAGING_ZONE]"));
  if (Zone->bInbound!=(Direction==EWarehouseShipmentDirection::Inbound)) return Fail(TEXT("입고·출고 구역의 역할이 맞지 않습니다."));
- if (!IsValid(Truck) || !Trucks.Contains(Truck) || Truck->State==EWarehouseTruckState::Departing || Truck->State==EWarehouseTruckState::Departed)
+ if (!IsValid(Truck) || !Trucks.Contains(Truck) || Truck->State==EWarehouseTruckState::Departing || Truck->State==EWarehouseTruckState::Departed || Truck->State==EWarehouseTruckState::Returning)
   return Fail(TEXT("배송편에 사용할 트럭이 없습니다. [NO_TRUCK]"));
  if (!Truck->IsManifestReady()) return Fail(TEXT("트럭의 초기 입고 명세를 확인 중이거나 초기화 오류가 있습니다."));
  for (const auto& S:Shipments) if (!Finished(S) && S.Truck==Truck) return Fail(TEXT("이 트럭은 다른 배송편에 배정되어 있습니다."));
@@ -92,7 +92,7 @@ bool AWarehouseShippingSystem::Create(const FString& Name,const TArray<AWarehous
  TSet<AWarehousePallet*> Unique;float TotalMass=0;
  FWarehouseShipment S;S.Name=Name.TrimStartAndEnd().IsEmpty() ? TEXT("배송편") : Name.Left(80);
  S.ShipmentId=FString::Printf(TEXT("SHIP-%s-%06d"),*GetName(),NextShipment);
- S.ZoneId=ZoneId;S.Direction=Direction;S.Truck=Truck;S.StartedAt=GetWorld()->GetTimeSeconds();
+ S.ZoneId=ZoneId;S.Direction=Direction;S.Truck=Truck;S.TruckVisitId=Truck->GetVisitId();S.StartedAt=GetWorld()->GetTimeSeconds();
  TSet<int32> ReservedSlots;
  for (const auto& Existing:Shipments) if (!Finished(Existing) && Existing.ZoneId==ZoneId)
   for (const auto& L:Existing.Lines) ReservedSlots.Add(L.StagingSlot);
@@ -112,6 +112,8 @@ bool AWarehouseShippingSystem::Create(const FString& Name,const TArray<AWarehous
   }
   else
   {
+   if (P->ReceiptState!=EWarehouseReceiptState::Confirmed || P->ReceivingState!=EWarehouseReceivingState::Accepted)
+    return Fail(TEXT("입고 검수·랩핑이 완료되지 않았거나 격리된 물류는 출고할 수 없습니다. [QUALITY_HOLD]"));
    if (P->ActorHasTag(TEXT("LogisticsInTransit")) || Held(this,P,L.Cargo)) return Fail(TEXT("운반 중이거나 사람이 든 팔레트는 예약할 수 없습니다."));
    if (L.Cargo.IsEmpty()) return Fail(TEXT("빈 팔레트는 출고 명세로 사용할 수 없습니다."));
   }
@@ -142,7 +144,7 @@ bool AWarehouseShippingSystem::HasHandover(const FWarehouseShipmentLine& L,const
  if (!Body->IsSimulatingPhysics() || Body->GetPhysicsLinearVelocity().Size()>5 || Body->GetPhysicsAngularVelocityInDegrees().Size()>5 || Held(this,L.Pallet,L.Cargo))
   return Fail(TEXT("팔레트의 정지·포크 인출을 기다립니다."));
  auto* Strength=AWarehouseDamageSystem::Find(this);
- if (!Strength || Strength->HasFailed(L.Pallet) || L.Pallet->ReceiptState==EWarehouseReceiptState::WrapTorn)
+ if (!Strength || Strength->HasFailed(L.Pallet) || L.Pallet->ReceiptState!=EWarehouseReceiptState::Confirmed || L.Pallet->ReceivingState!=EWarehouseReceivingState::Accepted)
   return Fail(TEXT("팔레트가 파손되어 검수가 필요합니다."));
  const auto Actual=Contents(Strength,L.Pallet);
  if (Actual.Num()!=L.Cargo.Num()) return Fail(TEXT("예약 후 팔레트 적재 명세가 바뀌었습니다."));
@@ -222,7 +224,7 @@ void AWarehouseShippingSystem::RefreshShipping()
   S.ElapsedSeconds=GetWorld()->GetTimeSeconds()-S.StartedAt;
   const auto* Zone=Zones.FindByPredicate([&](const auto& Z) { return Z.ZoneId==S.ZoneId; });
   S.WaitReason.Reset();
-  if (!IsValid(S.Truck)) { S.WaitReason=TEXT("배정 트럭이 없습니다. [NO_TRUCK]");continue; }
+  if (!IsValid(S.Truck)) { for (auto& L:S.Lines) { L.PreparationStartedAt=-1;L.bPrepared=false; } S.WaitReason=TEXT("배정 트럭이 없습니다. [NO_TRUCK]");continue; }
   if (S.State==EWarehouseShipmentState::Departing)
   {
    if (S.Truck->State==EWarehouseTruckState::Departed)
@@ -230,7 +232,7 @@ void AWarehouseShippingSystem::RefreshShipping()
    if (S.Truck->State==EWarehouseTruckState::Unavailable) S.WaitReason=TEXT("출발 중 트럭 구성 오류: ")+S.Truck->Status;
    continue;
   }
-  if (!Zone || !IsValid(Zone->Anchor)) { S.WaitReason=TEXT("입출고 구역이 없습니다. [NO_STAGING_ZONE]");S.bCargoReady=false;continue; }
+  if (!Zone || !IsValid(Zone->Anchor)) { for (auto& L:S.Lines) { L.PreparationStartedAt=-1;L.bPrepared=false; } S.WaitReason=TEXT("입출고 구역이 없습니다. [NO_STAGING_ZONE]");S.bCargoReady=false;continue; }
   Advance(S,*Zone);
  }
 }
@@ -244,13 +246,16 @@ void AWarehouseShippingSystem::Advance(FWarehouseShipment& S,const FWarehouseShi
  {
   if (!IsValid(L.Pallet) || !Z.Slots.IsValidIndex(L.StagingSlot))
   {
+   for (auto& Line:S.Lines) { Line.PreparationStartedAt=-1;Line.bPrepared=false; }
    L.Status=!IsValid(L.Pallet) ? TEXT("팔레트 누락 [MISSING_PALLET]") : TEXT("예약한 대기 자리 누락 [MISSING_STAGING_SLOT]");
    S.WaitReason=L.Status;S.bCargoReady=false;S.bTruckReady=Truck->IsReady();return;
   }
  }
  const bool DispatchDue=Now>=S.NextDispatchAt;
  if (DispatchDue) S.NextDispatchAt=Now+1.;
- S.bTruckReady=Truck->IsReady();bool All=true;
+ const bool NeedsHandling=S.Lines.ContainsByPredicate([&](const auto& L) { return S.Direction==EWarehouseShipmentDirection::Outbound ? !L.bLoaded : !L.bArrived; });
+ if (NeedsHandling && Truck->IsReady()) Truck->PrepareDock();
+ S.bTruckReady=Truck->IsDockPrepared();bool All=true;
  for (auto& L:S.Lines)
  {
   if (!IsValid(L.Pallet)) { L.Status=TEXT("팔레트 누락");S.WaitReason=L.Status;All=false;continue; }
@@ -271,6 +276,17 @@ void AWarehouseShippingSystem::Advance(FWarehouseShipment& S,const FWarehouseShi
   else if (L.StableSince<0) L.StableSince=Now;
   L.bArrived=Ready && Now-L.StableSince>=.5;
   L.Status=L.bArrived ? TEXT("출고 구역 인계 완료") : Reported ? Reason : TEXT("지게차 운반 대기 / 진행 중");
+  if (!L.bArrived) { L.bPrepared=false;L.PreparationStartedAt=-1; }
+  else if (!L.bPrepared)
+  {
+   int32 Busy=0;
+   for (const auto& Other:Shipments) if (!Finished(Other)) for (const auto& Line:Other.Lines)
+    if (Line.PreparationStartedAt>=0 && !Line.bPrepared) ++Busy;
+   if (L.PreparationStartedAt<0 && Busy<FMath::Max(1,OutboundPreparationStations)) L.PreparationStartedAt=Now;
+   if (L.PreparationStartedAt>=0 && Now-L.PreparationStartedAt>=FMath::Max(.1f,OutboundPreparationSeconds)) L.bPrepared=true;
+   L.Status=L.bPrepared ? TEXT("검품·배송 라벨 준비 완료") : L.PreparationStartedAt<0 ? TEXT("출고 작업대 대기") : TEXT("검품·배송 라벨 처리 중");
+   if (!L.bPrepared) { All=false;S.WaitReason=L.Status; }
+  }
   if (!L.bArrived)
   {
    All=false;
@@ -298,7 +314,7 @@ void AWarehouseShippingSystem::Advance(FWarehouseShipment& S,const FWarehouseShi
  S.State=Transferred ? EWarehouseShipmentState::Transferring : All ? EWarehouseShipmentState::WaitingTruck : EWarehouseShipmentState::Preparing;
  S.Status=S.Direction==EWarehouseShipmentDirection::Outbound ? TEXT("출고 준비 · 지게차 운반") : TEXT("입고 하역 대기");
  if (S.Direction==EWarehouseShipmentDirection::Outbound && !All) return;
- if (!S.bTruckReady)
+ if (!Truck->IsReady())
  { S.WaitReason=Truck->Status.IsEmpty() ? TEXT("지정 도크의 트럭 준비를 기다립니다.") : Truck->Status;return; }
  const bool Complete=S.Lines.ContainsByPredicate([&](const auto& L) { return S.Direction==EWarehouseShipmentDirection::Outbound ? !L.bLoaded : !L.bArrived; })==false;
  if (Complete)
@@ -307,10 +323,12 @@ void AWarehouseShippingSystem::Advance(FWarehouseShipment& S,const FWarehouseShi
    Truck->ManifestPallets.Num()==S.Lines.Num() && !Truck->ManifestPallets.ContainsByPredicate([&](AWarehousePallet* P) { return !S.Lines.ContainsByPredicate([&](const auto& L) { return L.Pallet==P && L.bLoaded; }); });
   if (!ManifestCorrect) { S.WaitReason=TEXT("트럭 적재 명세가 배송편과 일치하지 않습니다.");return; }
   S.State=EWarehouseShipmentState::ReadyToDepart;S.Status=TEXT("명세 확인 완료 · 출발 준비");
+  if (!Truck->PrepareDeparture() || !Truck->IsDeparturePrepared()) { S.WaitReason=Truck->DockServiceStatus;return; }
   if (Truck->Depart()) { S.State=EWarehouseShipmentState::Departing;S.Status=TEXT("트럭 출발 중"); }
   else S.WaitReason=Truck->Status;
   return;
  }
+ if (!Truck->PrepareDock() || !Truck->IsDockPrepared()) { S.WaitReason=Truck->DockServiceStatus;return; }
  if (Now<S.NextTransferAt) return;
  for (auto& L:S.Lines)
  {

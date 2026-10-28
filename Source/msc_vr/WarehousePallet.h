@@ -12,6 +12,10 @@ class AWarehouseInboundZone;
 UENUM(BlueprintType)
 enum class EWarehouseReceiptState : uint8 { Pending, Confirmed, WrapTorn };
 
+// Business acceptance is separate from the film's physical condition.
+UENUM(BlueprintType)
+enum class EWarehouseReceivingState : uint8 { Awaiting, Queued, Inspecting, Quarantined, Accepted };
+
 /** Existing Fab wooden pallet, fitted to 110 x 110 x 15 cm. */
 UCLASS()
 class MSC_VR_API AWarehousePallet : public AActor
@@ -23,6 +27,11 @@ public:
  virtual void Tick(float DeltaSeconds) override;
  virtual void EndPlay(const EEndPlayReason::Type Reason) override;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Inbound") EWarehouseReceiptState ReceiptState=EWarehouseReceiptState::Pending;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Inbound|Inspection") EWarehouseReceivingState ReceivingState=EWarehouseReceivingState::Awaiting;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Inbound|Inspection") FString ReceivingStatus;
+ // Zero/empty means unspecified, not an empty delivery. Counts refer to cartons, not product units inside them.
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Inbound|Inspection",meta=(ClampMin="0")) int32 ExpectedCartonCount=0;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Inbound|Inspection") TMap<FString,int32> ExpectedCargoByKind;
  // Training assumptions for one carton-to-pallet film connection, not certified film data.
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Inbound|Wrap",meta=(ClampMin="1")) float WrapBreakForceN=1500;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Inbound|Wrap",meta=(ClampMin="1")) float WrapBreakTorqueNm=250;

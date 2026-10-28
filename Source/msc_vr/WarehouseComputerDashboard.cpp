@@ -1,5 +1,6 @@
 #include "WarehouseComputerDashboard.h"
 #include "WarehouseExperimentUI.h"
+#include "WarehouseOperationsUI.h"
 #include "WarehousePlayMode.h"
 #include "WarehouseComputer.h"
 #include "WarehouseCargo.h"
@@ -81,13 +82,13 @@ public:
   AutomaticVehicle=MakeShared<FDashboardVehicle>();SelectedVehicle=AutomaticVehicle;
   Refresh();RefreshHeld();
   auto Tabs=SNew(SHorizontalBox);
-  const TCHAR* Titles[]={TEXT("운반 지시"),TEXT("배송편"),TEXT("작업 · 차량"),TEXT("보류 물류"),TEXT("실험 · 성과")};
+  const TCHAR* Titles[]={TEXT("운반 지시"),TEXT("배송편"),TEXT("작업 · 차량"),TEXT("보류 물류"),TEXT("실험 · 성과"),TEXT("창고 공정")};
   for (int32 Index=0;Index<UE_ARRAY_COUNT(Titles);++Index)
   {
    TSharedPtr<SButton> Tab;
    Tabs->AddSlot().FillWidth(1).Padding(Index ? 4 : 0,0,0,0)
    [SAssignNew(Tab,SButton).ContentPadding(FMargin(14,12)).IsFocusable(false)
-    .Visibility(AWarehousePlayStage::IsPlay(Computer.Get()) && Index>=3 ? EVisibility::Collapsed : EVisibility::Visible)
+    .Visibility(AWarehousePlayStage::IsPlay(Computer.Get()) && (Index==3 || Index==4) ? EVisibility::Collapsed : EVisibility::Visible)
     .ButtonColorAndOpacity_Lambda([this,Index]() { return Page==Index ? Primary : Surface; })
     .OnClicked_Lambda([this,Index]() { Page=Index;bConfirmDeleteHeld=false;return FReply::Handled(); })
     [SNew(STextBlock).Text(FText::FromString(Titles[Index])).Font(WarehouseUIStyle::Font(18,true))
@@ -125,7 +126,8 @@ public:
        +SWidgetSwitcher::Slot()[BuildShipping()]
        +SWidgetSwitcher::Slot()[BuildOperations()]
        +SWidgetSwitcher::Slot()[BuildHeld()]
-       +SWidgetSwitcher::Slot()[MakeWarehouseExperimentPanel(Controller.Get())]]]
+       +SWidgetSwitcher::Slot()[MakeWarehouseExperimentPanel(Controller.Get())]
+       +SWidgetSwitcher::Slot()[MakeWarehouseOperationsPanel(Computer.Get(),Controller.Get())]]]
     +SVerticalBox::Slot().AutoHeight().Padding(0,12,0,0)[SNew(SBorder).Padding(FMargin(12,8))
      .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(Surface)
      [SNew(SHorizontalBox)

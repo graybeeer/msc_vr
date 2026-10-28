@@ -11,7 +11,10 @@ class ACharacter;
 class UPoseableMeshComponent;
 
 UENUM(BlueprintType)
-enum class EWarehouseTruckState : uint8 { AtDock, Loading, Departing, Departed, Unavailable };
+enum class EWarehouseTruckState : uint8 { AtDock, Loading, Departing, Departed, Unavailable, Returning };
+
+UENUM(BlueprintType)
+enum class EWarehouseDockServiceState : uint8 { Awaiting, Securing, Ready, Clearing, Released };
 
 /** Deliberately cinematic dock handling. Warehouse units retain their actors, recipes and damage. */
 UCLASS()
@@ -47,6 +50,25 @@ public:
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Logistics",meta=(ClampMin="1")) float DepartureSpeedCm=300;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Logistics") EWarehouseTruckState State=EWarehouseTruckState::AtDock;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Logistics") FString Status;
+ // Educational service-time assumptions, not certified dock safety control.
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Logistics|Dock",meta=(ClampMin="0")) float DockPreparationSeconds=3;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Logistics|Dock",meta=(ClampMin="0")) float DockClearanceSeconds=2;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Logistics|Dock") EWarehouseDockServiceState DockServiceState=EWarehouseDockServiceState::Awaiting;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Logistics|Dock") FString DockServiceStatus;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Logistics|Dock") float DockServiceRemainingSeconds=0;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Logistics|Dock") bool bVehicleRestrained=false;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Logistics|Dock") bool bDockDoorOpen=false;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Logistics|Dock") bool bLevellerReady=false;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Logistics|Visit") int32 VisitNumber=1;
+ UFUNCTION(BlueprintPure,Category="Logistics|Visit") FString GetVisitId() const;
+ UFUNCTION(BlueprintCallable,Category="Logistics|Dock") bool PrepareDock();
+ UFUNCTION(BlueprintPure,Category="Logistics|Dock") bool IsDockPrepared() const;
+ UFUNCTION(BlueprintCallable,Category="Logistics|Dock") bool PrepareDeparture();
+ UFUNCTION(BlueprintPure,Category="Logistics|Dock") bool IsDeparturePrepared() const;
+ // Reuse only the departed vehicle presentation. Previous cargo is archived,
+ // never returned to warehouse stock or used to seed the next visit.
+ UFUNCTION(BlueprintCallable,Category="Logistics|Visit") bool ReturnForNextVisit();
+ UFUNCTION(BlueprintCallable,Category="Logistics|Visit") bool QueueArrivalManifest(const TArray<AWarehousePallet*>& Pallets);
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Logistics") TArray<TObjectPtr<AWarehousePallet>> ManifestPallets;
  // Authored stock for a new visit; live manifest remains read-only and verified.
  UPROPERTY(EditInstanceOnly,BlueprintReadWrite,Category="Logistics") TArray<TObjectPtr<AWarehousePallet>> InitialPallets;
@@ -71,6 +93,7 @@ private:
  {
   TWeakObjectPtr<AActor> Actor;
   FTransform RelativePose;
+  bool bHidden=false,bCollisionEnabled=true;
  };
  struct FUnit
  {
@@ -88,13 +111,18 @@ private:
   FTransform LocalPalletPose;
  };
  TArray<FUnit> Units;
+ TArray<FUnit> ArchivedUnits;
  TArray<TWeakObjectPtr<AWarehousePallet>> InitialManifest;
  TArray<FUnitMember> DockParts;
  TArray<FUnitMember> DepartureParts;
  FTransform LastPose;
  float MeasuredSpeedCm=0,TransferRemaining=0;
  int32 RouteIndex=0;
+ TArray<FVector> ReturnRoute;
+ FTransform ReturnDockPose;
+ float DockServiceElapsed=0,DockServiceDuration=0;
  bool bConfigurationUnavailable=false;
+ EWarehouseTruckState StateBeforeConfigurationFailure=EWarehouseTruckState::AtDock;
  bool bInitialManifestError=false;
  bool PartsValid() const;
  bool Fail(const FString& Message);
@@ -103,4 +131,6 @@ private:
  static void RestoreUnit(FUnit& Unit);
  static FBox UnitBounds(const FUnit& Unit,const FTransform& PalletPose,const FTransform& Reference);
  bool FitsSlot(const FUnit& Unit,const FTransform& PalletPose,int32 Slot) const;
+ void ResetDockService();
+ void AdvanceDockService(float DeltaSeconds);
 };

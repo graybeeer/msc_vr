@@ -252,6 +252,8 @@ bool AWarehouseComputer::IssueShipmentOutbound(AWarehouseCargo* Cargo,AWarehouse
  auto* Pallet=Item ? Item->Pallet.Get() : nullptr;
  auto* Strength=AWarehouseDamageSystem::Find(this);
  if (!Pallet || !Strength) return Fail(TEXT("이 상품을 팔레트 위에 올린 뒤 지시하세요."));
+ if (Pallet->ReceiptState!=EWarehouseReceiptState::Confirmed || Pallet->ReceivingState!=EWarehouseReceivingState::Accepted)
+  return Fail(TEXT("입고 검수·랩핑이 완료된 팔레트만 출고할 수 있습니다. 격리 물류는 재검수하세요. [QUALITY_HOLD]"));
  if (const auto* Shipping=AWarehouseShippingSystem::Find(this))
  {
   const FString Reservation=Shipping->GetPalletShipment(Pallet);
