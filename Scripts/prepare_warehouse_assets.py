@@ -1,4 +1,4 @@
-"""Rebuild ignored collision assets from the installed Fab pack; does not modify the map."""
+"""Prepare required collision assets from installed packs; does not modify the map."""
 import unreal
 import runpy,os
 
@@ -6,8 +6,6 @@ mesh_editor = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
 collision_cache = {}
 EXTERIOR_MESHES = {
     'truck': '/Game/VehicleVarietyPack/Meshes/SM_Truck_Box',
-    'tree': '/Game/EuropeanBeech/Geometry/SimpleWind/SM_EuropeanBeech_Sapling_01',
-    'shrub': '/Game/GV_FreeShrubsPack/Meshes/Shrubs/Wind/Shrub_I/GV_Vol7_Shrub_I_full_type1',
 }
 def collision_mesh(mesh, dynamic=False):
     assert mesh, 'Required mesh missing: install the documented Fab packs first'
@@ -17,10 +15,11 @@ def collision_mesh(mesh, dynamic=False):
         path = folder + '/' + mesh.get_name()
         result = unreal.load_asset(path) if unreal.EditorAssetLibrary.does_asset_exist(path) else unreal.EditorAssetLibrary.duplicate_asset(mesh.get_path_name(), path)
         assert result, path
-        if dynamic or mesh.get_path_name().split('.')[0] in (EXTERIOR_MESHES['tree'], EXTERIOR_MESHES['shrub']):
-            # Carried translucency and small leaves both need conventional fallback geometry.
+        if dynamic:
+            # Carried translucency needs conventional fallback geometry. Exterior
+            # planting is no longer generated or required by this preparation pass.
             settings = mesh_editor.get_nanite_settings(result)
-            fraction = .02 if mesh.get_name() in ('SM_Ind_War_Storage_Box_Cardboard_S_01','SM_Ind_War_Storage_Box_Cardboard_S_05') else 1.0 if dynamic or mesh.get_name().startswith('SM_EuropeanBeech') else .25
+            fraction = .02 if mesh.get_name() in ('SM_Ind_War_Storage_Box_Cardboard_S_01','SM_Ind_War_Storage_Box_Cardboard_S_05') else 1.0
             if settings.generate_fallback != unreal.NaniteGenerateFallback.ENABLED or settings.fallback_target != unreal.NaniteFallbackTarget.PERCENT_TRIANGLES or settings.fallback_percent_triangles != fraction:
                 settings.generate_fallback = unreal.NaniteGenerateFallback.ENABLED
                 settings.fallback_target = unreal.NaniteFallbackTarget.PERCENT_TRIANGLES

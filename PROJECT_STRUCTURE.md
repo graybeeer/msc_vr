@@ -114,7 +114,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 1인칭 조작·카메라 | `Source/msc_vr/msc_vrCharacter.*`, `msc_vrPlayerController.*`, `msc_vrCameraManager.*` | `Content/FirstPerson/Blueprints/`, `Content/Input/`, `Config/DefaultInput.ini` |
 | 시작 맵·게임 모드 | `Config/DefaultEngine.ini`, `Source/msc_vr/msc_vrGameMode.*`, `Content/FirstPerson/Blueprints/` | `msc_vr.uproject` |
 | Fab 창고 에셋·팀원 설치 | `TEAM_ASSETS.md` (Git/LFS·누락 진단·선택적 원본 재생성), `WAREHOUSE.md`, `Scripts/prepare_warehouse_assets.py`, `.gitignore` | `Content/Scene_Warehouse/` 원본 팩 |
-| Fab 트럭·나무·관목 설치·배치 | `WAREHOUSE.md`의 외부 에셋 절, `Scripts/apply_exterior_fab_assets.py`, `Scripts/prepare_warehouse_assets.py` | `Content/VehicleVarietyPack/`, `Content/EuropeanBeech/`, `Content/MSPresets/`, `Content/GV_FreeShrubsPack/` (사용 의존 파일만 Git 포함) |
+| 외부 간소화·트럭·도로·녹지 | `Scripts/simplify_warehouse_exterior.py`, `Scripts/verify_simple_exterior_pie.py`, `WAREHOUSE.md`의 외부 절 | 현재 식생20개만 제거·손상 프로필 정리·생존 액터 보존 검사. 트럭은 `Content/VehicleVarietyPack/`; 전체 외부 재생성은 `build_warehouse_exterior.py`·`apply_exterior_fab_assets.py`(현재 배치를 재생성하므로 간소화에 사용하지 않음). 미사용 식생 팩은 `TEAM_ASSETS.md`의 과거 출처 |
 | 구조 문서 갱신 | `AGENTS.md`, `Scripts/update_structure_summary.ps1`, 이 문서 | 없음 |
 | Unreal MCP 연결·공식 도구 조회·자동 시작 복구 | `MCP_SETUP.md`, `.codex/config.toml`, `msc_vr.uproject`, `Config/DefaultEditorPerProjectUserSettings.ini` | 연결 검사는 `Scripts/verify_mcp.py`; 에셋 설치는 `TEAM_ASSETS.md` |
 
@@ -247,6 +247,7 @@ msc_vr/
     render_warehouse_layout_icons.py
     restore_front_wheel_mounts.py
     revise_agv_counterbalance.py
+    simplify_warehouse_exterior.py
     update_structure_summary.ps1
     verify_agv_dynamics.py
     verify_agv_hazards.py
@@ -321,6 +322,7 @@ msc_vr/
     verify_shipping_saved_map_pie.py
     verify_shipping_staging_pie.py
     verify_shipping_workflow_pie.py
+    verify_simple_exterior_pie.py
     verify_simulation_speed_pie.py
     verify_support_snapshot_pie.py
     verify_transport_visuals_pie.py

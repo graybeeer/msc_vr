@@ -137,15 +137,17 @@ if not missing:
         '모든 파일·종류·원본 그룹·직접 참조·코드 진입점은 [정확한 목록](Config/RuntimeAssets.json)에 기록한다. 아래에는 이름이 있는 모델·재질·텍스처·모션·맵을 나열한다. GUID 이름의 외부 액터/오브젝트는 같은 JSON의 `map_objects` 그룹에 전부 포함한다.', '',
         '팀원 설치·Git LFS 받기·선택적 원본 재생성은 [TEAM_ASSETS.md](TEAM_ASSETS.md), 실제 기능은 [WAREHOUSE.md](WAREHOUSE.md)를 따른다. 외부 에셋의 출처·라이선스 원문은 유지하며 Git 포함 자체가 별도의 재배포 권한을 부여하지 않는다. 엔진/플러그인 자체 파일은 저장소에 복사하지 않으며 목록의 `engine_plugin_dependencies`에 기록한다.', '',
         '충돌 복사본·캐릭터 페이드·창고 벽 페이드는 원본 팩으로 분류한다. 여러 출처를 조합한 맵·공통 표시·모델 캡처 아이콘은 프로젝트 구성으로 분류하되 원본의 이용 조건을 승계한다. 단순히 프로젝트 폴더로 복사하거나 재질을 수정했다고 자체 원본이 되는 것은 아니다.', '',
+        '파일 수가 0인 그룹은 현재 사용하지 않는 과거 출처다. 출처 기록은 유지하지만 현재 설치·Git 선별 대상에 포함하지 않으며 빈 상세 목록은 만들지 않는다.', '',
         '목록은 에셋 파일의 하드/소프트 참조를 보존하는 보수적인 의존성 폐쇄이며, 파일 내부의 미리보기·기본 재질 참조도 포함될 수 있다. 실제 Cook 결과의 바이트별 최소 목록을 뜻하지 않는다. 에디터 전용 설정의 예제 맵·콘텐츠 브라우저 폴더는 시작점에서 제외한다. 직접 로딩 경로가 없으면 보고서의 `unresolved_direct_references`에 기록하고 최신 목록 발행을 중단한다.', '',
         f'총 {len(records):,}개 파일 · {report["total_bytes"]/1024**3:.2f} GiB. C++ 동적 경로·맵 참조가 달라지면 `Scripts/audit_runtime_assets.py`를 Unreal Python에서 다시 실행한다. 새 목록만으로 Git에 자동 추가하지 않는다.', '',
         '| 분류 / 출처 | 용도 | 파일 수 | MiB |','| --- | --- | ---: | ---: |']
     for key,(name,use,url) in groups.items():
         selected=[r for r in records if r['source_group']==key]
         title=f'[{name}]({url})' if url else name
-        lines.append(f'| {title} | {use} | {len(selected)} | {sum(r["bytes"] for r in selected)/1024**2:.2f} |')
+        current_use=use if selected else '현재 미사용 · 과거 출처'
+        lines.append(f'| {title} | {current_use} | {len(selected)} | {sum(r["bytes"] for r in selected)/1024**2:.2f} |')
     for key,(name,_,_) in groups.items():
-        if key=='map_objects':continue
+        if key=='map_objects' or not any(r['source_group']==key for r in report['assets']):continue
         lines+=['',f'## {name}','','| 에셋 경로 | 종류 | MiB |','| --- | --- | ---: |']
         for record in report['assets']:
             if record['source_group']==key:

@@ -4,20 +4,20 @@
 
 **2026-10-28 사용 에셋 선별 기준:** 게임에서 사용하는 외부 모델·재질·텍스처·모션과 의존 에셋을 Git에 포함합니다. 일반 설치는 최신 Git 변경과 LFS 파일을 받은 뒤 빌드하는 방식입니다. 미사용 팩 전체, 전체 Game Animation Sample 프로젝트, 원본 FBX ZIP은 일반 실행에 필요하지 않으며 함께 추가하지 않습니다.
 
-외부 에셋의 출처·라이선스 원문은 유지하며 Git 포함 자체가 별도의 재배포 권한을 부여하지 않습니다. 기존 Git 기록을 다시 쓰지는 않습니다.
+외부 에셋의 출처·라이선스 원문은 유지하며 Git 포함 자체가 별도의 재배포 권한을 부여하지 않습니다. 사용하지 않게 된 파일은 현재 Git 추적 대상에서 제외하되 작업 PC의 원본은 보존합니다. 기존 Git 기록을 다시 쓰지는 않습니다.
 
 [게임 사용 에셋 목록](RUNTIME_ASSETS.md)과 `Config/RuntimeAssets.json`은 **Git에 포함할 런타임 파일·의존성·출처의 기준**입니다. 파생 재질·충돌 메시도 원본 출처를 따라 분류합니다. 에셋 경로는 그대로 유지하며, 목록 생성 자체가 Git 커밋이나 LFS 다운로드를 수행하지는 않습니다.
 
 ## 일반 설치와 실행
 
 1. 에디터를 닫고 저장소의 최신 변경을 받습니다. 프로젝트 폴더에서 `git lfs install --local`, `git lfs pull`을 실행해 실제 Unreal 에셋을 수신합니다.
-2. `git lfs status`로 LFS 상태를 확인합니다. 사용 모션과 파생 충돌·재질도 수신 대상이므로 일반 설치에서 Fab 팩6개를 다시 임포트하거나 맵 생성 스크립트를 실행할 필요는 없습니다.
+2. `git lfs status`로 LFS 상태를 확인합니다. 사용 모션과 파생 충돌·재질도 수신 대상이므로 일반 설치에서 원본 팩4개를 다시 임포트하거나 맵 생성 스크립트를 실행할 필요는 없습니다.
 3. Unreal Engine 5.8.2와 Visual Studio의 게임 C++ 개발 도구로 `msc_vrEditor / Development Editor / Win64`를 빌드합니다.
 4. 설치 완료 항목을 확인한 후 `msc_vr.uproject`를 열고 메인 메뉴에서 모드를 선택합니다. 조작은 [창고 안내](WAREHOUSE.md)를 따릅니다.
 
 `.uasset`가 `version https://git-lfs.github.com/spec/v1`로 시작하는 작은 텍스트 파일로 남았다면 LFS 실제 파일을 받지 못한 상태입니다. `git lfs pull`의 다운로드 오류와 저장소 접근 상태를 먼저 확인합니다. 사용 목록의 파일 자체가 없으면 최신 에셋 커밋을 받았는지 확인합니다. 전체 팩 재임포트는 원본 변경이나 결과 재생성이 필요한 경우에만 선택합니다. 에셋 폴더를 임의로 옮기면 맵·재질 참조가 끊기므로 원래 경로를 유지합니다.
 
-2026-10-28 선별 결과: 새 외부 에셋226개 약3.31GiB를 포함해 전체 사용 목록3,953개 약3.45GiB가 Git 추적 대상이다. 그중1MiB 이상137개는 LFS를 사용한다. Git 인덱스에서만 복원한 별도 프로젝트에서 미사용 로컬 팩 없이 사용 모션32개·플레이어 Blueprint/메시·기본 맵5개의 로딩과 프로젝트 참조 누락 없음, LFS SHA-256 무결성을 확인했다. 같은 환경의 PIE에서 걷기·달리기·운반·점프·앉기·스마트폰 표시를 통과했고 애니메이션 누락 ensure는0건이었다. 검사는 현재 빌드한 DLL과 설치된 UE 플러그인을 재사용했으며 다른 PC의 전체 C++ 빌드나 패키지 실행 검사는 아니다. 기록은 `Saved/Testing/RuntimeAssets/GitIndexReport.json`·`GitRuntimeVerificationSummary.json`에 있다. 처음 여는 PC에서는 셰이더·텍스처 준비 시간이 추가로 필요할 수 있다.
+**2026-10-28 외부 식생 단순화 이전 검증:** 당시 새 외부 에셋226개 약3.31GiB를 포함한 전체 사용 목록은3,953개 약3.45GiB였으며, 그중1MiB 이상137개에 LFS를 사용했다. Git 인덱스에서만 복원한 별도 프로젝트에서 미사용 로컬 팩 없이 사용 모션32개·플레이어 Blueprint/메시·기본 맵5개의 로딩과 프로젝트 참조 누락 없음, LFS SHA-256 무결성을 확인했다. 같은 환경의 PIE에서 걷기·달리기·운반·점프·앉기·스마트폰 표시를 통과했고 애니메이션 누락 ensure는0건이었다. 검사는 당시 빌드한 DLL과 설치된 UE 플러그인을 재사용했으며 다른 PC의 전체 C++ 빌드나 패키지 실행 검사는 아니다. 기록은 `Saved/Testing/RuntimeAssets/GitIndexReport.json`·`GitRuntimeVerificationSummary.json`에 있다. 현재 파일 수·용량은 갱신된 [사용 에셋 목록](RUNTIME_ASSETS.md)을 확인한다. 처음 여는 PC에서는 셰이더·텍스처 준비 시간이 추가로 필요할 수 있다.
 
 ### 설치 완료 확인
 
@@ -25,33 +25,42 @@
 - [ ] `BS_WarehouseStanding`, `BS_WarehouseCrouching`과 사용 모션30개를 Git/LFS로 받았다.
 - [ ] `SM_Carton_Intact_1/2`·`SM_Pallet_110`·열린 트럭·중량 상자 색·관찰용 페이드 등 맵 참조 파생 파일이 존재한다. 전체 경로와 출처는 사용 에셋 목록으로 확인한다.
 - [ ] C++ 빌드를 완료하고 UE 5.8.2로 메인 메뉴와 관리자 창고를 열 수 있다.
-- [ ] 관리자 창고에서 랙·팔레트·상자·트럭·나무·관목과 중량 시험 상자의 재질이 표시된다.
+- [ ] 관리자 창고에서 랙·팔레트·상자·트럭·중량 시험 상자와 외부 잔디·도로·울타리·도크가 표시된다.
 
 아래 절차는 **원본 팩 변경·재생성 또는 사용 에셋 추가를 맡은 팀원**을 위한 것입니다. 일반 설치에서는 실행하지 않습니다. 맵을 저장하는 스크립트와 에셋만 만드는 스크립트를 아래 표에서 구분합니다.
 
-## 1. 사용 에셋의 원본 팩 6개 — 재생성 시 확보
+## 1. 현재 사용 에셋의 원본 팩 4개 — 재생성 시 확보
 
-현재 게임에서 사용한 에셋의 출처입니다. 결과 파일은 Git/LFS로 받고, 원본이 필요한 재생성 작업을 맡았을 때 본인 계정으로 해당 팩을 확보합니다. 에셋 이름을 누르면 Fab 페이지로 이동합니다. 기존5개는2026-10-06, Game Animation Sample은2026-10-16 무료 표시를 확인했습니다. 원본을 새로 받을 때 선택한 형식과 표시 가격을 확인합니다.
+현재 게임에서 사용하는 창고·트럭·상자·애니메이션의 출처입니다. 결과 파일은 Git/LFS로 받고, 원본이 필요한 재생성 작업을 맡았을 때 본인 계정으로 해당 팩을 확보합니다. 에셋 이름을 누르면 Fab 페이지로 이동합니다. 창고·트럭·상자 팩은2026-10-06, Game Animation Sample은2026-10-16 무료 표시를 확인했습니다. 원본을 새로 받을 때 선택한 형식과 표시 가격을 확인합니다.
 
 | 완료 | 에셋 / 다운로드 링크 | 게임에서 사용하는 곳 | 원본 재생성 시 확보 방식 | 프로젝트 안의 위치 |
 | --- | --- | --- | --- | --- |
 | □ | [Warehouse — Quixel Megascans](https://www.fab.com/listings/a3149fab-3906-4043-b6ee-3937b752a06c) | 창고 랙·공통 팔레트·설비·바닥 재질 | **Unreal Engine 형식**을 프로젝트에 추가 | `Content/Scene_Warehouse/` |
 | □ | [Vehicle Variety Pack — Switchboard Studios](https://www.fab.com/listings/dc1ada50-2523-44b1-b0e2-a72d14076fb4) | 외부 박스 트럭과 열린 적재함의 원본 | **프로젝트에 추가** | `Content/VehicleVarietyPack/` |
-| □ | [European Beech — Quixel Megascans](https://www.fab.com/listings/d11cc01d-9422-41b7-950f-416c9ce79caf) | 창고 주변 나무 | **프로젝트에 추가** | `Content/EuropeanBeech/` + 함께 설치되는 `Content/MSPresets/` |
-| □ | [Free Shrubs Pack (Ultra Realistic Wind) — Greenleaf Vision](https://www.fab.com/listings/7ca465ab-fb9c-4d6b-bddb-82c20f604657) | 울타리 주변 관목 | **프로젝트에 추가** | `Content/GV_FreeShrubsPack/` |
 | □ | [Boxes & Pallets Pack — IINickE](https://www.fab.com/listings/a7c9776e-0a8e-424b-8f7c-f4d746097f0f) | 창고·트럭 안의 온전한 택배 상자 2종 | **FBX ZIP 다운로드 → 아래 3절의 임포트** | 원본 `SourceAssets/Cargo/BoxesPalletsPack/`, 결과 `Content/Warehouse/Cargo/BoxesPalletsPack/` |
 | □ | [Game Animation Sample — Epic Games](https://www.fab.com/listings/880e319a-a59e-4ed2-b268-b32dac7fa016) | 플레이어의 기본 이동·앉기·점프·착지 모션 | **재생성 때만 UE5.8 별도 프로젝트 생성 → 전용 절차 실행**. 게임 사용 클립30개·블렌드2개는 Git/LFS로 수신 | 결과 `Content/Warehouse/AnimationSample/` |
 
-상자 팩을 재생성할 때는 FBX ZIP 수신 뒤 아래 임포트 절차가 필요합니다. 상자 팩의 팔레트는 사용하지 않으며 공통 팔레트는 Warehouse 팩의 모델입니다. 추가 운반 모션 후보인 Mixamo는 아직 사용하지 않으므로 사용 원본6개에 포함하지 않습니다.
+상자 팩을 재생성할 때는 FBX ZIP 수신 뒤 아래 임포트 절차가 필요합니다. 상자 팩의 팔레트는 사용하지 않으며 공통 팔레트는 Warehouse 팩의 모델입니다. 추가 운반 모션 후보인 Mixamo는 아직 사용하지 않으므로 사용 원본4개에 포함하지 않습니다.
 
-## 2. 앞의 4개 원본 팩을 프로젝트에 추가하기 — 선택 작업
+### 과거 식생 출처 — 현재 미사용
+
+2026-10-28 외부 환경 단순화로 장식 나무5그루와 관목15개를 제거하고 잔디·도로·울타리·도크는 유지합니다. 아래 두 팩과 식생 전용 의존 파일은 현재 실행에 필요하지 않습니다. 원본은 로컬에 보존하며 현재 사용 목록과 Git 추적 대상에서 제외합니다.
+
+| 과거 에셋 / 출처 | 이전 사용 위치 | 보존되는 로컬 원본 |
+| --- | --- | --- |
+| [European Beech — Quixel Megascans](https://www.fab.com/listings/d11cc01d-9422-41b7-950f-416c9ce79caf) | 장식 나무5그루 | `Content/EuropeanBeech/`, 식생 전용 `Content/MSPresets/` |
+| [Free Shrubs Pack — Greenleaf Vision](https://www.fab.com/listings/7ca465ab-fb9c-4d6b-bddb-82c20f604657) | 장식 관목15개 | `Content/GV_FreeShrubsPack/` |
+
+기존 설치에서는 European Beech의5.6 패키지를 UE5.8.2에서 사용했습니다. 이는 과거 환경 재현용 기록이며 현재 설치 단계가 아닙니다. 창고 팩 내부의 `Content/Scene_Warehouse/Materials/MSPresets/`는 별도의 사용 재질이므로 식생 전용 폴더와 혼동하지 않습니다.
+
+## 2. 창고·트럭 원본 팩을 프로젝트에 추가하기 — 선택 작업
 
 1. Git에서 최신 프로젝트를 받고, 폴더 안에 `msc_vr.uproject`가 있는지 확인합니다.
-2. 본인 Epic 계정으로 Fab에 로그인하고 위 팩들을 **내 라이브러리에 추가**합니다.
+2. 본인 Epic 계정으로 Fab에 로그인하고 필요한 창고·트럭 팩을 **내 라이브러리에 추가**합니다.
 3. Epic Games Launcher의 Fab 라이브러리에서 **프로젝트에 추가 → msc_vr**를 선택합니다. 프로젝트를 에디터로 열지 않고도 팩 파일을 추가할 수 있습니다.
 4. 설치가 끝나면 위 표의 `Content` 폴더가 생성됐는지 확인합니다. 폴더 이름은 바꾸지 않습니다.
 
-버전 선택에서 5.8 프로젝트가 보이지 않으면 **모든 프로젝트 표시**를 확인합니다. 이 프로젝트에서는 European Beech를 **5.6 패키지**로 설치하여 5.8.2에서 사용했습니다. Warehouse의 Fab 설명도 씬 호환 버전을 5.4–5.6으로 표기합니다. 선택 가능한 5.6 자료를 사용하되 프로젝트 자체의 엔진 연결은 5.8로 유지합니다. 설치 화면이 **프로젝트 생성**만 제공하면 별도 임시 프로젝트에 받은 뒤 그 패키지의 Content를 기존 프로젝트에 옮겨 위 폴더 구조를 맞춥니다.
+버전 선택에서 5.8 프로젝트가 보이지 않으면 **모든 프로젝트 표시**를 확인합니다. Warehouse의 기존 Fab 설명은 씬 호환 버전을5.4–5.6으로 표기했습니다. 선택 가능한5.6 자료를 사용하되 프로젝트 자체의 엔진 연결은5.8로 유지합니다. 설치 화면이 **프로젝트 생성**만 제공하면 별도 임시 프로젝트에 받은 뒤 그 패키지의 Content를 기존 프로젝트에 옮겨 위 폴더 구조를 맞춥니다.
 
 ### msc_vr가 프로젝트 목록에 없을 때
 
@@ -122,7 +131,7 @@ Windows 기준으로 아래 순서로 런처의 검색 경로를 등록합니다
 
 완료 문구: `FAB_BOXES_IMPORTED`
 
-### ② 창고·팔레트·트럭·식물의 충돌 에셋 재생성 — 에셋만 생성
+### ② 창고·팔레트·트럭의 충돌 에셋 재생성 — 에셋만 생성
 
 ```powershell
 & 'C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe' "$PWD\msc_vr.uproject" "-ExecutePythonScript=$PWD\Scripts\prepare_warehouse_assets.py" -unattended -nop4 -nosplash -nullrhi

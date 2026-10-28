@@ -1,7 +1,8 @@
 """Add a compact truck yard to the existing warehouse; rebuild EXT_ actors only.
 
-Coordinates are centimetres. Warehouse floor=0; yard=-120. Two docks are
-include one static Fab truck. No vehicle behaviour is created by this script.
+Coordinates are centimetres. Warehouse floor=0; yard=-120. Two docks and one
+static Fab truck are created; green strips replace decorative trees/shrubs.
+No vehicle behaviour is created by this script.
 """
 import math
 import os

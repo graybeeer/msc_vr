@@ -10,22 +10,24 @@
 
 충돌 복사본·캐릭터 페이드·창고 벽 페이드는 원본 팩으로 분류한다. 여러 출처를 조합한 맵·공통 표시·모델 캡처 아이콘은 프로젝트 구성으로 분류하되 원본의 이용 조건을 승계한다. 단순히 프로젝트 폴더로 복사하거나 재질을 수정했다고 자체 원본이 되는 것은 아니다.
 
+파일 수가 0인 그룹은 현재 사용하지 않는 과거 출처다. 출처 기록은 유지하지만 현재 설치·Git 선별 대상에 포함하지 않으며 빈 상세 목록은 만들지 않는다.
+
 목록은 에셋 파일의 하드/소프트 참조를 보존하는 보수적인 의존성 폐쇄이며, 파일 내부의 미리보기·기본 재질 참조도 포함될 수 있다. 실제 Cook 결과의 바이트별 최소 목록을 뜻하지 않는다. 에디터 전용 설정의 예제 맵·콘텐츠 브라우저 폴더는 시작점에서 제외한다. 직접 로딩 경로가 없으면 보고서의 `unresolved_direct_references`에 기록하고 최신 목록 발행을 중단한다.
 
-총 3,953개 파일 · 3.45 GiB. C++ 동적 경로·맵 참조가 달라지면 `Scripts/audit_runtime_assets.py`를 Unreal Python에서 다시 실행한다. 새 목록만으로 Git에 자동 추가하지 않는다.
+총 3,854개 파일 · 2.31 GiB. C++ 동적 경로·맵 참조가 달라지면 `Scripts/audit_runtime_assets.py`를 Unreal Python에서 다시 실행한다. 새 목록만으로 Git에 자동 추가하지 않는다.
 
 | 분류 / 출처 | 용도 | 파일 수 | MiB |
 | --- | --- | ---: | ---: |
 | [Warehouse / Quixel Megascans](https://www.fab.com/listings/a3149fab-3906-4043-b6ee-3937b752a06c) | 창고 랙·팔레트·바닥·설비와 파생 충돌 | 75 | 1817.07 |
 | [Vehicle Variety Pack / Switchboard Studios](https://www.fab.com/listings/dc1ada50-2523-44b1-b0e2-a72d14076fb4) | 물류 트럭과 파생 적재함 | 29 | 323.36 |
-| [European Beech / Quixel Megascans](https://www.fab.com/listings/d11cc01d-9422-41b7-950f-416c9ce79caf) | 외부 나무·파생 충돌 메시 | 13 | 897.67 |
-| [Free Shrubs Pack / Greenleaf Vision](https://www.fab.com/listings/7ca465ab-fb9c-4d6b-bddb-82c20f604657) | 외부 관목·파생 충돌 메시 | 39 | 257.63 |
+| [European Beech / Quixel Megascans](https://www.fab.com/listings/d11cc01d-9422-41b7-950f-416c9ce79caf) | 현재 미사용 · 과거 출처 | 0 | 0.00 |
+| [Free Shrubs Pack / Greenleaf Vision](https://www.fab.com/listings/7ca465ab-fb9c-4d6b-bddb-82c20f604657) | 현재 미사용 · 과거 출처 | 0 | 0.00 |
 | [Boxes & Pallets Pack / IINickE](https://www.fab.com/listings/a7c9776e-0a8e-424b-8f7c-f4d746097f0f) | 온전한 상자와 파생 재질 | 11 | 47.08 |
 | [Game Animation Sample / Epic Games](https://www.fab.com/listings/880e319a-a59e-4ed2-b268-b32dac7fa016) | 이동·앉기·점프·착지의 사용 클립과 블렌드 | 32 | 32.84 |
 | Unreal 기본 캐릭터·입력·1인칭 템플릿 / Epic Games | 플레이어·NPC·입력·파생 캐릭터 페이드 재질 | 66 | 90.25 |
-| Megascans 공통 재질 | 사용 중인 외부 에셋이 참조하는 MSPresets | 27 | 9.22 |
+| Megascans 공통 재질 | 현재 미사용 · 과거 출처 | 0 | 0.00 |
 | 프로젝트 구성/팀원 제작·사용자 제공 모델 | AGV·승강기·충전기·컨베이어·장식·UI·공통 표시 재질 | 180 | 40.86 |
-| 프로젝트 맵 배치 데이터 | 맵이 참조하는 외부 액터/오브젝트 패키지 | 3481 | 15.59 |
+| 프로젝트 맵 배치 데이터 | 맵이 참조하는 외부 액터/오브젝트 패키지 | 3461 | 15.50 |
 
 ## Warehouse / Quixel Megascans
 
@@ -140,68 +142,6 @@
 | `Content/VehicleVarietyPack/Textures/Pickup/TX_Pickup_OPC_2.uasset` | Texture2D | 1.756 |
 | `Content/VehicleVarietyPack/Textures/Pickup/TX_Pickup_ORM.uasset` | Texture2D | 18.860 |
 | `Content/Warehouse/Exterior/TruckInterior/SM_Truck_Open.uasset` | StaticMesh | 5.070 |
-
-## European Beech / Quixel Megascans
-
-| 에셋 경로 | 종류 | MiB |
-| --- | --- | ---: |
-| `Content/EuropeanBeech/Materials/Simplewind/MAI_EuropeanBeech.uasset` | MaterialInstanceConstant | 0.012 |
-| `Content/EuropeanBeech/Materials/Simplewind/MI_EuropeanBeech_Tileable.uasset` | MaterialInstanceConstant | 0.019 |
-| `Content/EuropeanBeech/Materials/Simplewind/MI_EuropeanBeech_TwoSided.uasset` | MaterialInstanceConstant | 0.038 |
-| `Content/EuropeanBeech/Textures/Tileable/T_EuropeanBeech_Tileable_Albedo.uasset` | Texture2D | 84.046 |
-| `Content/EuropeanBeech/Textures/Tileable/T_EuropeanBeech_Tileable_Mask.uasset` | Texture2D | 249.661 |
-| `Content/EuropeanBeech/Textures/Tileable/T_EuropeanBeech_Tileable_Normal.uasset` | Texture2D | 259.884 |
-| `Content/EuropeanBeech/Textures/TwoSided/Summer/T_EuropeanBeech_Twosided_Summer_Albedo.uasset` | Texture2D | 48.251 |
-| `Content/EuropeanBeech/Textures/TwoSided/Summer/T_EuropeanBeech_Twosided_Summer_Mask.uasset` | Texture2D | 117.263 |
-| `Content/EuropeanBeech/Textures/TwoSided/Summer/T_EuropeanBeech_Twosided_Summer_Normal.uasset` | Texture2D | 100.113 |
-| `Content/EuropeanBeech/Textures/TwoSided/Winter/T_EuropeanBeech_TwoSided_Winter_Albedo.uasset` | Texture2D | 7.131 |
-| `Content/EuropeanBeech/Textures/TwoSided/Winter/T_EuropeanBeech_TwoSided_Winter_Mask.uasset` | Texture2D | 7.354 |
-| `Content/EuropeanBeech/Textures/TwoSided/Winter/T_EuropeanBeech_TwoSided_Winter_Normal.uasset` | Texture2D | 18.895 |
-| `Content/Warehouse/Collision/SM_EuropeanBeech_Sapling_01.uasset` | StaticMesh | 5.002 |
-
-## Free Shrubs Pack / Greenleaf Vision
-
-| 에셋 경로 | 종류 | MiB |
-| --- | --- | ---: |
-| `Content/GV_FreeShrubsPack/Materials/ColorVari/MF/MF_FoliageColorVariation_G2B.uasset` | MaterialFunction | 0.027 |
-| `Content/GV_FreeShrubsPack/Materials/MASTER/M_Shrub_Bark_Master_Wind.uasset` | Material | 0.048 |
-| `Content/GV_FreeShrubsPack/Materials/MASTER/M_Shrub_Leaf_A_Master_Wind_Opaque.uasset` | Material | 0.063 |
-| `Content/GV_FreeShrubsPack/Materials/MASTER/Master_Instance/MI_Shrub_Bark_Master_Wind_Inst.uasset` | MaterialInstanceConstant | 0.022 |
-| `Content/GV_FreeShrubsPack/Materials/MASTER/Master_Instance/MI_Shrub_Leaf_A_Master_Wind_Opaque_Inst.uasset` | MaterialInstanceConstant | 0.019 |
-| `Content/GV_FreeShrubsPack/Materials/Material_Functions/MF_3LV.uasset` | MaterialFunction | 0.070 |
-| `Content/GV_FreeShrubsPack/Materials/Material_Functions/MF_Influence.uasset` | MaterialFunction | 0.067 |
-| `Content/GV_FreeShrubsPack/Materials/Material_Functions/MF_PivotPainter2_DecodeAxisVector.uasset` | MaterialFunction | 0.008 |
-| `Content/GV_FreeShrubsPack/Materials/Material_Functions/MF_PivotPainter2_ReturnParentTextureInfo.uasset` | MaterialFunction | 0.016 |
-| `Content/GV_FreeShrubsPack/Materials/Material_Functions/MF_Wind_LV.uasset` | MaterialFunction | 0.094 |
-| `Content/GV_FreeShrubsPack/Materials/Material_Functions/MF_Wind_LV_Leaves.uasset` | MaterialFunction | 0.049 |
-| `Content/GV_FreeShrubsPack/Materials/Shrubs/I/MI_Shrub_I_Bark_Master_Wind_LV3_Inst.uasset` | MaterialInstanceConstant | 0.026 |
-| `Content/GV_FreeShrubsPack/Materials/Shrubs/I/MI_Shrub_Leaf_A_Master_Wind_LV3_Opaque_Inst.uasset` | MaterialInstanceConstant | 0.024 |
-| `Content/GV_FreeShrubsPack/Materials/Snow/MF_Vol1_Winter_MW_T.uasset` | MaterialFunction | 0.017 |
-| `Content/GV_FreeShrubsPack/Materials/Snow/MF_Vol1_Winter_P.uasset` | MaterialFunction | 0.017 |
-| `Content/GV_FreeShrubsPack/Materials/WindController/GV_trees_mw_WindParameters.uasset` | MaterialParameterCollection | 0.006 |
-| `Content/GV_FreeShrubsPack/Textures/ColorVari/C/T_Color_Vari_B.uasset` | Texture2D | 0.106 |
-| `Content/GV_FreeShrubsPack/Textures/ColorVari/C/T_Color_Vari_E.uasset` | Texture2D | 0.055 |
-| `Content/GV_FreeShrubsPack/Textures/ColorVari/C/T_Color_Vari_K.uasset` | Texture2D | 0.087 |
-| `Content/GV_FreeShrubsPack/Textures/Master/T_flat_black.uasset` | Texture2D | 0.005 |
-| `Content/GV_FreeShrubsPack/Textures/Master/T_flat_grey.uasset` | Texture2D | 0.005 |
-| `Content/GV_FreeShrubsPack/Textures/Master/T_flat_normal.uasset` | Texture2D | 0.006 |
-| `Content/GV_FreeShrubsPack/Textures/Master/T_flat_white.uasset` | Texture2D | 0.005 |
-| `Content/GV_FreeShrubsPack/Textures/Shrubs/Bark_A/T_Bark_A_diffuse.uasset` | Texture2D | 4.529 |
-| `Content/GV_FreeShrubsPack/Textures/Shrubs/Bark_A/T_Bark_A_normal.uasset` | Texture2D | 16.719 |
-| `Content/GV_FreeShrubsPack/Textures/Shrubs/Bark_A/T_Bark_A_rough.uasset` | Texture2D | 4.009 |
-| `Content/GV_FreeShrubsPack/Textures/Shrubs/Bark_A/T_Bark_D_Winter.uasset` | Texture2D | 4.524 |
-| `Content/GV_FreeShrubsPack/Textures/Shrubs/Bark_A/T_Roughness_BB.uasset` | Texture2D | 8.216 |
-| `Content/GV_FreeShrubsPack/Textures/Shrubs/Bark_A/T_bark_A_ao.uasset` | Texture2D | 2.295 |
-| `Content/GV_FreeShrubsPack/Textures/Shrubs/Leaves/T_GV_Shrub_Typ1_Albedo.uasset` | Texture2D | 14.008 |
-| `Content/GV_FreeShrubsPack/Textures/Shrubs/Leaves/T_GV_Shrub_Typ1_N.uasset` | Texture2D | 84.327 |
-| `Content/GV_FreeShrubsPack/Textures/Shrubs/Leaves/T_GV_Shrub_Typ2_Albedo.uasset` | Texture2D | 3.616 |
-| `Content/GV_FreeShrubsPack/Textures/Shrubs/Leaves/T_GV_Shrub_Typ2_N.uasset` | Texture2D | 28.060 |
-| `Content/GV_FreeShrubsPack/Textures/Shrubs/VecT/T_Wind_Shrub_I_PP_PII_UV2.uasset` | Texture2D | 0.090 |
-| `Content/GV_FreeShrubsPack/Textures/Shrubs/VecT/T_Wind_Shrub_I_XVec_UV2.uasset` | Texture2D | 0.110 |
-| `Content/GV_FreeShrubsPack/Textures/Wind/T_Default_RGB_PivotPos_A_ParentIndexInt_UV2.uasset` | Texture2D | 0.004 |
-| `Content/GV_FreeShrubsPack/Textures/Wind/T_Default_RGB_XVector_A_XExtentDividedbyRange_UV2.uasset` | Texture2D | 0.004 |
-| `Content/GV_FreeShrubsPack/Textures/Wind/T_Wind_Variation.uasset` | Texture2D | 10.538 |
-| `Content/Warehouse/Collision/GV_Vol7_Shrub_I_full_type1.uasset` | StaticMesh | 75.739 |
 
 ## Boxes & Pallets Pack / IINickE
 
@@ -326,38 +266,6 @@
 | `Content/Warehouse/Materials/RemoteCharacter/MI_RemoteFade_MI_Quinn_01.uasset` | MaterialInstanceConstant | 0.011 |
 | `Content/Warehouse/Materials/RemoteCharacter/MI_RemoteFade_MI_Quinn_02.uasset` | MaterialInstanceConstant | 0.011 |
 | `Content/Warehouse/Materials/RemoteCharacter/M_RemoteFade_M_Mannequin.uasset` | Material | 0.056 |
-
-## Megascans 공통 재질
-
-| 에셋 경로 | 종류 | MiB |
-| --- | --- | ---: |
-| `Content/MSPresets/MS_Foliage_Material/MasterMaterials/MA_Foliage.uasset` | Material | 0.026 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_AdvancedWind.uasset` | MaterialFunction | 0.120 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_AdvancedWind_Level.uasset` | MaterialFunction | 0.077 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_BarkDetailer.uasset` | MaterialFunction | 0.104 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_BranchBlending.uasset` | MaterialFunction | 0.107 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_DecorationBlending.uasset` | MaterialFunction | 0.105 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_DefaultLit_Trunk.uasset` | MaterialFunction | 0.119 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_GenerateBranchMask.uasset` | MaterialFunction | 0.099 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_HealthSeason.uasset` | MaterialFunction | 0.142 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_LightInfluenceColorVariation.uasset` | MaterialFunction | 0.121 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_Opacity.uasset` | MaterialFunction | 0.014 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_Roughness.uasset` | MaterialFunction | 0.106 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_SimpleWind.uasset` | MaterialFunction | 0.131 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_TwoSidedRoughness.uasset` | MaterialFunction | 0.122 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_TwoSided_Decoration.uasset` | MaterialFunction | 0.118 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_TwoSided_Leaves.uasset` | MaterialFunction | 0.043 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_WindGust.uasset` | MaterialFunction | 0.120 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_WorldspaceColorVariation.uasset` | MaterialFunction | 0.120 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_adjustBaseColor.uasset` | MaterialFunction | 0.107 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_adjustNormal.uasset` | MaterialFunction | 0.100 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_adjustTwoSidedBaseColor.uasset` | MaterialFunction | 0.129 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_adjustTwoSidedNormal.uasset` | MaterialFunction | 0.101 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_generateSpecular.uasset` | MaterialFunction | 0.104 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_generateTranslucency.uasset` | MaterialFunction | 0.107 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Foliage/MF_generateTwoSidedSpecular.uasset` | MaterialFunction | 0.116 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialFunctions/Textures/T_WindNoise.uasset` | Texture2D | 6.654 |
-| `Content/MSPresets/MS_Foliage_Material/MaterialParameterCollection/MPC_GlobalFoliageActor.uasset` | MaterialParameterCollection | 0.004 |
 
 ## 프로젝트 구성/팀원 제작·사용자 제공 모델
 
