@@ -103,11 +103,12 @@ public:
 
 	/**
 	 * Localization scans per simulated second from the two side safety scanners, between the one-second observation
-	 * snapshots (0 = the snapshots only). One scan a second left 6-26 cm of odometry drift while accelerating and
-	 * braking (wheel spin and skid); the observation frame for obstacles stays at one second.
+	 * snapshots (0 = the snapshots only). Added when the drive wheel's spin and skid left 6-26 cm between one-second
+	 * scans; the load-wheel encoders removed that, and in the inbound area the side scans then pulled the estimate
+	 * 8-10 cm sideways into cargo (forklift 2 NO SAFE DETOUR, 2026-10-28), so they are off by default.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Localization", meta=(ClampMin="0"))
-	float LocalizationScanHz = 5.f;
+	float LocalizationScanHz = 0.f;
 
 	/** Lowest return used for matching, above the floor (the side scanners sweep at 27 cm). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Map")
