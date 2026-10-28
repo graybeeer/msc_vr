@@ -673,6 +673,27 @@ bool FWarehouseExperimentStorageValues::RunTest(const FString& Parameters)
  Actor.Properties.Add(TEXT("Empty"),TEXT(""));Actor.Properties.Add(TEXT("Escaped"),TEXT("Line 1\n\"Line 2\"\\path"));
  Prototype.ZoneDestinations.Add(FTransform::Identity);Prototype.Profiles.AddDefaulted();
  RoundTrip(FindFProperty<FProperty>(AWarehouseLayoutInventory::StaticClass(),TEXT("Prototypes")),&Prototypes,&RestoredPrototypes,TEXT("Nested arrays, enum, class asset and string map"));
+ FWarehouseBuildingSettings Building,RestoredBuilding;
+ Building.Floor2.bUseTileMask=true;
+ Building.Floor2.Tiles={FIntPoint(-2,0),FIntPoint(-1,0),FIntPoint(0,0),FIntPoint(0,1)};
+ Building.Floor3.bUseTileMask=true;
+ Building.Floor3.Tiles={FIntPoint(-1,-1),FIntPoint(0,-1),FIntPoint(1,-1),FIntPoint(-1,0),FIntPoint(1,0),FIntPoint(-1,1),FIntPoint(0,1),FIntPoint(1,1)};
+ auto* BuildingProperty=FindFProperty<FProperty>(AWarehouseBuildingLayout::StaticClass(),TEXT("Settings"));
+ RoundTrip(BuildingProperty,&Building,&RestoredBuilding,TEXT("Custom mezzanine cells, signed coordinates and empty interior"));
+ TestTrue(TEXT("Custom floor mask mode survives"),RestoredBuilding.Floor2.bUseTileMask && RestoredBuilding.Floor3.bUseTileMask);
+ TestFalse(TEXT("Empty tile is not filled by bounds during restore"),RestoredBuilding.Floor3.Tiles.Contains(FIntPoint::ZeroValue));
+ // Existing schema-1 layouts predate tile masks. Missing fields must retain
+ // the default rectangle/atrium representation, not become empty custom floors.
+ auto Legacy=Encode(BuildingProperty,&Building,Actors,Error);
+ for (const TCHAR* Name:{TEXT("Floor2"),TEXT("Floor3"),TEXT("Floor4")})
+ {
+  const auto Floor=Legacy->AsObject()->GetObjectField(Name);
+  Floor->RemoveField(TEXT("bUseTileMask"));Floor->RemoveField(TEXT("Tiles"));
+ }
+ FWarehouseBuildingSettings LegacyRestored;
+ TestTrue(TEXT("Legacy rectangular layout remains readable"),Decode(BuildingProperty,&LegacyRestored,Legacy,Actors,Error));
+ TestFalse(TEXT("Legacy layout keeps rectangle mode"),LegacyRestored.Floor2.bUseTileMask || LegacyRestored.Floor3.bUseTileMask || LegacyRestored.Floor4.bUseTileMask);
+ TestTrue(TEXT("Legacy layout has no implicit tile data"),LegacyRestored.Floor2.Tiles.IsEmpty() && LegacyRestored.Floor3.Tiles.IsEmpty());
  return !HasAnyErrors();
 }
 #endif

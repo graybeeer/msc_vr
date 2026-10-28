@@ -1,4 +1,5 @@
 #include "WarehouseBuildingLayout.h"
+#include "WarehouseLoading.h"
 #include "WarehousePlayMode.h"
 #include "WarehousePhysics.h"
 #include "WarehouseDamageSystem.h"
@@ -30,7 +31,27 @@
 
 namespace
 {
- enum class EPart { Floor,Wall,Roof,Column,Beam,Rail,Pipe,Tray,Light,Stair,Exterior };
+ enum class EPart { Floor,Wall,Roof,Column,Beam,Rail,Pipe,Tray,Light,Stair,Exterior,Cable,Conduit,ServiceSupport,Sprinkler };
+ bool Service(EPart Role)
+ { return Role==EPart::Pipe || Role==EPart::Tray || Role==EPart::Light || Role==EPart::Cable || Role==EPart::Conduit || Role==EPart::ServiceSupport || Role==EPart::Sprinkler; }
+ const TCHAR* ServiceName(EPart Role)
+ {
+  switch (Role)
+  {
+  case EPart::Pipe:return TEXT("Pipe");case EPart::Tray:return TEXT("Tray");case EPart::Cable:return TEXT("Cable");
+  case EPart::Conduit:return TEXT("Conduit");case EPart::ServiceSupport:return TEXT("Support");case EPart::Sprinkler:return TEXT("Sprinkler");
+  default:return TEXT("Light");
+  }
+ }
+ const TCHAR* PartName(EPart Role)
+ {
+  switch (Role)
+  {
+  case EPart::Floor:return TEXT("Floor");case EPart::Wall:return TEXT("Wall");case EPart::Roof:return TEXT("Roof");
+  case EPart::Column:return TEXT("Column");case EPart::Beam:return TEXT("Beam");case EPart::Rail:return TEXT("Rail");
+  case EPart::Stair:return TEXT("Stair");case EPart::Exterior:return TEXT("Exterior");default:return ServiceName(Role);
+  }
+ }
  struct FPart
  {
   EPart Role;
@@ -38,6 +59,8 @@ namespace
   FQuat Rotation=FQuat::Identity;
   int32 Floor=0;
   AStaticMeshActor* Source=nullptr;
+  UStaticMesh* Asset=nullptr;
+  bool RoofService=false,Riser=false;
   FBox Bounds() const { return FBox(-Size*.5,Size*.5).TransformBy(FTransform(Rotation,Centre)); }
  };
  void ReportCollision(const TCHAR* Stage,const FPart& Part,const FBox& PartWorld,const AActor* Occupant,const FBox& OccupantWorld)
@@ -49,7 +72,13 @@ namespace
  const FWarehouseMezzanineSettings& Upper(const FWarehouseBuildingSettings& Settings,int32 Floor)
  { return Floor==1 ? Settings.Floor2 : Floor==2 ? Settings.Floor3 : Settings.Floor4; }
  FBox2D Footprint(const FWarehouseBuildingSettings& S) { return FBox2D(FVector2D(-S.WidthCm*.5,-S.DepthCm*.5),FVector2D(S.WidthCm*.5,S.DepthCm*.5)); }
- FBox2D Deck(const FWarehouseMezzanineSettings& S) { return FBox2D(S.OffsetCm-S.SizeCm*.5,S.OffsetCm+S.SizeCm*.5); }
+ FBox2D TileBox(FIntPoint Cell)
+ { return FBox2D(FVector2D(double(Cell.X)*100.,double(Cell.Y)*100.),FVector2D((double(Cell.X)+1)*100.,(double(Cell.Y)+1)*100.)); }
+ FBox2D Deck(const FWarehouseMezzanineSettings& S)
+ {
+  if (!S.bUseTileMask) return FBox2D(S.OffsetCm-S.SizeCm*.5,S.OffsetCm+S.SizeCm*.5);
+  FBox2D Box(ForceInit);for (FIntPoint Cell:S.Tiles) { const auto Tile=TileBox(Cell);Box+=Tile.Min;Box+=Tile.Max; }return Box;
+ }
  FBox2D Atrium(const FWarehouseMezzanineSettings& S) { return FBox2D(S.OffsetCm-S.AtriumSizeCm*.5,S.OffsetCm+S.AtriumSizeCm*.5); }
  FBox2D StairOpening(const FWarehouseMezzanineSettings& S)
  {
@@ -72,6 +101,64 @@ namespace
   auto Add=[&](double X0,double Y0,double X1,double Y1) { if (X1-X0>.1 && Y1-Y0>.1) Result.Emplace(FVector2D(X0,Y0),FVector2D(X1,Y1)); };
   Add(Rect.Min.X,Rect.Min.Y,Low.X,Rect.Max.Y);Add(High.X,Rect.Min.Y,Rect.Max.X,Rect.Max.Y);
   Add(Low.X,Rect.Min.Y,High.X,Low.Y);Add(Low.X,High.Y,High.X,Rect.Max.Y);return Result;
+ }
+ TArray<FIntPoint> SortedTiles(const TArray<FIntPoint>& Tiles)
+ {
+  TSet<FIntPoint> Unique;for (FIntPoint Cell:Tiles) Unique.Add(Cell);
+  TArray<FIntPoint> Result=Unique.Array();Result.Sort([](FIntPoint A,FIntPoint B) { return A.Y==B.Y ? A.X<B.X : A.Y<B.Y; });return Result;
+ }
+ TArray<FBox2D> MergeTiles(const TArray<FIntPoint>& Tiles)
+ {
+  const auto Sorted=SortedTiles(Tiles);TSet<FIntPoint> Remaining;for (FIntPoint Cell:Sorted) Remaining.Add(Cell);
+  TArray<FBox2D> Result;
+  for (FIntPoint Cell:Sorted) if (Remaining.Contains(Cell))
+  {
+   int32 X1=Cell.X+1;while (Remaining.Contains(FIntPoint(X1,Cell.Y))) ++X1;
+   int32 Y1=Cell.Y+1;
+   for (;;++Y1) { bool Full=true;for (int32 X=Cell.X;X<X1;++X) if (!Remaining.Contains(FIntPoint(X,Y1))) { Full=false;break; }if (!Full) break; }
+   for (int32 Y=Cell.Y;Y<Y1;++Y) for (int32 X=Cell.X;X<X1;++X) Remaining.Remove(FIntPoint(X,Y));
+   Result.Emplace(FVector2D(Cell.X*100.,Cell.Y*100.),FVector2D(X1*100.,Y1*100.));
+  }
+  return Result;
+ }
+ using FBoundary=TPair<FVector2D,FVector2D>;
+ TArray<FBoundary> TileBoundaries(const TArray<FIntPoint>& Tiles)
+ {
+  TSet<FIntPoint> Cells;for (FIntPoint Cell:Tiles) Cells.Add(Cell);
+  // Key: horizontal/vertical, grid line. Neighbouring cells never create rails.
+  TMap<FIntPoint,TArray<int32>> Lines;
+  for (FIntPoint Cell:Cells)
+  {
+   if (!Cells.Contains(Cell+FIntPoint(0,-1))) Lines.FindOrAdd(FIntPoint(0,Cell.Y)).Add(Cell.X);
+   if (!Cells.Contains(Cell+FIntPoint(0,1))) Lines.FindOrAdd(FIntPoint(0,Cell.Y+1)).Add(Cell.X);
+   if (!Cells.Contains(Cell+FIntPoint(-1,0))) Lines.FindOrAdd(FIntPoint(1,Cell.X)).Add(Cell.Y);
+   if (!Cells.Contains(Cell+FIntPoint(1,0))) Lines.FindOrAdd(FIntPoint(1,Cell.X+1)).Add(Cell.Y);
+  }
+  TArray<FIntPoint> Keys;Lines.GetKeys(Keys);Keys.Sort([](FIntPoint A,FIntPoint B) { return A.X==B.X ? A.Y<B.Y : A.X<B.X; });
+  TArray<FBoundary> Result;
+  for (FIntPoint Key:Keys)
+  {
+   auto& Spans=Lines[Key];Spans.Sort();
+   for (int32 I=0;I<Spans.Num();)
+   {
+    const int32 Start=Spans[I++];int32 End=Start+1;while (I<Spans.Num() && Spans[I]==End) { ++End;++I; }
+    const FVector2D A=Key.X==0 ? FVector2D(Start*100.,Key.Y*100.) : FVector2D(Key.Y*100.,Start*100.);
+    const FVector2D B=Key.X==0 ? FVector2D(End*100.,Key.Y*100.) : FVector2D(Key.Y*100.,End*100.);Result.Emplace(A,B);
+   }
+  }
+  return Result;
+ }
+ TArray<FBox2D> DeckPieces(const FWarehouseMezzanineSettings& M)
+ { return M.bUseTileMask ? MergeTiles(M.Tiles) : Subtract(Deck(M),Atrium(M)); }
+ bool CoveredBy(const FBox2D& Required,const TArray<FBox2D>& Domain)
+ {
+  TArray<FBox2D> Missing{Required};
+  for (const auto& Piece:Domain)
+  {
+   TArray<FBox2D> Next;for (const auto& Rect:Missing) Next.Append(Subtract(Rect,Piece));Missing=MoveTemp(Next);
+   if (Missing.IsEmpty()) return true;
+  }
+  return Missing.IsEmpty();
  }
  struct FShaft { AActor* Actor=nullptr;TArray<FBox2D> Opening;FBox2D Clearance,Landing; };
  TArray<FShaft> Shafts(const AWarehouseBuildingLayout* Building,const TArray<AActor*>& Removed={})
@@ -162,9 +249,11 @@ namespace
   }
   return FBox(ForceInit);
  }
- TArray<FPart> Plan(const AWarehouseBuildingLayout* Building,const FWarehouseBuildingSettings& S,const TArray<AActor*>& Removed={})
+ TArray<FPart> Plan(const AWarehouseBuildingLayout* Building,const FWarehouseBuildingSettings& S,const TArray<AActor*>& Removed={},bool IncludeServices=true)
  {
   TArray<FPart> Parts;const FBox2D Shell=Footprint(S);const auto Lifts=Shafts(Building,Removed);
+  TArray<FBox2D> Domains[4];Domains[0].Add(Shell);
+  for (int32 Floor=1;Floor<4;++Floor) if (Upper(S,Floor).bEnabled) Domains[Floor]=DeckPieces(Upper(S,Floor));
   auto Add=[&](EPart Role,FVector Centre,FVector Size,int32 Floor=0,FQuat Rotation=FQuat::Identity,AStaticMeshActor* Source=nullptr)
   { if (Size.GetMin()>.05) Parts.Add({Role,Centre,Size,Rotation,Floor,Source}); };
   auto FreeOfShaft=[&](FVector2D Centre,FVector2D Size)
@@ -172,7 +261,7 @@ namespace
   auto Slab=[&](FBox2D Rect,int32 Floor)
   {
    TArray<FBox2D> Pieces={Rect};
-   if (Floor>0) for (const FBox2D Hole:{Atrium(Upper(S,Floor)),StairOpening(Upper(S,Floor))})
+   if (Floor>0) for (const FBox2D Hole:{StairOpening(Upper(S,Floor))})
    { TArray<FBox2D> Next;for (const auto& P:Pieces) Next.Append(Subtract(P,Hole));Pieces=MoveTemp(Next); }
    // Keep the uncut support domain as the source. The shared shaft transaction
    // cuts live replacements, so moving/deleting a lift can restore its old hole.
@@ -240,21 +329,65 @@ namespace
    const FVector2D Delta=B-A;const double Length=Delta.Size();if (Length<1) return;
    const FQuat Rotation(FVector::UpVector,FMath::Atan2(Delta.Y,Delta.X));
    const int32 Count=FMath::Max(1,FMath::CeilToInt(Length/160.));
+   const auto& M=Upper(S,Floor);const FQuat StairRotation(FVector::UpVector,FMath::DegreesToRadians(M.StairYawDegrees));
+   const FVector2D Exit=M.StairOffsetCm+FVector2D(StairRotation.RotateVector(FVector(406,-60,0)));
+   auto ClearRail=[&](FVector2D Centre,FVector2D Extent)
+   {
+    return FreeOfShaft(Centre,Extent) && (Centre-Exit).Size()>=200 &&
+     (!M.bUseTileMask || !Overlaps(FBox2D(Centre-Extent*.5,Centre+Extent*.5),StairOpening(M).ExpandBy(5)));
+   };
    for (int32 I=0;I<Count;++I)
    {
     const FVector2D Centre=A+Delta*((I+.5)/Count);const double Span=Length/Count;
     const FVector2D Extent(FMath::Abs(Delta.X/Length)*Span+5,FMath::Abs(Delta.Y/Length)*Span+5);
-    const auto& M=Upper(S,Floor);const FQuat StairRotation(FVector::UpVector,FMath::DegreesToRadians(M.StairYawDegrees));
-    const FVector2D Exit=M.StairOffsetCm+FVector2D(StairRotation.RotateVector(FVector(406,-60,0)));
-    if (!FreeOfShaft(Centre,Extent) || (Centre-Exit).Size()<200) continue;
+    if (!ClearRail(Centre,Extent)) continue;
     for (double Height:{10.,57.,110.}) Add(EPart::Rail,FVector(Centre,Floor*400.+Height),FVector(Span,5,Height==10 ? 14 : 5),Floor,Rotation);
     Add(EPart::Rail,FVector(A+Delta*(double(I)/Count),Floor*400.+55),FVector(5,5,110),Floor);
    }
-   if (FreeOfShaft(B,FVector2D(5,5))) Add(EPart::Rail,FVector(B,Floor*400.+55),FVector(5,5,110),Floor);
+   if (ClearRail(B,FVector2D(5,5))) Add(EPart::Rail,FVector(B,Floor*400.+55),FVector(5,5,110),Floor);
   };
   for (int32 Floor=1;Floor<4;++Floor) if (Upper(S,Floor).bEnabled)
   {
-   const auto& M=Upper(S,Floor);const FBox2D Outer=Deck(M),Hole=Atrium(M);Slab(Outer,Floor);
+   const auto& M=Upper(S,Floor);const FBox2D Outer=Deck(M),Hole=Atrium(M);
+   const auto& Domain=Domains[Floor];for (const auto& Piece:Domain) Slab(Piece,Floor);
+   if (M.bUseTileMask)
+   {
+    // Only occupied rectangles receive framing. A concave footprint's bounding
+    // box is never used as support; columns bridge an absent lower deck to ground.
+    TSet<FIntPoint> ColumnPoints;
+    for (const auto& Rect:Domain)
+    {
+     const int32 NX=FMath::Max(1,FMath::CeilToInt((Rect.GetSize().X-50)/800.));
+     const int32 NY=FMath::Max(1,FMath::CeilToInt((Rect.GetSize().Y-50)/800.));
+     for (int32 IX=0;IX<=NX;++IX)
+     {
+      const double X=FMath::Lerp(Rect.Min.X+25,Rect.Max.X-25,double(IX)/NX);
+      // Beam intervals stop at both stair openings and lift shafts.
+      TArray<FBox2D> Beams{FBox2D(FVector2D(X-13,Rect.Min.Y+25),FVector2D(X+13,Rect.Max.Y-25))};
+      TArray<FBox2D> Openings{StairOpening(M).ExpandBy(2)};for (const auto& Lift:Lifts) Openings.Add(Lift.Clearance);
+      for (const auto& Opening:Openings)
+      { TArray<FBox2D> Next;for (const auto& Beam:Beams) Next.Append(Subtract(Beam,Opening));Beams=MoveTemp(Next); }
+      if (Building->BeamTemplate) for (const auto& Beam:Beams)
+       Add(EPart::Beam,FVector(Beam.GetCenter(),Floor*400.-38),FVector(Beam.GetSize(),30),Floor);
+      if (Building->ColumnTemplate) for (int32 IY=0;IY<=NY;++IY)
+      {
+       const double Y=FMath::Lerp(Rect.Min.Y+25,Rect.Max.Y-25,double(IY)/NY);
+       const FIntPoint Key(FMath::RoundToInt(X),FMath::RoundToInt(Y));if (ColumnPoints.Contains(Key)) continue;ColumnPoints.Add(Key);
+       const FBox2D Foot(FVector2D(X-11,Y-11),FVector2D(X+11,Y+11));
+       bool StairBlocked=false;for (int32 Lower=1;Lower<=Floor;++Lower)
+        if (Upper(S,Lower).bEnabled && Overlaps(Foot,StairOpening(Upper(S,Lower)).ExpandBy(10))) { StairBlocked=true;break; }
+       if (!FreeOfShaft(Foot.GetCenter(),Foot.GetSize()) || StairBlocked) continue;
+       int32 Bottom=Floor-1;
+       while (Bottom>0 && (!Upper(S,Bottom).bEnabled || !CoveredBy(Foot,Domains[Bottom]))) --Bottom;
+       for (int32 Segment=Bottom;Segment<Floor;++Segment)
+        Add(EPart::Column,FVector(X,Y,(Segment+.5)*400.),FVector(22,22,400),Segment);
+      }
+     }
+    }
+    for (const auto& Edge:TileBoundaries(M.Tiles)) Rail(Edge.Key,Edge.Value,Floor);
+   }
+   else
+   {
    if (Building->ColumnTemplate) for (double X:{Outer.Min.X+25,Outer.Max.X-25,Hole.Min.X-12,Hole.Max.X+12})
     for (int32 I=0,N=FMath::CeilToInt((M.SizeCm.Y-50)/900.);I<=N;++I)
     {
@@ -271,6 +404,7 @@ namespace
     Rail(Rect.Min,FVector2D(Rect.Max.X,Rect.Min.Y),Floor);Rail(FVector2D(Rect.Max.X,Rect.Min.Y),Rect.Max,Floor);
     Rail(Rect.Max,FVector2D(Rect.Min.X,Rect.Max.Y),Floor);Rail(FVector2D(Rect.Min.X,Rect.Max.Y),Rect.Min,Floor);
    }
+   }
    const FQuat R(FVector::UpVector,FMath::DegreesToRadians(M.StairYawDegrees));const FVector Origin(M.StairOffsetCm,(Floor-1)*400.);
    for (int32 I=0;I<24;++I) Add(EPart::Stair,Origin+R.RotateVector(FVector(-336+(I+.5)*28,0,(I+.5)*400./24)),FVector(28,130,400./24),Floor-1,R);
    for (int32 End:{-1,1}) Add(EPart::Stair,Origin+R.RotateVector(FVector(End*406,-60,End<0 ? -10 : 390)),FVector(140,250,20),End<0 ? Floor-1 : Floor,R);
@@ -282,41 +416,179 @@ namespace
     for (int32 I=0;I<=6;++I) Add(EPart::Rail,Origin+R.RotateVector(FVector(-336+I*112,Side,I*400./6+55)),FVector(5,5,110),Floor);
    }
   }
-  // Density follows the final roof/deck dimensions, using real service modules.
-  for (int32 Ceiling=1;Ceiling<=4;++Ceiling)
-  {
-   const bool Roof=Ceiling==4;if (!Roof && !Upper(S,Ceiling).bEnabled) continue;
-   const FBox2D Area=Roof ? Shell : Deck(Upper(S,Ceiling));const double Z=Roof ? S.RoofHeightCm : Ceiling*400.;
-   const int32 NX=FMath::Max(1,FMath::CeilToInt(Area.GetSize().X/800.)),NY=FMath::Max(1,FMath::CeilToInt(Area.GetSize().Y/600.));
-   for (int32 IX=0;IX<NX;++IX) for (int32 IY=0;IY<NY;++IY)
-   {
-    const FVector2D P(Area.Min.X+(IX+.5)*Area.GetSize().X/NX,Area.Min.Y+(IY+.5)*Area.GetSize().Y/NY);
-    if (!Roof && Atrium(Upper(S,Ceiling)).IsInside(P)) continue;
-    if (!FreeOfShaft(P,FVector2D(140,80))) continue;
-    if (Building->LightTemplate) Add(EPart::Light,FVector(P,Z-70),FVector(120,16,12),Roof ? 3 : Ceiling-1);
-    if (Building->PipeTemplate) Add(EPart::Pipe,FVector(P.X,P.Y-70,Z-100),FVector(Area.GetSize().X/NX,6,6),Roof ? 3 : Ceiling-1);
-    if (Building->TrayTemplate) Add(EPart::Tray,FVector(P.X,P.Y+70,Z-85),FVector(Area.GetSize().X/NX,35,12),Roof ? 3 : Ceiling-1);
-   }
-  }
+  // Tile preview validates only architecture. Service planning and actor creation
+  // happen on Apply, never on Tick or every mouse movement in the building tool.
+  if (!IncludeServices) return Parts;
+  TArray<FBox> BeamBounds;
+  for (const auto& Part:Parts) if (Part.Role==EPart::Beam) BeamBounds.Add(Part.Bounds());
   TArray<FBox> Occupied;
   for (TActorIterator<AActor> It(Building->GetWorld());It;++It) if (Preserved(Building,*It) && !Removed.Contains(*It))
   {
    const FBox Bounds=AWarehouseDamageSystem::GetPhysicalBounds(*It);
    if (Bounds.IsValid) Occupied.Emplace(Bounds.Min-Building->GetActorLocation(),Bounds.Max-Building->GetActorLocation());
   }
-  Parts.RemoveAll([&](const FPart& P)
+  auto MeshFor=[&](const TCHAR* Key)->UStaticMesh*
+  { const auto* Found=Building->ServiceMeshes.Find(FName(Key));return Found ? Found->Get() : nullptr; };
+  auto Module=[&](EPart Role,const TCHAR* Key,FTransform Pose,int32 Floor,bool Roof,bool Riser=false)->FPart
   {
-   if (P.Role!=EPart::Light && P.Role!=EPart::Pipe && P.Role!=EPart::Tray) return false;
-   const FBox Bounds=P.Bounds();const FBox2D XY(FVector2D(Bounds.Min),FVector2D(Bounds.Max));
-   for (const auto& Lift:Lifts) if (Overlaps(XY,Lift.Clearance)) return true;
-   if (P.Centre.Z<S.RoofHeightCm-120)
+   FPart Part;Part.Role=Role;Part.Floor=Floor;Part.Asset=MeshFor(Key);Part.RoofService=Roof;Part.Riser=Riser;
+   if (Part.Asset)
    {
-    const int32 Ceiling=FMath::Clamp(FMath::RoundToInt((P.Centre.Z+85)/400.),1,3);const auto& M=Upper(S,Ceiling);
-    if (!Contains(Deck(M),XY) || (M.AtriumSizeCm.GetMin()>0 && Overlaps(Atrium(M),XY))) return true;
+    const FBox Bounds=Part.Asset->GetBoundingBox();
+    Part.Centre=Pose.TransformPosition(Bounds.GetCenter());Part.Size=Bounds.GetSize()*Pose.GetScale3D().GetAbs();Part.Rotation=Pose.GetRotation();
    }
+   return Part;
+  };
+  auto Blocked=[&](const FPart& Part,const FBox2D& Area,const TArray<FBox2D>& Holes)
+  {
+   if (!Part.Asset) return true;
+   const FBox Bounds=Part.Bounds();const FBox2D XY(FVector2D(Bounds.Min),FVector2D(Bounds.Max));
+   if (!Contains(Area,XY)) return true;
+   for (const auto& Hole:Holes) if (Overlaps(XY,Hole)) return true;
    for (const FBox& Body:Occupied) if (Overlaps(Bounds,Body,1)) return true;
    return false;
-  });
+  };
+  for (int32 Ceiling=1;Ceiling<=4;++Ceiling)
+  {
+   const bool Roof=Ceiling==4;if (!Roof && !Upper(S,Ceiling).bEnabled) continue;
+   const FBox2D Area=Roof ? Shell : Deck(Upper(S,Ceiling));
+   // Generated slabs are 20 cm thick. Mounts touch the underside, not floor level.
+   const double Top=Roof ? S.RoofHeightCm : Ceiling*400.-20.;const int32 Floor=Roof ? 3 : Ceiling-1;
+   TArray<FBox2D> Holes;for (const auto& Lift:Lifts) Holes.Add(Lift.Clearance);
+   if (!Roof)
+   {
+    const auto& M=Upper(S,Ceiling);
+    // Treat every unpainted cell as a real void, including open concave edges.
+    // Cutting these intervals prevents a pipe/hanger from spanning an empty AABB.
+    if (M.bUseTileMask)
+    {
+     TArray<FBox2D> Missing{Area};
+     for (const auto& Piece:Domains[Ceiling])
+     { TArray<FBox2D> Next;for (const auto& Rect:Missing) Next.Append(Subtract(Rect,Piece));Missing=MoveTemp(Next); }
+     Holes.Append(Missing);
+    }
+    else if (M.AtriumSizeCm.GetMin()>0) Holes.Add(Atrium(M));
+    Holes.Add(StairOpening(M));
+   }
+   auto Assembly=[&](const TArray<FPart>& Items)
+   {
+    // Do not leave a hanger/cable floating when its parent run is omitted for stock.
+    for (const auto& Item:Items) if (Blocked(Item,Area,Holes)) return false;
+    Parts.Append(Items);return true;
+   };
+   auto Run=[&](EPart Role,const TCHAR* Key,FVector2D A,FVector2D B,double Z)
+   {
+    if (!MeshFor(Key)) return;
+    const bool AlongX=FMath::Abs(B.X-A.X)>FMath::Abs(B.Y-A.Y);const int32 Axis=AlongX ? 0 : 1,Across=1-Axis;
+    if (B[Axis]<A[Axis]) Swap(A,B);
+    const double Cross=A[Across];TArray<FVector2D> Intervals{FVector2D(A[Axis],B[Axis])};
+    auto Cut=[&](const FBox2D& Hole)
+    {
+     // Includes tray width, native hanger and coupling bounds, not just a centreline.
+     const auto Expanded=Hole.ExpandBy(36.);
+     if (Cross<Expanded.Min[Across] || Cross>Expanded.Max[Across]) return;
+     TArray<FVector2D> Next;
+     for (const auto& Span:Intervals)
+     {
+      if (Expanded.Max[Axis]<=Span.X || Expanded.Min[Axis]>=Span.Y) { Next.Add(Span);continue; }
+      if (Expanded.Min[Axis]>Span.X) Next.Add(FVector2D(Span.X,Expanded.Min[Axis]));
+      if (Expanded.Max[Axis]<Span.Y) Next.Add(FVector2D(Expanded.Max[Axis],Span.Y));
+     }
+     Intervals=MoveTemp(Next);
+    };
+    for (const auto& Hole:Holes) Cut(Hole);
+    // Stock and equipment retain their positions. Only obstructed service intervals
+    // are omitted; a newly generated cosmetic route never deletes their cargo.
+    for (const auto& Body:Occupied) if (Body.Max.Z>Z-20 && Body.Min.Z<Top+.5) Cut(FBox2D(FVector2D(Body.Min),FVector2D(Body.Max)));
+    const FQuat Rotation(FVector::UpVector,AlongX ? 0. : HALF_PI);
+    for (const auto& Span:Intervals)
+    {
+     const double Length=Span.Y-Span.X;if (Length<80) continue;
+     // At most 2x the authored 2 m module; radial section dimensions stay 1x.
+     const int32 Count=FMath::CeilToInt(Length/400.);const double ModuleLength=Length/Count;
+     for (int32 I=0;I<Count;++I)
+     {
+      FVector2D Start=A;Start[Axis]=Span.X+I*ModuleLength;
+      FVector2D Centre=Start;Centre[Axis]+=ModuleLength*.5;
+      TArray<FPart> Items{Module(Role,Key,FTransform(Rotation,FVector(Start,Z),FVector(ModuleLength/200.,1,1)),Floor,Roof)};
+      if (Role==EPart::Tray && MeshFor(TEXT("CableBundle_2m")))
+       Items.Add(Module(EPart::Cable,TEXT("CableBundle_2m"),FTransform(Rotation,FVector(Start,Z),FVector(ModuleLength/200.,1,1)),Floor,Roof));
+      const TCHAR* Hanger=Role==EPart::Tray ? TEXT("TrayHanger") : TEXT("PipeHanger");
+      if (MeshFor(Hanger))
+      {
+       // Models include the native mounting plate. Its top meets the real ceiling.
+       const double NativeTop=MeshFor(Hanger)->GetBoundingBox().Max.Z;
+       Items.Add(Module(EPart::ServiceSupport,Hanger,FTransform(Rotation,FVector(Centre,Z),FVector(1,1,(Top-Z+.2)/NativeTop)),Floor,Roof));
+      }
+      if (Role==EPart::Pipe && MeshFor(TEXT("SprinklerHead")))
+       Items.Add(Module(EPart::Sprinkler,TEXT("SprinklerHead"),FTransform(FQuat::Identity,FVector(Centre,Z-3)),Floor,Roof));
+      Assembly(Items);
+     }
+    }
+   };
+   // Connected perimeter mains keep the two sides of an atrium on the same
+   // visible network. Branch count grows with final usable area, not world scale.
+   for (bool Pipe:{false,true})
+   {
+    const double Margin=Pipe ? 150. : 80.,Z=Top-(Pipe ? 85. : 58.);
+    const FBox2D Network(Area.Min+FVector2D(Margin),Area.Max-FVector2D(Margin));
+    if (Network.GetSize().GetMin()<160) continue;
+    const EPart Role=Pipe ? EPart::Pipe : EPart::Tray;const TCHAR* Key=Pipe ? TEXT("FirePipeStraight_2m") : TEXT("TrayStraight_2m");
+    Run(Role,Key,Network.Min,FVector2D(Network.Max.X,Network.Min.Y),Z);
+    Run(Role,Key,FVector2D(Network.Min.X,Network.Max.Y),Network.Max,Z);
+    Run(Role,Key,Network.Min,FVector2D(Network.Min.X,Network.Max.Y),Z);
+    Run(Role,Key,FVector2D(Network.Max.X,Network.Min.Y),Network.Max,Z);
+    const int32 Rows=FMath::Max(1,FMath::CeilToInt(Network.GetSize().Y/(Pipe ? 800. : 1200.)));
+    for (int32 Row=1;Row<Rows;++Row)
+    {
+     const double Y=FMath::Lerp(Network.Min.Y,Network.Max.Y,double(Row)/Rows);
+     Run(Role,Key,FVector2D(Network.Min.X,Y),FVector2D(Network.Max.X,Y),Z);
+    }
+   }
+   const int32 NX=FMath::Max(1,FMath::CeilToInt(Area.GetSize().X/800.)),NY=FMath::Max(1,FMath::CeilToInt(Area.GetSize().Y/800.));
+   for (int32 IX=0;IX<NX;++IX) for (int32 IY=0;IY<NY;++IY)
+   {
+    const FVector2D P(Area.Min.X+(IX+.5)*Area.GetSize().X/NX,Area.Min.Y+(IY+.5)*Area.GetSize().Y/NY);
+    auto MountHeight=[&](const FBox2D& Footprint)
+    {
+     double Mount=Top;
+     for (const FBox& Beam:BeamBounds)
+      if (Beam.Max.Z<=Top+.5 && Beam.Min.Z>Top-100 && Overlaps(Footprint,FBox2D(FVector2D(Beam.Min),FVector2D(Beam.Max)))) Mount=FMath::Min(Mount,Beam.Min.Z);
+     return Mount;
+    };
+    // A light crossing a girder hangs below that girder. Each suspension rod
+    // meets its own supporting beam/ceiling instead of ending in empty space.
+    const double Z=MountHeight(FBox2D(P-FVector2D(60,5),P+FVector2D(60,5)))-12;
+    TArray<FPart> Items{Module(EPart::Light,TEXT("LEDLinear_1200"),FTransform(FQuat::Identity,FVector(P.X-60,P.Y,Z)),Floor,Roof)};
+    if (MeshFor(TEXT("ConduitStraight_1m"))) for (double X:{P.X-54,P.X+54})
+    {
+     const double Mount=MountHeight(FBox2D(FVector2D(X-.4,P.Y-.4),FVector2D(X+.4,P.Y+.4)));
+     Items.Add(Module(EPart::ServiceSupport,TEXT("ConduitStraight_1m"),FTransform(FRotationMatrix::MakeFromX(FVector::UpVector).ToQuat(),FVector(X,P.Y,Z+4),FVector((Mount-Z-3.8)/100.,.25,.25)),Floor,Roof));
+    }
+    Assembly(Items);
+   }
+  }
+  // Wall risers connect the roof tray to an electrical service entry. They follow
+  // the new north-wall inner face and stay clear of its doors and the lift shaft.
+  double WallY=Shell.Max.Y;
+  for (const auto& Part:Parts) if (Part.Role==EPart::Wall && Part.Size.Z>200 && FMath::Abs(Part.Centre.Y-Shell.Max.Y)<100) WallY=Part.Bounds().Min.Y;
+  TArray<FBox2D> RiserHoles;for (const auto& Lift:Lifts) RiserHoles.Add(Lift.Clearance);
+  if (MeshFor(TEXT("ConduitStraight_1m"))) for (double X:{Shell.Min.X+80,Shell.Max.X-80})
+  {
+   const double Top=S.RoofHeightCm-58.;TArray<FPart> Riser;
+   for (double Low=220;Low<Top-.1;)
+   {
+    const int32 Level=FMath::FloorToInt((Low+.01)/400.);
+    const double High=FMath::Min(Top,FMath::Min(Low+200.,(Level+1)*400.));
+    Riser.Add(Module(EPart::Conduit,TEXT("ConduitStraight_1m"),FTransform(FRotationMatrix::MakeFromX(FVector::UpVector).ToQuat(),FVector(X,WallY-4,Low),FVector((High-Low)/100.,1,1)),FMath::Min(Level,3),false,true));
+    Low=High;
+   }
+   const double FeedDelta=Shell.Max.Y-80-(WallY-4);
+   if (FMath::Abs(FeedDelta)>.1)
+    Riser.Add(Module(EPart::Conduit,TEXT("ConduitStraight_1m"),FTransform(FRotationMatrix::MakeFromX(FVector(0,FMath::Sign(FeedDelta),0)).ToQuat(),FVector(X,WallY-4,Top),FVector(FMath::Abs(FeedDelta)/100.,1,1)),0,true,true));
+   bool Clear=true;for (const auto& Item:Riser) if (Blocked(Item,Shell,RiserHoles)) { Clear=false;break; }
+   if (Clear) Parts.Append(Riser);
+  }
   return Parts;
  }
  bool Preserved(const AWarehouseBuildingLayout* Building,const AActor* Actor)
@@ -332,6 +604,27 @@ AWarehouseBuildingLayout::AWarehouseBuildingLayout()
 {
  PrimaryActorTick.bCanEverTick=false;SetRootComponent(CreateDefaultSubobject<USceneComponent>(TEXT("BuildingOrigin")));
  Tags={TEXT("LayoutFixed"),TEXT("WarehouseBuildingController")};
+}
+
+TArray<FIntPoint> AWarehouseBuildingLayout::GetMezzanineTiles(const FWarehouseMezzanineSettings& Floor)
+{
+ if (Floor.bUseTileMask) return SortedTiles(Floor.Tiles);
+ TArray<FIntPoint> Result;const FBox2D Outer=Deck(Floor),Hole=Atrium(Floor);
+ if (Floor.OffsetCm.ContainsNaN() || Floor.SizeCm.ContainsNaN() || Floor.AtriumSizeCm.ContainsNaN()) return Result;
+ const int32 X0=FMath::Clamp(FMath::CeilToInt(Outer.Min.X/100.),-48,48),X1=FMath::Clamp(FMath::FloorToInt(Outer.Max.X/100.),-48,48);
+ const int32 Y0=FMath::Clamp(FMath::CeilToInt(Outer.Min.Y/100.),-40,40),Y1=FMath::Clamp(FMath::FloorToInt(Outer.Max.Y/100.),-40,40);
+ for (int32 Y=Y0;Y<Y1;++Y) for (int32 X=X0;X<X1;++X)
+ { const FIntPoint Cell(X,Y);if (Floor.AtriumSizeCm.GetMin()<=0 || !Overlaps(TileBox(Cell),Hole)) Result.Add(Cell); }
+ return Result;
+}
+
+void AWarehouseBuildingLayout::SetMezzanineTiles(FWarehouseMezzanineSettings& Floor,const TArray<FIntPoint>& Tiles)
+{
+ Floor.Tiles=SortedTiles(Tiles);Floor.bUseTileMask=true;
+ const FBox2D Bounds=Deck(Floor);
+ if (Bounds.bIsValid) { Floor.OffsetCm=Bounds.GetCenter();Floor.SizeCm=Bounds.GetSize(); }
+ // The old atrium is represented by absent cells, rather than a second cutout.
+ Floor.AtriumSizeCm=FVector2D::ZeroVector;
 }
 AWarehouseBuildingLayout* AWarehouseBuildingLayout::Find(const AActor* Context)
 {
@@ -379,6 +672,14 @@ void AWarehouseBuildingLayout::CaptureExistingLayout()
   }
  }
  CapturedFootprint=Footprint(Settings);
+ // These owned meshes use +X as the route axis. A previously placed actor may
+ // face any direction or be stretched; never use its world bounds as a section.
+ for (const TCHAR* Key:{TEXT("FirePipeStraight_2m"),TEXT("TrayStraight_2m"),TEXT("CableBundle_2m"),TEXT("ConduitStraight_1m"),
+      TEXT("TrayHanger"),TEXT("PipeHanger"),TEXT("SprinklerHead"),TEXT("LEDLinear_1200")})
+ {
+  const FString Path=FString::Printf(TEXT("/Game/Warehouse/Services/Meshes/SM_WS_%s.SM_WS_%s"),Key,Key);
+  if (auto* Asset=LoadObject<UStaticMesh>(nullptr,*Path)) ServiceMeshes.Add(FName(Key),Asset);
+ }
  // Retain only native, already-existing fixed contacts before source bodies
  // are hidden. Never grant this baseline relationship to moving cargo/people.
  for (AActor* Actor:ReplacedStructure) if (auto* Source=Cast<AStaticMeshActor>(Actor);IsValid(Source) && EntranceExterior(Source))
@@ -426,9 +727,20 @@ bool AWarehouseBuildingLayout::ValidateSettingsInternal(const FWarehouseBuilding
  for (int32 Floor=1;Floor<4;++Floor)
  {
   const auto& M=Upper(Proposed,Floor);if (!M.bEnabled) continue;Highest=Floor;
-  if (M.OffsetCm.ContainsNaN() || M.SizeCm.ContainsNaN() || M.AtriumSizeCm.ContainsNaN() || M.StairOffsetCm.ContainsNaN() || !FMath::IsFinite(M.StairYawDegrees) ||
-      M.SizeCm.X<800 || M.SizeCm.Y<800 || M.AtriumSizeCm.X<0 || M.AtriumSizeCm.Y<0 || M.SizeCm.X-M.AtriumSizeCm.X<400 || M.SizeCm.Y-M.AtriumSizeCm.Y<400 || !Contains(Shell,Deck(M),20))
-   return Fail(FString::Printf(TEXT("%d층 복층은 건물 안에 있어야 하며, 중정 둘레에 최소 2m 폭의 바닥이 필요합니다."),Floor+1));
+  if (M.StairOffsetCm.ContainsNaN() || !FMath::IsFinite(M.StairYawDegrees)) return Fail(TEXT("계단 위치와 방향은 유효한 숫자여야 합니다."));
+  if (M.bUseTileMask)
+  {
+   if (M.Tiles.IsEmpty()) return Fail(FString::Printf(TEXT("%d층 바닥 타일이 없습니다. 바닥을 추가하거나 해당 층을 끄세요."),Floor+1));
+   if (M.Tiles.Num()>96*80) return Fail(TEXT("한 층의 바닥 타일은 최대 96×80칸입니다."));
+   for (FIntPoint Cell:M.Tiles)
+    if (Cell.X< -48 || Cell.X>=48 || Cell.Y< -40 || Cell.Y>=40 || !Contains(Shell,TileBox(Cell),20))
+     return Fail(FString::Printf(TEXT("%d층 타일이 건물 외곽 또는 최대 96×80칸 범위를 벗어납니다. 외벽 안쪽에 배치하세요."),Floor+1));
+   if (MergeTiles(M.Tiles).Num()>128 || TileBoundaries(M.Tiles).Num()>256)
+    return Fail(FString::Printf(TEXT("%d층 바닥이 너무 잘게 나뉘었습니다. 타일을 연결해 분리 영역과 경계 수를 줄이세요 (병합 바닥 128개·경계 256개 이내)."),Floor+1));
+  }
+  else if (M.OffsetCm.ContainsNaN() || M.SizeCm.ContainsNaN() || M.AtriumSizeCm.ContainsNaN() ||
+           M.SizeCm.X<800 || M.SizeCm.Y<800 || M.AtriumSizeCm.X<0 || M.AtriumSizeCm.Y<0 || M.SizeCm.X-M.AtriumSizeCm.X<400 || M.SizeCm.Y-M.AtriumSizeCm.Y<400 || !Contains(Shell,Deck(M),20))
+    return Fail(FString::Printf(TEXT("%d층 복층은 건물 안에 있어야 하며, 중정 둘레에 최소 2m 폭의 바닥이 필요합니다."),Floor+1));
   if (Floor>1 && !Upper(Proposed,Floor-1).bEnabled) return Fail(TEXT("복층은 아래층부터 순서대로 활성화해야 합니다."));
  }
  if (Proposed.RoofHeightCm<Highest*400+300) return Fail(TEXT("최상층 바닥 위로 최소 3m의 층고를 확보해야 합니다."));
@@ -449,7 +761,8 @@ bool AWarehouseBuildingLayout::ValidateSettingsInternal(const FWarehouseBuilding
  if (HaveLift && !GetWorld()->IsGameWorld()) return Fail(TEXT("승강기 설치 건물은 플레이 중 건물 편집 화면에서 변경하세요."));
  if (HaveLift && Proposed.RoofHeightCm<Highest*400+340) return Fail(TEXT("승강기 상부 프레임과 천장 사이에 여유 공간을 확보하세요."));
  // Editing pauses the world; retained vehicles and loaded lifts keep their bodies and loads.
- const auto Parts=Plan(this,Proposed,Removed);const FVector Origin=GetActorLocation();
+ const auto Parts=Plan(this,Proposed,Removed,false);const FVector Origin=GetActorLocation();
+ if (Parts.Num()>6000) return Fail(TEXT("바닥 경계·기둥·난간이 너무 많습니다. 작은 섬이나 좁은 굴곡을 줄여 건물 구조 부품을 6,000개 이내로 만드세요."));
  for (const FShaft& Shaft:Shafts(this,Removed)) for (int32 Floor=0;Floor<Floors;++Floor)
   for (const FBox2D& Required:{Shaft.Opening[Floor],Shaft.Landing})
   {
@@ -474,13 +787,20 @@ bool AWarehouseBuildingLayout::ValidateSettingsInternal(const FWarehouseBuilding
    const int32 LandingFloor=End<0 ? Floor-1 : Floor;FBox2D Landing(ForceInit);
    for (double X:{-70.,70.}) for (double Y:{-125.,125.})
     Landing+=M.StairOffsetCm+FVector2D(R.RotateVector(FVector(End*406+X,-60+Y,0)));
-   bool Connected=false;
+   TArray<FBox2D> Supports;
    for (const auto& P:Parts) if (P.Role==EPart::Floor && P.Floor==LandingFloor)
    {
-    const FBox B=P.Bounds();const double Width=FMath::Min(Landing.Max.X,B.Max.X)-FMath::Max(Landing.Min.X,B.Min.X);
-    const double Depth=FMath::Min(Landing.Max.Y,B.Max.Y)-FMath::Max(Landing.Min.Y,B.Min.Y);
-    if (Width>=89.9 && Depth>=89.9) { Connected=true;break; }
+    const FBox B=P.Bounds();const FBox2D Rect(FVector2D(B.Min),FVector2D(B.Max));if (Overlaps(Rect,Landing)) Supports.Add(Rect);
    }
+   // A landing can cross merged slab seams; validate the union, not one actor.
+   TArray<double> Xs{Landing.Min.X,Landing.Max.X-89.9},Ys{Landing.Min.Y,Landing.Max.Y-89.9};
+   for (const auto& Rect:Supports)
+   {
+    Xs.Add(FMath::Clamp(Rect.Min.X,Landing.Min.X,Landing.Max.X-89.9));Xs.Add(FMath::Clamp(Rect.Max.X-89.9,Landing.Min.X,Landing.Max.X-89.9));
+    Ys.Add(FMath::Clamp(Rect.Min.Y,Landing.Min.Y,Landing.Max.Y-89.9));Ys.Add(FMath::Clamp(Rect.Max.Y-89.9,Landing.Min.Y,Landing.Max.Y-89.9));
+   }
+   bool Connected=false;
+   for (double X:Xs) { for (double Y:Ys) if (CoveredBy(FBox2D(FVector2D(X,Y),FVector2D(X+89.9,Y+89.9)),Supports)) { Connected=true;break; }if (Connected) break; }
    if (!Connected) return Fail(FString::Printf(TEXT("%d층 계단참이 실제 바닥과 연결되지 않습니다. 중정·계단 구멍 밖에 통행 폭 90cm를 확보하세요."),LandingFloor+1));
   }
  }
@@ -519,7 +839,7 @@ bool AWarehouseBuildingLayout::ValidateSettingsInternal(const FWarehouseBuilding
   for (const auto& Part:Parts)
   {
    if (Part.Role==EPart::Floor && (It->IsA<AWarehouseElevator>() || It->IsA<AWarehousePalletLift>())) continue;
-   if (Part.Role==EPart::Light || Part.Role==EPart::Pipe || Part.Role==EPart::Tray) continue; // These are automatically omitted around preserved goods below.
+   if (Service(Part.Role)) continue; // These are automatically omitted around preserved goods below.
    const FBox Planned=Part.Bounds();
    if (Overlaps(Bounds,Planned,1.))
    {
@@ -627,6 +947,7 @@ void AWarehouseBuildingLayout::RestoreOriginalStructure()
 bool AWarehouseBuildingLayout::ApplySettings(const FWarehouseBuildingSettings& Proposed)
 {
  if (AWarehousePlayStage::Find(this)) { Status=TEXT("플레이 스테이지의 건물·층수·지형은 고정입니다.");return false; }
+ WarehouseLoading::FScopedTask Loading(this,TEXT("건물과 장식을 다시 배치하고 있습니다."));
  CaptureExistingLayout();FString Reason;TArray<AActor*> Removed;TArray<AWarehouseForklift*> Relocate;
  if (!ValidateSettingsInternal(Proposed,Reason,Removed,Relocate)) { Status=Reason;return false; }
  const bool WasPaused=UGameplayStatics::IsGamePaused(this),GameWorld=GetWorld()->IsGameWorld();
@@ -687,31 +1008,41 @@ bool AWarehouseBuildingLayout::ApplySettings(const FWarehouseBuildingSettings& P
   return true;
  };
  if (!ExpandRemoval()) return false;
+ // Budget the full plan before changing any actor visibility, cargo inventory,
+ // collision or support. Removed actors are excluded explicitly during planning.
+ const auto Parts=Plan(this,Proposed,Removed);
+ if (Parts.Num()>14000) { Status=TEXT("건물·장식 부품이 14,000개를 넘습니다. 바닥 경계나 분리된 영역을 줄인 뒤 다시 적용하세요.");return false; }
  if (!Removed.IsEmpty())
  {
   Store=AWarehouseLayoutInventory::Find(this);Store->CapturePrototypes(LiveLayout);
   for (AActor* Actor:Removed)
   { Staged.Add({Actor,Actor->IsHidden(),Actor->GetActorEnableCollision()});Actor->SetActorHiddenInGame(true);Actor->SetActorEnableCollision(false); }
  }
- const auto Parts=Plan(this,Proposed);TArray<TObjectPtr<AStaticMeshActor>> Next;
+ TArray<TObjectPtr<AStaticMeshActor>> Next;
  auto* Cube=LoadObject<UStaticMesh>(nullptr,TEXT("/Engine/BasicShapes/Cube.Cube"));if (!Cube) { Status=TEXT("구조용 메시를 불러올 수 없습니다.");return false; }
  // Build a complete inactive replacement first. A failed allocation cannot remove support.
  for (int32 I=0;I<Parts.Num();++I)
  {
-  const auto& Part=Parts[I];auto* Source=Template(this,Part.Role,Part.Source);auto* Original=IsValid(Source) ? Source->GetStaticMeshComponent() : nullptr;
-  UStaticMesh* Mesh=Original ? Original->GetStaticMesh().Get() : Cube;
+  const auto& Part=Parts[I];auto* Source=Template(this,Part.Role,Part.Source);auto* Original=!Part.Asset && IsValid(Source) ? Source->GetStaticMeshComponent() : nullptr;
+  UStaticMesh* Mesh=Part.Asset ? Part.Asset : Original ? Original->GetStaticMesh().Get() : Cube;
   if (!Mesh) { DestroyParts(Next);Status=TEXT("건축 템플릿 메시가 없습니다.");return false; }
   FActorSpawnParameters Spawn;Spawn.Owner=this;Spawn.ObjectFlags|=RF_Transient;Spawn.SpawnCollisionHandlingOverride=ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
   auto* Actor=GetWorld()->SpawnActor<AStaticMeshActor>(FVector::ZeroVector,FRotator::ZeroRotator,Spawn);
   if (!Actor) { DestroyParts(Next);Status=TEXT("건물 생성 실패 · 원래 구조 유지");return false; }Next.Add(Actor);
   Actor->SetActorHiddenInGame(true);Actor->SetActorEnableCollision(false);
   Actor->Tags={TEXT("LayoutFixed"),TEXT("WarehouseBuildingGenerated"),TEXT("WarehouseMapStructure"),FName(*FString::Printf(TEXT("WarehouseFloor%d"),Part.Floor))};
+  Actor->Tags.Add(FName(*FString::Printf(TEXT("WarehouseBuildingRole:%s"),PartName(Part.Role))));
   if (Part.Role==EPart::Floor) { Actor->Tags.Add(TEXT("ElevatorLayoutFloor"));if (!Part.Floor) Actor->Tags.Add(TEXT("ObserverArea")); }
-  if (Part.Role==EPart::Roof || (Part.Centre.Z>Proposed.RoofHeightCm-120 && (Part.Role==EPart::Pipe || Part.Role==EPart::Tray || Part.Role==EPart::Light || Part.Role==EPart::Beam))) Actor->Tags.Add(TEXT("ObserverRoof"));
+  if (Part.Role==EPart::Roof || Part.RoofService || (Part.Centre.Z>Proposed.RoofHeightCm-120 && Part.Role==EPart::Beam)) Actor->Tags.Add(TEXT("ObserverRoof"));
   if (Part.Role==EPart::Wall) Actor->Tags.Add(TEXT("ObserverFadeWall"));
   if (Part.Role==EPart::Exterior)
   { Actor->Tags.Add(TEXT("WarehouseEntranceExterior"));if (Source->ActorHasTag(TEXT("ObserverRoof"))) Actor->Tags.Add(TEXT("ObserverRoof")); }
-  if (Part.Role==EPart::Pipe || Part.Role==EPart::Tray || Part.Role==EPart::Light) Actor->Tags.Add(TEXT("WarehouseServices"));
+  if (Service(Part.Role))
+  {
+   Actor->Tags.Add(TEXT("WarehouseServices"));Actor->Tags.Add(FName(*FString::Printf(TEXT("WarehouseService:%s"),ServiceName(Part.Role))));
+   if (Part.Riser) Actor->Tags.Add(TEXT("WarehouseServiceRiser"));
+   else Actor->Tags.Add(FName(*(Part.RoofService ? FString(TEXT("WarehouseServiceCeiling:Roof")) : FString::Printf(TEXT("WarehouseServiceCeiling:%d"),Part.Floor+1))));
+  }
   auto* Component=Actor->GetStaticMeshComponent();Component->SetMobility(EComponentMobility::Movable);Component->SetStaticMesh(Mesh);
   if (Original) for (int32 Slot=0;Slot<Original->GetNumMaterials();++Slot) Component->SetMaterial(Slot,Original->GetMaterial(Slot));
   const FQuat BaseRotation=Original ? Original->GetComponentQuat() : FQuat::Identity;
@@ -726,6 +1057,12 @@ bool AWarehouseBuildingLayout::ApplySettings(const FWarehouseBuildingSettings& P
   const auto Surface=Part.Role==EPart::Exterior && Original ? WarehousePhysics::SurfaceFor(Original) :
    Part.Role==EPart::Floor || Part.Role==EPart::Wall || Part.Role==EPart::Stair ? EWarehouseSurface::Concrete : EWarehouseSurface::Steel;
   Component->SetCollisionProfileName(TEXT("BlockAll"));WarehousePhysics::ConfigureContact(Component,Surface);
+  Component->SetGenerateOverlapEvents(false);Component->SetComponentTickEnabled(false);Actor->SetActorTickEnabled(false);
+  if (Service(Part.Role))
+  {
+   const bool Detail=Part.Role==EPart::Cable || Part.Role==EPart::Conduit || Part.Role==EPart::ServiceSupport || Part.Role==EPart::Sprinkler;
+   Component->SetCastShadow(!Detail);Component->SetCullDistance(Detail ? 7000.f : 15000.f);
+  }
   Component->SetMobility(EComponentMobility::Static);
 #if WITH_EDITOR
   Actor->SetActorLabel(FString::Printf(TEXT("BLD_L%d_%02d_%04d"),Part.Floor+1,int32(Part.Role),I));

@@ -103,7 +103,32 @@ Build17의 `Saved/Testing/Construction/ConstructionHighRes_1792573505530887500.p
 
 ### 실행 성능 측정
 
-#### 2026-10-14 현재 저장 맵 조사
+#### 2026-10-28 코드 점검과 다음 최적화 후보
+
+이번 확인은 현재 코드와 보존된 성능 기록의 검토다. **새 실행 측정이나 최적화 구현·검증을 한 결과가 아니다.** 아래 과거 측정은 해당 날짜·시험 장면에만 적용하며, 현재 창고의 FPS나 개선율로 사용하지 않는다. 특히 10월14일 조사에서 발견한 재고·입고의 중복 하중 갱신은 이미 공유 스냅샷으로 수정되어 있다. 같은 날 `Saved/Testing/PerformanceRefactor_20261014/Comparison.json`의 `GeometryCPUReference1`/`GeometryCPUOptimized1`은 60시뮬레이션 초의 `LoadGraphBuilds`가720→600회, 한 프레임 최대2→1회인 것을 기록한다. 약12Hz→10Hz 개선 전 표를 현재의 중복 호출 수로 취급하지 않는다.
+
+| 후보와 현재 코드 근거 | 반복 조건·비용이 늘어나는 이유 | 물리·운용을 보존할 개선 제안 |
+| --- | --- | --- |
+| 포장 준비 중 추가 하중 재계산 — `WarehousePalletWrapping.cpp`의 `AWarehousePallet::GetWrappableCargo`/`Tick`, `AWarehouseDamageSystem::GetSupportedActors` | 팔레트는0.1시뮬레이션 초 Tick으로 포장 안정성을 확인하며, `GetSupportedActors(this)`의 기본 `Refresh=true`가 전체 `UpdateLoads`를 다시 실행한다. 동시에 준비 중인 팔레트 수만큼 추가 갱신이 생길 수 있다. 포장 시작/완료의 재검사도 별도 호출이다. | 같은 검증 단계의 변하지 않은 받침 스냅샷을 공유하고 대상 팔레트의 자세·속도·지지 변화는 즉시 반영한다. 단순히 모든 호출을 `false`로 바꾸지 않으며, 동일 콜백 안에서 물체가 이동한 뒤 명시적 `Refresh=true`로 다시 검사하는 계약을 보존한다. |
+| 전체 하중 그래프와 접촉 전 운동 기록 — `WarehouseDamageSystem::UpdateLoads`/`Tick` | 기본0.1시뮬레이션 초마다 전체 프로필의 컴포넌트·외곽을 수집하고 정렬한 뒤 프로필당9~18개 받침 추적을 수행한다. `PrePhysicsMotion`에는 고정 물체도 등록되며 매 Tick 위치·속도를 읽는다. | 프로필/컴포넌트 목록을 등록·삭제 시 관리하고 실제 이동·접촉·적재·손상 변화가 생긴 받침 관계와 그 부모 하중부터 갱신한다. 고정 물체의 운동은 고정 상태일 때만 재사용하고, 재배치·승강기/컨베이어의 운동 부품·랙 붕괴 전환에서 무효화한다. 잠든 물체도 밑받침 제거를 놓치면 안 된다. |
+| 센서 스냅샷의 순간 부하 — `AgvShadowSensors::RefreshSnapshot`, `AgvLidarComponent::Step` | 차량마다1시뮬레이션 초에 상단7,200·안전540·포크810, 총8,550빔을 처리한다. 빔 추적은 이미 `ParallelFor`지만 각 호출은 완료를 기다리며5센서는 순차 처리한다. 재질/가림 재추적은 빔당 질의 수를 더 늘릴 수 있다. | 설정이 같은 빔 방향·삼각함수 결과와 작업 버퍼를 재사용하고 동일 빔·잡음 순서로 질의 배치 비용을 줄인다. 차량별 검사 시점 분산은 주기 자체를 유지할 수 있지만 반응 타이밍이 달라지므로 별도 검증한다. 임의로 해상도·거리·가림 조건을 낮추지 않는다. |
+| 경로 표본마다 고정 지도 순회 — `WarehouseForkliftPerception::PerceivedBoxClear`/`PerceivedPartClear`/`PerceivedFloorSupport` | 각 공간 표본이 `KnownObstacles` 전체를 순회한다. 경로 연결은 곡선당 최대2,000표본·자리 회전2° 간격이며 그래프/우회 후보가 늘면 반복이 커진다. 실제 native 형상 검사는 외곽으로 먼저 걸러내지만 배열 순회는 남는다. | 게시된 고정 지도와 관측된 점군 각각에 층별 공간 인덱스를 두고 주변 후보만 기존 정밀 검사로 보낸다. 고정 지도 revision과 센서 snapshot별로 갱신하고 숨겨진 이동 물체의 실시간 위치는 읽지 않는다. 경로의 기하 가지치기와 계획 내 질의 공유는 이미 적용되어 있으므로 재구현하지 않는다. |
+| 중앙 통행 예약과 막힘 복구 — `WarehouseFleetCoordinator::Permit`/`Corridor`/`Retreat` | 주행 중 매 Tick 남은 통로를 만들고 경로점마다 `NavigationEnvelope`로 실제 적재 외곽을 반복 계산한다. 대치 시 한 번에 최대18개 대기 후보를 동기 경로 탐색하며 실패하면2초 간격 재시도가 가능하다. | 먼저 한 번의 통로 생성에서 적재 외곽을 한 번만 계산한다. 경로·적재 상대 자세·예약 변경에 따라 통로를 갱신하고, 그래프는 전체 경로 복사 대신 부모/선택 연결을 저장해 끝에서 복원한다. 장시간 탐색은 계산 예산으로 나누되 결과가 나올 때까지 제동하며, 실행 직전 지도·센서·예약 유효성을 재확인한다. |
+| 관찰 시점과 안내 표시 — `msc_vrPlayerController::PlayerTick`, `WarehouseObserverWallFade::Update`, `WarehouseTransportVisualizer::UpdateArrows` | 층 선택 관찰에서는0.25시뮬레이션 초마다 `HiddenActors` 목록을 복원·재분류하고 모든 액터를 순회한다. 이 목록은 엔진의 `TArray`이며 대상별 `Contains`/`Remove`가 배열을 다시 검색하므로 단순 전체 순회보다 비싸다. 전체 객체 수N과 숨김 목록 크기H가 함께 늘면 O(N×H), 최악 O(N²) 규모까지 커질 수 있다는 코드 복잡도 추정이며 실제 소요 시간 측정은 아니다. 벽 페이드는0.1실시간 초마다 전체 액터에서 후보를 찾는다. 경로 표시는0.2실시간 초마다 확인하며, 경로 개수나 위치가4cm 이상 달라진 경우에만 ISM 화살표 전체를 지우고 재생성한다. | 고정 건축/벽/층별 목록을 배치 변경 시 갱신하고 이동 물체만 별도 추적한다. 자체 숨김 대상을 집합으로 비교하고 추가·해제된 객체만 반영하여 전체 복원과 재추가를 피한다. 다른 기능이 숨긴 객체는 보존한다. 화살표는 경로 revision과 통과 구간을 기준으로 변경된 인스턴스만 갱신한다. 이미 있는 변경 감지·ISM·무충돌/무그림자 설정을 유지한다. UI 데이터 갱신도 실제 값이 바뀐 곳만 처리한다. |
+
+센서 비용의 기존 근거는 2026-10-20 `Saved/Testing/ForkliftSensors/RackMapPassed_20261020.json` 및 같은 내용의 `Report.json`이다. 차량1대·1배 시험의 센서 갱신 중앙값32.19ms/p95 36.87ms, 차량2대·1배는32.40/74.69ms였다. 각 값은 **차량별 스냅샷 처리 표본**이며 모든 차량을 합친 프레임 시간은 아니다. 당시5시뮬레이션 초씩의 미저장 NullRHI 센서 장면에서 측정했으므로 현재 저장 창고의 전체 성능을 대신하지 않는다. 센서 검사는 이미1초 공유·병렬 추적·8cm 중복 점 제거를 사용하며, 원격 조작에는 탐색·AI 판단이 없다. 별도 `Agv` 주행/위치추정 모듈은 운용 지게차에 활성화되지 않았으므로 그 비용을 현재 운용 비용으로 합산하지 않는다.
+
+표시의 부드러움과 계산 지연도 구분한다. `WarehouseSimulationClock`은1/30초 고정 월드 단계와 전역 프레임 대기를 사용하므로1배속에서는 표시 루프도 약30Hz 상한이다. 이는 개별 병목을 제거해도60FPS가 되지 않는 구조적 제한이다. 향후 표시/카메라 보간을 물리·시뮬레이션 시간과 분리할 수 있지만, 단순히 고정 단계를60Hz로 바꾸는 것은 같은 결과를 보존하는 최적화가 아니다. 기존1/120초 Chaos 서브스텝·유한 힘·독립 강체·실제 접촉을 유지한다. 작은 서브스텝은 안정성과 CPU 비용의 절충이라는 [Epic 물리 서브스텝 설명](https://dev.epicgames.com/documentation/unreal-engine/physics-sub-stepping-in-unreal-engine)을 참고하되, 현재 물리 정확도를 낮추는 변경은 우선안에서 제외한다.
+
+다음 작업은 **포장 중 중복 갱신 확인과 제거 → 고정/동적 목록 및 통로 외곽의 중복 계산 제거 → 지도 공간 인덱스와 센서 버퍼 → 탐색 분할/표시 루프 분리** 순서로 진행한다. 먼저 동일 배치·물류·주문의1/2/4대×1/2/4배 조건에서 유휴/운반/동시 포장/전지적 관찰을 분리하고, 평균뿐 아니라 p95·p99·최대 프레임과 `LoadGraphBuilds`·`SupportTraceCount`·`RoutePlanning`·`TrafficPermit`·센서 처리 시간을 비교한다. 실제 해상도·RAM/VRAM·절전 여부·초기 셰이더 준비도 기록한다. [Epic Timing Insights](https://dev.epicgames.com/documentation/unreal-engine/timing-insights-in-unreal-engine)의 CPU/GPU 타임라인과 호출 관계로 긴 프레임을 확인하며, 서로 중첩된 시간 범위를 더하지 않는다.
+
+렌더링은 별도로 GPU 측정 후 판단한다. 전지적 시점의 넓은 가시 범위, 조명/그림자와 반투명 랩·벽이 후보지만 이번 검토만으로 GPU 병목을 확정하지 않는다. VSM은 움직이는 물체/조명에 따라 캐시가 무효화될 수 있으므로 [Epic VSM 문서](https://dev.epicgames.com/documentation/unreal-engine/virtual-shadow-maps-in-unreal-engine)의 시각화로 영향 영역을 확인하고 정적 장식의 인스턴싱·필요한 그림자·재질 비용부터 비교한다. 표시 목록 재분류가 VSM 무효화를 직접 일으킨다고 단정하지 않는다. [Epic Slate/UMG 최적화 지침](https://dev.epicgames.com/documentation/unreal-engine/optimization-guidelines-for-umg-in-unreal-engine)의 변경 시 갱신·invalidation 원칙을 UI에 적용하되, 실제 변하는 값과 정적인 레이아웃을 구분한다.
+
+반복 장식의 ISM/HISM 묶음도 아직 이 검토의 제안이며, 현재 고정 지도·손상·층 표시가 사용하는 객체 식별을 함께 보존해야 한다. 거대한 하나의 외곽 상자로 바꾸어 장식 사이 통로를 막지 않도록 인스턴스별 실제 충돌 형상과 층별 분할, 선택/재배치 참조를 유지한다. 부품이 많은 대형 건물에서는 층별 지도 공간 인덱스와 숨김 목록의 변경분 갱신이 특히 중요하다. 실제 생성 수와 건물 적용 검증은 담당 문서 [WAREHOUSE.md](WAREHOUSE.md)에 기록하며 이 절에서 추정 수치를 실측처럼 추가하지 않는다. [Epic ISM 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/instanced-static-mesh-component-in-unreal-engine)는 반복 메시의 비용 감소와 컴포넌트 단위로 공유되는 충돌·재질 속성을 설명한다. 이번 성능 문서 점검은 별도로 진행되는 장식 모델/배치 작업의 완료나 성능 검증을 뜻하지 않는다.
+
+개선 후에는 같은 콜백 내 받침 재검사, 밑 상자 제거·낙하·과적/충격·랙 붕괴,1초 흰 포장 완료/취소/파손, 가려진 이동 물체의 정보 차단, 센서1초 주기·수동 탐색0회, 최고1.8m/s, 임의 재배치 후 경로·차량 대치·층간 이동·입출고 실제 하역을 회귀한다. 속도/충돌 조건을 완화하거나 물류를 순간 이동시켜 성능 개선으로 보고하지 않는다.
+
+#### 2026-10-14 당시 저장 맵 조사 — 후속 최적화 전 기록
 
 현재 Editor 빌드로 별도 미저장 PIE를 측정했다. i7-12650H·RTX4060 Laptop 8GB·RAM 약16GB 환경에서 렌더링 포함/NullRHI를 각각60시뮬레이션 초, 요청4배로 실행했다. 처음30초는1인칭, 다음30초는1층 전지적 시점이며 모든 동적 물리를 유지했다. `r.SetRes 1280x720w`와 ScreenPercentage100을 요청했지만 실제 PIE 뷰포트 크기는 따로 확인하지 않았다. 장면에는 상자364개·팔레트185개·주 차량2대·별도 시험 차량 `AGV_WH_Vehicle`1대, 물리 시뮬레이션 컴포넌트601개·하중 프로필862개가 있었다. CSV·분석·장면/센서 표본·PC 메모리 기록은 `Saved/Testing/LagInvestigation_20261014/`와 `Saved/Profiling/CSV/Warehouse_Current_20261014_{Render2,CPU2}.csv`에 보존한다. 게임 소스·에셋·물리 설정을 이번 조사에서 변경하지 않았다.
 

@@ -12,6 +12,8 @@
 - Unreal 메쉬·재질: `Content/Warehouse/Services/`.
 - 맵 배치/검증: `Scripts/apply_warehouse_services.py`, `Scripts/capture_warehouse_services.py`, `Saved/Testing/WarehouseServices/Report.json`.
 
+건물 크기를 게임에서 확정할 때 사용하는 연결형 자동 배치는 `WarehouseBuildingLayout`이 이 모듈을 다시 배치한다. 사용 규칙·검증 결과는 [건물·복층 편집](WAREHOUSE.md#타일-방식-건물복층-편집), 실제 사용 에셋 목록은 [RUNTIME_ASSETS.md](RUNTIME_ASSETS.md)를 따른다. 원본 모델을 다시 생성하거나 저장된 기본 맵을 덮어쓰는 기능은 아니다.
+
 `Warehouse Services - Library` 씬에 원점·단위 스케일을 정리한 원본 메쉬가 있다. 이 씬의 부품은 모두 로컬 원점에서 시작하므로 서로 겹쳐 보인다. 개별 부품 확인은 `Warehouse Services - Module Catalog`, 조립 형태는 `Warehouse Services - Assembly Preview` 씬에서 본다. 카탈로그는 모양을 보기 위해 부품별 크기를 달리 표시한 장면이며 같은 축척의 도면이 아니다.
 
 ## 모듈

@@ -1,18 +1,18 @@
 # 게임 사용 에셋 목록
 
-관리자 창고·메인 메뉴·플레이 스테이지 3개, C++/설정의 직접 로딩과 이름 조합 로딩을 시작점으로 실제 하드/소프트 참조를 수집한다. 이것은 로컬 실행에 필요한 전체 목록이며, 공개 Git 저장소에 모든 파일을 올린다는 뜻은 아니다. 파일은 원래 경로에 두어 맵·재질 참조가 끊기지 않게 한다.
+관리자 창고·메인 메뉴·플레이 스테이지 3개, C++/설정의 직접 로딩과 이름 조합 로딩을 시작점으로 실제 하드/소프트 참조를 수집한다. 게임에서 사용하는 외부 모델·재질·모션과 그 의존 에셋을 선별해 Git으로 함께 관리한다. 파일은 원래 경로에 두어 맵·재질 참조가 끊기지 않게 한다.
 
-**2026-10-28 공개 저장소 기준:** 코드·자체 제작물·맵 참조·문서만 추가한다. 외부 팩과 모션, 원본을 복사·변형한 충돌/재질/트럭 파일은 새로 업로드하지 않고 팀원이 별도 설치·재생성한다. 기존부터 추적되던 기본 템플릿과 과거 기록은 유지한다. JSON의 `public_git_policy`는 이번 추가 정책이며 실제 Git 추적 상태와 구분한다.
+**2026-10-28 사용 에셋 선별 기준:** 이 목록의 런타임 에셋과 의존 파일을 Git에 포함한다. 1MiB 이상 패키지는 Git LFS로 받고 나머지는 일반 Git으로 받는다. 사용 중인 외부 팩의 파생 충돌·재질·트럭과 Game Animation Sample의 클립30개·블렌드2개도 포함 대상이다. 팩 전체·샘플 전체·원본 FBX ZIP·사용하지 않는 예제와 모션을 함께 추가하지 않는다. JSON의 `git_inclusion=runtime_dependency_subset`은 선별 기준이며 실제 커밋·LFS 수신 상태와 구분한다.
 
 모든 파일·종류·원본 그룹·직접 참조·코드 진입점은 [정확한 목록](Config/RuntimeAssets.json)에 기록한다. 아래에는 이름이 있는 모델·재질·텍스처·모션·맵을 나열한다. GUID 이름의 외부 액터/오브젝트는 같은 JSON의 `map_objects` 그룹에 전부 포함한다.
 
-팀원 설치·Git LFS 받기·원본 재생성은 [TEAM_ASSETS.md](TEAM_ASSETS.md), 실제 기능은 [WAREHOUSE.md](WAREHOUSE.md)를 따른다. 에셋의 기존 라이선스와 출처는 유지된다. 엔진/플러그인 자체 파일은 저장소에 복사하지 않으며 목록의 `engine_plugin_dependencies`에 기록한다.
+팀원 설치·Git LFS 받기·선택적 원본 재생성은 [TEAM_ASSETS.md](TEAM_ASSETS.md), 실제 기능은 [WAREHOUSE.md](WAREHOUSE.md)를 따른다. 외부 에셋의 출처·라이선스 원문은 유지하며 Git 포함 자체가 별도의 재배포 권한을 부여하지 않는다. 엔진/플러그인 자체 파일은 저장소에 복사하지 않으며 목록의 `engine_plugin_dependencies`에 기록한다.
 
 충돌 복사본·캐릭터 페이드·창고 벽 페이드는 원본 팩으로 분류한다. 여러 출처를 조합한 맵·공통 표시·모델 캡처 아이콘은 프로젝트 구성으로 분류하되 원본의 이용 조건을 승계한다. 단순히 프로젝트 폴더로 복사하거나 재질을 수정했다고 자체 원본이 되는 것은 아니다.
 
 목록은 에셋 파일의 하드/소프트 참조를 보존하는 보수적인 의존성 폐쇄이며, 파일 내부의 미리보기·기본 재질 참조도 포함될 수 있다. 실제 Cook 결과의 바이트별 최소 목록을 뜻하지 않는다. 에디터 전용 설정의 예제 맵·콘텐츠 브라우저 폴더는 시작점에서 제외한다. 직접 로딩 경로가 없으면 보고서의 `unresolved_direct_references`에 기록하고 최신 목록 발행을 중단한다.
 
-총 3,939개 파일 · 3.45 GiB. C++ 동적 경로·맵 참조가 달라지면 `Scripts/audit_runtime_assets.py`를 Unreal Python에서 다시 실행한다. 새 목록만으로 Git에 자동 추가하지 않는다.
+총 3,953개 파일 · 3.45 GiB. C++ 동적 경로·맵 참조가 달라지면 `Scripts/audit_runtime_assets.py`를 Unreal Python에서 다시 실행한다. 새 목록만으로 Git에 자동 추가하지 않는다.
 
 | 분류 / 출처 | 용도 | 파일 수 | MiB |
 | --- | --- | ---: | ---: |
@@ -24,7 +24,7 @@
 | [Game Animation Sample / Epic Games](https://www.fab.com/listings/880e319a-a59e-4ed2-b268-b32dac7fa016) | 이동·앉기·점프·착지의 사용 클립과 블렌드 | 32 | 32.84 |
 | Unreal 기본 캐릭터·입력·1인칭 템플릿 / Epic Games | 플레이어·NPC·입력·파생 캐릭터 페이드 재질 | 66 | 90.25 |
 | Megascans 공통 재질 | 사용 중인 외부 에셋이 참조하는 MSPresets | 27 | 9.22 |
-| 프로젝트 구성/팀원 제작·사용자 제공 모델 | AGV·승강기·충전기·컨베이어·장식·UI·공통 표시 재질 | 166 | 39.97 |
+| 프로젝트 구성/팀원 제작·사용자 제공 모델 | AGV·승강기·충전기·컨베이어·장식·UI·공통 표시 재질 | 180 | 40.86 |
 | 프로젝트 맵 배치 데이터 | 맵이 참조하는 외부 액터/오브젝트 패키지 | 3481 | 15.59 |
 
 ## Warehouse / Quixel Megascans
@@ -493,20 +493,34 @@
 | `Content/Warehouse/Services/Materials/M_WS_Sprinkler_brass.uasset` | Material | 0.010 |
 | `Content/Warehouse/Services/Materials/M_WS_Structural_graphite.uasset` | Material | 0.010 |
 | `Content/Warehouse/Services/Materials/M_WS_Warning_yellow.uasset` | Material | 0.011 |
+| `Content/Warehouse/Services/Meshes/SM_WS_BeamConnection.uasset` | StaticMesh | 0.058 |
+| `Content/Warehouse/Services/Meshes/SM_WS_Brace_2m.uasset` | StaticMesh | 0.040 |
 | `Content/Warehouse/Services/Meshes/SM_WS_CableBundle_2m.uasset` | StaticMesh | 0.053 |
+| `Content/Warehouse/Services/Meshes/SM_WS_ConduitClamp.uasset` | StaticMesh | 0.150 |
+| `Content/Warehouse/Services/Meshes/SM_WS_ConduitElbow90.uasset` | StaticMesh | 0.068 |
 | `Content/Warehouse/Services/Meshes/SM_WS_ConduitStraight_1m.uasset` | StaticMesh | 0.031 |
 | `Content/Warehouse/Services/Meshes/SM_WS_DistributionCabinet.uasset` | StaticMesh | 0.067 |
 | `Content/Warehouse/Services/Meshes/SM_WS_DistributionDoor.uasset` | StaticMesh | 0.032 |
 | `Content/Warehouse/Services/Meshes/SM_WS_DuctElbow90.uasset` | StaticMesh | 0.067 |
 | `Content/Warehouse/Services/Meshes/SM_WS_DuctGrille.uasset` | StaticMesh | 0.048 |
 | `Content/Warehouse/Services/Meshes/SM_WS_DuctStraight_1500.uasset` | StaticMesh | 0.079 |
+| `Content/Warehouse/Services/Meshes/SM_WS_FirePipeElbow90.uasset` | StaticMesh | 0.069 |
 | `Content/Warehouse/Services/Meshes/SM_WS_FirePipeStraight_2m.uasset` | StaticMesh | 0.031 |
+| `Content/Warehouse/Services/Meshes/SM_WS_FirePipeTee.uasset` | StaticMesh | 0.037 |
 | `Content/Warehouse/Services/Meshes/SM_WS_IBeam_4m.uasset` | StaticMesh | 0.024 |
 | `Content/Warehouse/Services/Meshes/SM_WS_JunctionBox.uasset` | StaticMesh | 0.060 |
 | `Content/Warehouse/Services/Meshes/SM_WS_LEDLinear_1200.uasset` | StaticMesh | 0.032 |
+| `Content/Warehouse/Services/Meshes/SM_WS_PipeHanger.uasset` | StaticMesh | 0.033 |
 | `Content/Warehouse/Services/Meshes/SM_WS_RubberColumnWrap_450.uasset` | StaticMesh | 0.465 |
+| `Content/Warehouse/Services/Meshes/SM_WS_RubberCornerGuard_900.uasset` | StaticMesh | 0.135 |
+| `Content/Warehouse/Services/Meshes/SM_WS_RubberFlatGuard_900.uasset` | StaticMesh | 0.074 |
 | `Content/Warehouse/Services/Meshes/SM_WS_SprinklerHead.uasset` | StaticMesh | 0.174 |
+| `Content/Warehouse/Services/Meshes/SM_WS_TrayElbow90.uasset` | StaticMesh | 0.045 |
+| `Content/Warehouse/Services/Meshes/SM_WS_TrayEndCap.uasset` | StaticMesh | 0.017 |
+| `Content/Warehouse/Services/Meshes/SM_WS_TrayHanger.uasset` | StaticMesh | 0.073 |
+| `Content/Warehouse/Services/Meshes/SM_WS_TrayReducer.uasset` | StaticMesh | 0.028 |
 | `Content/Warehouse/Services/Meshes/SM_WS_TrayStraight_2m.uasset` | StaticMesh | 0.041 |
+| `Content/Warehouse/Services/Meshes/SM_WS_TrayTee.uasset` | StaticMesh | 0.059 |
 | `Content/Warehouse/Services/Meshes/SM_WS_WallBracket.uasset` | StaticMesh | 0.042 |
 | `Content/Warehouse/Services/SupportBatches/SM_SM_Support_0.uasset` | StaticMesh | 0.443 |
 | `Content/Warehouse/Services/SupportBatches/SM_SM_Support_0_Roof.uasset` | StaticMesh | 3.175 |

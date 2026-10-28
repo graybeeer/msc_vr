@@ -22,7 +22,7 @@ public class msc_vr : ModuleRules
 			"SlateCore"
 		});
 
-        PrivateDependencyModuleNames.AddRange(new string[] { "AnimGraphRuntime", "AnimationCore", "PhysicsCore", "Json", "JsonUtilities" });
+        PrivateDependencyModuleNames.AddRange(new string[] { "AnimGraphRuntime", "AnimationCore", "PhysicsCore", "Json", "JsonUtilities", "MoviePlayer", "RenderCore", "RHI" });
 
 		PublicIncludePaths.AddRange(new string[] {
 			"msc_vr",

@@ -17,6 +17,10 @@ struct FWarehouseMezzanineSettings
  UPROPERTY(EditAnywhere,BlueprintReadWrite) FVector2D OffsetCm=FVector2D(-400,0);
  UPROPERTY(EditAnywhere,BlueprintReadWrite) FVector2D SizeCm=FVector2D(3600,3600);
  UPROPERTY(EditAnywhere,BlueprintReadWrite) FVector2D AtriumSizeCm=FVector2D(1000,2600);
+ // Opt-in keeps old maps/saved layouts rectangular. A cell covers building-local
+ // [X*100,(X+1)*100] x [Y*100,(Y+1)*100] cm; stairs/shafts cut it afterwards.
+ UPROPERTY(EditAnywhere,BlueprintReadWrite) bool bUseTileMask=false;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite) TArray<FIntPoint> Tiles;
  // Flight centre in building-local XY. Yaw zero climbs toward local +X.
  UPROPERTY(EditAnywhere,BlueprintReadWrite) FVector2D StairOffsetCm=FVector2D(-2280,-800);
  UPROPERTY(EditAnywhere,BlueprintReadWrite) float StairYawDegrees=90.f;
@@ -58,6 +62,8 @@ public:
  UFUNCTION(BlueprintPure,Category="Building") static FVector2D GetMaximumSizeCm() { return FVector2D(9600,8000); }
  UFUNCTION(BlueprintPure,Category="Building") static float GetMaximumRoofHeightCm() { return 2000.f; }
  UFUNCTION(BlueprintPure,Category="Building") static int32 GetMaximumFloorCount() { return 4; }
+ static TArray<FIntPoint> GetMezzanineTiles(const FWarehouseMezzanineSettings& Floor);
+ static void SetMezzanineTiles(FWarehouseMezzanineSettings& Floor,const TArray<FIntPoint>& Tiles);
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Building") FWarehouseBuildingSettings Settings;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Building") FString Status=TEXT("기존 건물 유지 · 1m 타일 단위 편집");
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Building") bool bHasAppliedChanges=false;
@@ -73,6 +79,9 @@ public:
  UPROPERTY(EditInstanceOnly,BlueprintReadWrite,Category="Building|Sources") TObjectPtr<AStaticMeshActor> PipeTemplate;
  UPROPERTY(EditInstanceOnly,BlueprintReadWrite,Category="Building|Sources") TObjectPtr<AStaticMeshActor> TrayTemplate;
  UPROPERTY(EditInstanceOnly,BlueprintReadWrite,Category="Building|Sources") TObjectPtr<AStaticMeshActor> LightTemplate;
+ // Owned service modules are loaded once when the building editor captures its sources.
+ // Their local connection axes/section sizes stay independent of authored actor scaling.
+ UPROPERTY(Transient,VisibleAnywhere,Category="Building|Sources") TMap<FName,TObjectPtr<UStaticMesh>> ServiceMeshes;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Building") TArray<TObjectPtr<AStaticMeshActor>> GeneratedStructure;
 private:
  struct FOriginalState

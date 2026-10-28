@@ -1,11 +1,12 @@
 """Unsaved production-map building smoke test; no level or external actor saves.
 
 Opening the tile editor must preserve every captured structural component.
-A real building change must succeed while retaining stock/rack components.
-Try both dimensions, then width alone, then roof height alone. Every rejected
-attempt must retain all static geometry and stock, and is reported with its
-exact native reason. Rejecting every candidate is a failure. Fourth-floor
-activation is attempted separately and reported explicitly.
+A roof-only +100 cm change must succeed while retaining stock/rack components.
+The footprint and front dock stay in place: footprint changes can intentionally
+archive obstructing stock under the current auto-clear contract and belong to
+the construction auto-clear regression, not this preservation assertion.
+A rejected change must retain static geometry and stock and still fails this
+test. Fourth-floor activation is attempted separately and reported explicitly.
 """
 import hashlib
 import json
@@ -25,15 +26,25 @@ performance.set_editor_property('bThrottleCPUWhenNotForeground', False)
 content = Path(unreal.Paths.project_content_dir())
 output = Path(unreal.Paths.project_saved_dir()) / 'Testing/Construction'
 output.mkdir(parents=True, exist_ok=True)
+previous_report = output / 'SavedMapReport.json'
+if previous_report.exists():
+    previous_bytes = previous_report.read_bytes()
+    previous = json.loads(previous_bytes.decode('utf-8'))
+    if not previous.get('passed', False):
+        archive = output / ('SavedMapReport_PriorFailed_' + hashlib.sha256(previous_bytes).hexdigest()[:12] + '.json')
+        if not archive.exists():
+            archive.write_bytes(previous_bytes)
 keep_open = '-keeptesteditoropen' in unreal.SystemLibrary.get_command_line().lower()
 report = dict(passed=False, checks=[], savedMapUnchanged=False, osInputTested=False,
-              scope='Actual unsaved FirstPerson map, production PC/clock, component-level structure and stock preservation, native building expansion')
+              script_revision='saved-map-preservation-20261028-roof-only',
+              scope='Actual unsaved FirstPerson map, production PC/clock, component-level stock/rack preservation after roof-only +100 cm; footprint/dock auto-clear is a separate regression; optional fourth floor reported separately; no order-state test')
 started = time.monotonic()
 phase = 'start'
 handle = None
 game = pc = layout = construction = building = None
 original_vehicle_flags = []
 editor_baseline = {}
+actor_labels = {}
 saved_hashes = {}
 finish_result = None
 finished = False
@@ -82,10 +93,11 @@ def assert_preserved(actor, before, context):
     after = snapshot(actor)
     if after != before:
         keys = ['actor_transform', 'hidden', 'actor_collision', 'components']
-        report['preservationFailure'] = dict(actor=actor.get_actor_label(), context=context,
+        label = actor_labels.get(actor) or actor.get_actor_label()
+        report['preservationFailure'] = dict(actor=label, context=context,
             changed_fields=[key for key, old, new in zip(keys, before, after) if old != new],
             before=repr(before), after=repr(after))
-        raise AssertionError((context, actor.get_actor_label(), report['preservationFailure']['changed_fields']))
+        raise AssertionError((context, label, report['preservationFailure']['changed_fields']))
 
 
 def shell_diagnostic(live):
@@ -256,6 +268,7 @@ def _tick_impl(delta_seconds):
             layout = allof(unreal.WarehouseLayoutEditor)[0]
             assert layout.get_editor_property('editing') and unreal.GameplayStatics.is_game_paused(game)
             before_all = {actor: snapshot(actor) for actor in allof(unreal.Actor)}
+            actor_labels.update({actor: actor.get_actor_label() for actor in before_all})
             pc.set_construction_editing(True)
             construction = pc.get_construction_editor()
             building = allof(unreal.WarehouseBuildingLayout)[0]
@@ -268,6 +281,8 @@ def _tick_impl(delta_seconds):
             stock = [actor for actor in before_all if isinstance(actor, (unreal.WarehouseCargo, unreal.WarehousePallet)) or actor.actor_has_tag('LayoutType:Rack')]
             assert stock, 'Actual production rack/stock set is empty'
             stock_before = {actor: snapshot(actor) for actor in stock}
+            inventory_before = {store: len(store.get_editor_property('held_cargo'))
+                                for store in allof(unreal.WarehouseLayoutInventory)}
             original = building.get_settings()
             shell_diagnostic(before_all)
             report['capturedSettings'] = dict(width_cm=original.width_cm, depth_cm=original.depth_cm, roof_height_cm=original.roof_height_cm)
@@ -276,7 +291,7 @@ def _tick_impl(delta_seconds):
                                if isinstance(actor, unreal.StaticMeshActor)}
             attempts, accepted_change = [], None
             for name, width_delta, depth_delta, roof_delta in [
-                    ('both_dimensions', 200, 200, 100), ('width_only', 200, 0, 100), ('roof_only', 0, 0, 100)]:
+                    ('roof_only', 0, 0, 100)]:
                 proposed = building.get_settings()
                 proposed.width_cm += width_delta
                 proposed.depth_cm += depth_delta
@@ -302,11 +317,20 @@ def _tick_impl(delta_seconds):
                 (accepted_change['width_delta_cm'] or accepted_change['depth_delta_cm']))
             assert accepted_change is not None, ('Every actual-map building change was rejected', attempts)
             assert building.get_editor_property('generated_structure') and building.get_editor_property('revision') == 1
+            applied = building.get_settings()
+            assert applied.width_cm == original.width_cm and applied.depth_cm == original.depth_cm, 'Roof-only test changed the footprint'
+            assert abs(applied.roof_height_cm-original.roof_height_cm-100) < .01, 'Requested roof height was not applied'
             for actor, previous in stock_before.items():
                 assert_preserved(actor, previous, 'Expansion changed real cargo/rack physics or pose')
+            current_stock = {actor for actor in allof(unreal.Actor)
+                             if isinstance(actor, (unreal.WarehouseCargo, unreal.WarehousePallet)) or actor.actor_has_tag('LayoutType:Rack')}
+            assert current_stock == set(stock_before), 'Roof-only change added or removed stock/racks'
+            for store, count in inventory_before.items():
+                assert len(store.get_editor_property('held_cargo')) == count, 'Roof-only change archived cargo'
             assert all(actor.get_editor_property('hidden') and not actor.get_actor_enable_collision() for actor in originals)
             check('actual_map_successful_native_building_change_preserves_real_stock_and_racks',
-                  generated_actors=len(building.get_editor_property('generated_structure')), change=accepted_change)
+                  generated_actors=len(building.get_editor_property('generated_structure')), change=accepted_change,
+                  preserved_stock_and_racks=len(current_stock), held_cargo_counts_unchanged=True)
             construction.set_target(unreal.WarehouseConstructionTarget.FLOOR4)
             floor4 = construction.toggle_selected_floor()
             report['optionalFourthFloor'] = dict(accepted=floor4, status=construction.get_editor_property('status'))
@@ -317,8 +341,7 @@ def _tick_impl(delta_seconds):
                 check('optional_actual_fourth_floor_added_without_stock_or_rack_changes')
             else:
                 check('optional_actual_fourth_floor_safely_rejected', reason=construction.get_editor_property('status'))
-            begin_finish(True, 'Actual-map tile-editor open preservation and successful native building change: ' +
-                         accepted_change['name'] + '; rejected candidates and exact native reasons recorded; all real stock/rack component poses, collision and physics retained; fourth-floor attempt separately reported; PIE and source flags restored without saving')
+            begin_finish(True, 'Actual-map tile-editor open preservation and successful native roof-only +100 cm change; footprint and dock position retained; all real stock/rack component poses, collision and physics retained without archiving; footprint auto-clear is outside this test; fourth-floor attempt separately reported; PIE and source flags restored without saving')
     except Exception:
         if finish_result is None:
             begin_finish(False, traceback.format_exc())

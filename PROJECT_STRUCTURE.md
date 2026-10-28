@@ -30,7 +30,8 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
-| 게임 사용 에셋 선별·Git/LFS·출처와 전체 참조 목록 | `RUNTIME_ASSETS.md`, `Config/RuntimeAssets.json`, `Scripts/audit_runtime_assets.py` | 기본 맵5개·C++/설정 직접 경로와 동적 접두어의 의존성을 수집; 설치/재생성은 `TEAM_ASSETS.md`, 공개 저장소에서 외부 원본·파생·사용 모션은 제외 |
+| 씬 시작·전환·배치 복원·건물 확정 로딩 화면 | `WarehouseLoading.h/.cpp`, `Scripts/verify_warehouse_loading_pie.py` | `WarehouseBuildingLayout::ApplySettings`, `WarehouseExperimentSubsystem` 복원 단계, `msc_vr.Build.cs`; 사용·표시 범위는 `WAREHOUSE.md`, 실제 건물 성공/실패 검사는 `verify_building_services_pie.py -BuildingLoadingChecks` |
+| 게임 사용 에셋 선별·Git/LFS·출처와 전체 참조 목록 | `RUNTIME_ASSETS.md`, `Config/RuntimeAssets.json`, `Scripts/audit_runtime_assets.py` | 기본 맵5개·C++/설정 직접 경로와 동적 접두어의 의존성을 수집; 설치/재생성은 `TEAM_ASSETS.md`, 사용 에셋·필수 의존 파일만 Git에 포함하고 전체 원본 팩은 제외 |
 | 배치 도구 모델 PNG·종류 아이콘·추가 모델 미리보기 | `WarehouseLayoutIcons.h/.cpp`, `msc_vrPlayerController`, `Scripts/render_warehouse_layout_icons.py`, `Art/UI/LayoutIcons/`, `Content/Warehouse/UI/Icons/` | 실제 프로젝트 모델의 오프라인 512px 렌더, 세부 규칙은 `PLAY_MODE.md`의 아이콘 절; 런타임 캡처 없음 |
 | 시작 메뉴·관리자/플레이·스테이지·구매 예산·해금·스테이지 장식 | `PLAY_MODE.md`, `WarehousePlayMode.h/.cpp`, `Scripts/build_warehouse_play_stages.py`, `Content/Warehouse/Play/Maps/` | 화면/진입은 `msc_vrPlayerController`, 편집 제한/결제는 `WarehouseLayoutEditor`; 기존 입고/물리 운반 사용. 실제 캠페인은 `Scripts/verify_warehouse_play_pie.py`; 관리자 원본 맵은 생성 시 저장하지 않음 |
 | 현재 구조 평가·추가 개발 우선순위 | `SIMULATION_ROADMAP.md`, 이 문서의 실행 구조 표 | 구현된 1·2번 범위는 `WAREHOUSE.md`, 운용 기준은 `AUTONOMY.md`, 물리 가정은 `PHYSICS.md`, 입출고 계획은 `TRUCK_LOGISTICS_DESIGN.md` |
@@ -39,9 +40,10 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 배치 모드 재배치·추가·삭제·다중 선택·스냅 적재·시설 누락 | `WarehouseLayoutEditor.h/.cpp`, `WarehouseLayoutInventory.h/.cpp`, `WarehouseLayoutSnap.h/.cpp`, `Scripts/verify_layout_inventory_pie.py`, `Scripts/verify_layout_editor_pie.py` | 하단 Slate 도구·렌더링 검사는 `msc_vrPlayerController`, `Scripts/verify_layout_editing_ui_pie.py`, 승강기 개구부는 `WarehouseElevatorLayout`, 슬롯은 `WarehouseInboundZone`, 사용 기준은 `WAREHOUSE.md` |
 | 배치 모두 범주·혼합 선택·우클릭 좌우90도·공통 축 회전·삭제 | `WarehouseLayoutEditor::RotateSelection`/`CanRotateSelection`, `msc_vrPlayerController::OpenLayoutRotationMenu`/`RotateLayoutSelection`/`DeleteLayoutSelection` | 실제 부품·참조·물리 복원은 `WarehouseLayoutEditor`, 층별 개구부는 `WarehouseElevatorLayout`, 검사는 위 배치 native/UI 스크립트 |
 | 전지적 진입 시 기본 재배치·깨끗한 관찰·하단 층 선택·컨베이어 도구 | `msc_vrPlayerController::ToggleObserverView`/`SetLayoutEditing`/`SetObserverFloor`, `Scripts/verify_layout_editing_ui_pie.py` | 관찰 진입은 이미 편집을 켜므로 검사·외부 호출은 `SetLayoutEditing(bool)`로 의도를 명시한다. 도구 표시와 입력은 같은 컨트롤러, 일시정지·취소 복원은 `WarehouseLayoutEditor::SetEditing`, 사용법은 `WAREHOUSE.md` |
-| 전지적1m 타일 건물·복층·계단 편집·최대4층·간섭 물류 보관/차량 일시정지·안전 재배치 | `WarehouseBuildingLayout.h/.cpp`, `WarehouseConstructionEditor.h/.cpp`, `Scripts/verify_construction_editor_pie.py` | 하단 도구와 격자 표시 `msc_vrPlayerController`, 기존 구조 캡처·실패 복원은 `WarehouseBuildingLayout`, 현재 세션 사용법은 `WAREHOUSE.md`, 승강기 층수·개구부는 `WarehouseElevator`·`WarehousePalletLift`·`WarehouseElevatorLayout`, 실제4층 회귀는 `verify_building_lift_four_floors_pie.py` |
+| 전지적1m 타일 건물·복층·계단 편집·최대4층·간섭 물류 보관/차량 일시정지·안전 재배치 | `WarehouseBuildingLayout.h/.cpp`, `WarehouseConstructionEditor.h/.cpp`, `Scripts/verify_construction_editor_pie.py`, `Scripts/verify_building_tiles_pie.py` | 하단 도구와 격자 표시 `msc_vrPlayerController`, 타일 초안·확정과 ㄱ/ㄷ/구멍 바닥·난간·장식 회귀는 `verify_building_tiles_pie.py`; 기존 구조 캡처·실패 복원은 `WarehouseBuildingLayout`, 현재 세션 사용법은 `WAREHOUSE.md`, 승강기 층수·개구부는 `WarehouseElevator`·`WarehousePalletLift`·`WarehouseElevatorLayout`, 실제4층 회귀는 `verify_building_lift_four_floors_pie.py` |
 | 자동 팔레트/상자 컨베이어·90도 회전·끝단 픽업·화물용 승강기 인계 | `WarehouseConveyor.h/.cpp`, `WarehousePalletLift.h/.cpp`, `Scripts/verify_conveyor_transport_pie.py`, `Scripts/verify_conveyor_turntable_pie.py` | 장비별 고정 지도 태그·충돌은 `WarehousePhysics`·`AgvShadowSensors`, 자유 각도·직결·승강기 공급/수신 포트 UI·물리 복원은 `WarehouseLayoutEditor`·`msc_vrPlayerController`와 `verify_conveyor_layout_pie.py`, 원본·FBX·미리보기는 `Art/Equipment/Conveyor/`와 `build_conveyor_model.py`, 전용 샤프트는 `build_pallet_lift.py`의 powered 변형. 설치는 `install_warehouse_transport_lab.py`, 사용·설치·물리 계수는 각각 `WAREHOUSE.md`·`TEAM_ASSETS.md`·`PHYSICS.md` |
 | 건물 변경 후 승강기 재배치·삭제·개구부 복원과 기본 맵 보존 | `Scripts/verify_building_shaft_layout_pie.py`, `Scripts/verify_building_saved_map_pie.py`, `WarehouseBuildingLayout`·`WarehouseElevatorLayout` | 최초 구조와 기존 화물 유지 검사는 `verify_construction_editor_pie.py`, 실제4층 왕복과 문 가이드 검사는 `verify_building_lift_four_floors_pie.py`; 검사는 원본 맵을 저장하지 않음 |
+| 건물 크기별 배관·케이블·지지대 자동 재배치와 장식 밀도 | `WarehouseBuildingLayout::ApplySettings`, `Scripts/verify_building_services_pie.py` | 건물 확정 시 연결망 재생성·복층 개구부 회피·충돌/고정 지도 유지; 사용은 `WAREHOUSE.md`, 모델은 `WAREHOUSE_SERVICES_MODEL.md` |
 | 보류된 물류 FIFO·품목/질량/크기/재질 보존·컴퓨터 데이터 입력/삭제 | `WarehouseLayoutInventory.h/.cpp`, `WarehouseComputer.h/.cpp`, `WarehouseComputerUI.cpp`, `Scripts/verify_layout_inventory_pie.py` | 접촉/손상 참조는 `WarehouseDamageSystem`, 상품 생성 규칙은 `CARGO_RULES.md`, 사용자 조작은 `WAREHOUSE.md` |
 | 공유 충전소·일반 대기 자리·낮은 배터리 우선·기회 충전·작업 선점 | `WarehouseForkliftParking.cpp`, `WarehouseWaitingBay.h/.cpp`, `WarehouseChargingStation.h/.cpp`, `WarehouseFleetCoordinator`, `Scripts/verify_shared_charging_pie.py`, `Scripts/configure_warehouse_waiting_bays.py` | 작업 상태 전환은 `WarehouseForkliftAI`, 운영 정책은 `AUTONOMY.md`, 배터리 수치는 `VNSL14_SPEC.md` |
 | 충전기 상상 이미지 외형·Blender/Unreal 캡처·맵 적용·FBX 전달 | `CHARGER_MODEL.md`, `Art/Equipment/AGVCharger/agv_charger.blend`, 같은 폴더의 `Delivery/AGV_ChargingStation.fbx`, `Content/Warehouse/ChargingStation/` | `Scripts/build_agv_charger.py`, `Scripts/export_agv_charger.py`, `Scripts/apply_agv_charger.py`, 접점 기준은 `WarehouseChargingStation.cpp` |
@@ -58,7 +60,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 중앙 관제 통로 예약·우회·후퇴·양보·구간 폐쇄·운반 시간 측정 | `WarehouseFleetCoordinator.h/.cpp`, `WarehouseForkliftAI.cpp`, `WarehouseForkliftRecovery.cpp`, `Scripts/configure_fleet_corridors.py`, `Scripts/verify_fleet_workflow_pie.py`, `Scripts/verify_fleet_traffic_pie.py` | 물리 주행은 `WarehouseForkliftPhysics.cpp`, 중앙 관제 설계·검증은 `AUTONOMY.md` |
 | 입구 관제 컴퓨터·새 대시보드/레거시·E 접속/복귀·실시간 재고·작업 지시 | `WarehouseComputer.h/.cpp`, `WarehouseComputerUI.cpp`, `WarehouseComputerDashboard.cpp`, `WarehouseComputerUILegacy.cpp`, `Scripts/verify_computer_dashboard_pie.py`, `Scripts/configure_warehouse_computer.py`, `Scripts/verify_warehouse_computer_pie.py` | 화면/입력 연결은 `msc_vrPlayerController`·`msc_vrCharacter`, 실제 지시는 `WarehouseForkliftAI.cpp`의 `SubmitJob`, 접촉 재고는 `WarehouseDamageSystem::GetSupportedActors`, 사용·한계는 `WAREHOUSE.md` |
 | 작은 박스·최소 크기 유지, 큰 박스 상한 확대 | `Scripts/expand_large_cargo.py`, `Scripts/verify_large_cargo_pie.py`, `WarehouseCargo.cpp`의 수량별 상한 | `CARGO_RULES.md`, 적용 전후 기록 `Saved/Testing/LargeCargoExpansion.json`; 전체 물품 재생성은 `configure_cargo_variety.py` |
-| 구석의 색상별1000kg 중량 시험 상자4개·2단 적재 | `Scripts/configure_heavy_test_cargo.py`, `Scripts/verify_heavy_test_cargo_pie.py` | 맵·재생성·실제 검증 범위는 `WAREHOUSE.md`, `ExceptionCargo` 보존은 `configure_cargo_variety.py`, 파생 Fab 재질은 `Content/Warehouse/Cargo/BoxesPalletsPack/HeavyTest/Materials/` (외부 파생은 로컬 재생성, `RUNTIME_ASSETS.md`) |
+| 구석의 색상별1000kg 중량 시험 상자4개·2단 적재 | `Scripts/configure_heavy_test_cargo.py`, `Scripts/verify_heavy_test_cargo_pie.py` | 맵·재생성·실제 검증 범위는 `WAREHOUSE.md`, `ExceptionCargo` 보존은 `configure_cargo_variety.py`, 파생 Fab 재질은 `Content/Warehouse/Cargo/BoxesPalletsPack/HeavyTest/Materials/` (사용 파생 에셋 Git 포함, `RUNTIME_ASSETS.md`) |
 | 구역 위치 한글 UI·층별 표시·메뉴/이름표/안내의 공통 스타일 | `WarehouseAreaLabel.h/.cpp`, `WarehouseUIStyle.h`, `Scripts/configure_area_labels.py`, `Scripts/verify_area_labels_pie.py` | 작업자 이름표는 `WarehouseWorker.h/.cpp`, HUD·설정·비상 안내는 `msc_vrPlayerController.cpp`, 배치와 사용 규칙은 `WAREHOUSE.md` |
 | 원격 지게차 후방 TPS·마우스 둘러보기·카메라 벽 충돌·1인칭 복귀·하단 조작 안내 | `msc_vrCameraManager.h/.cpp`의 `UpdateViewTarget`, `msc_vrCharacter.cpp`의 원격 연결/해제·`DoAim`, `msc_vrPlayerController.cpp`의 `GetCargoReadout`/`BeginPlay`, `verify_interaction_movement_pie.py`의 `-RemoteTPSChecks` | 원격 조작은 `AUTONOMY.md`, UI 표시는 `WAREHOUSE.md`, 화면 캡처는 `-RemoteTPSCapture` |
 | 지게차 E/G·안내문 인식, 저장된 입고 배치, 보행 정지·방향 전환 | `msc_vrCharacter.cpp`의 `GetInteractionTarget`, `WarehouseWorker.cpp`의 `DriveCapsule`, `Scripts/verify_interaction_movement_pie.py` | `msc_vrPlayerController.cpp`의 `GetCargoReadout`, `configure_inbound_area.py`의 액터 `modify`와 저장, `AUTONOMY.md`, `PHYSICS.md` |
@@ -77,15 +79,15 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 빈 랙·구석 빈 팔레트 더미·손으로 팔레트 쌓기 | `Scripts/configure_empty_storage.py`, `msc_vrCharacter.cpp`의 `FindPlacement`/`TryPlaceOnPallet`, `Scripts/verify_empty_storage_pie.py` | `Scripts/configure_warehouse_strength.py`, `WAREHOUSE.md`의 양손 운반과 적재; 짐 운반의 균형은 `WarehouseWorker.cpp`의 `DriveCapsule`과 `PHYSICS.md` |
 | 전 층 공통 팔레트 보관 랙·단일 추가 원형·피킹 추후 계획 | `Scripts/configure_unified_racks.py`, `WarehouseLayoutInventory::CapturePrototypes`, `Scripts/verify_layout_inventory_pie.py` | 주랙 프레임8부품·안전 데크2개와 하중은 `configure_warehouse_strength.py`; 기존 주소·그룹과 화물 보존, 재생성은 `apply_real_world_scale.py`·`configure_empty_storage.py`; 사용·검증은 `WAREHOUSE.md` |
 | 지게차 기준 실측 크기·공통 보관 랙·통로·팔레트·트럭 | `Scripts/apply_real_world_scale.py`, `Scripts/verify_real_world_scale.py`, `WAREHOUSE.md`의 실제 크기 기준 | `VNSL14_SPEC.md`, 창고/외부 에셋 배치 스크립트 |
-| 트럭 후면 개방·적재함 내부·택배 적재·착석 운전기사 | `Scripts/configure_truck_interior.py`, `Scripts/verify_truck_interior_pie.py`, `WarehouseLogisticsTruck.h/.cpp`, `Scripts/verify_truck_driver_pie.py`, `WAREHOUSE.md`의 트럭 내부 절 | 맵의 `TRK_` 액터, `Content/Warehouse/Exterior/TruckInterior/` (외부 파생 메시 로컬 재생성, `RUNTIME_ASSETS.md`); 운전자 연출·검증은 `TRUCK_LOGISTICS_DESIGN.md` |
+| 트럭 후면 개방·적재함 내부·택배 적재·착석 운전기사 | `Scripts/configure_truck_interior.py`, `Scripts/verify_truck_interior_pie.py`, `WarehouseLogisticsTruck.h/.cpp`, `Scripts/verify_truck_driver_pie.py`, `WAREHOUSE.md`의 트럭 내부 절 | 맵의 `TRK_` 액터, `Content/Warehouse/Exterior/TruckInterior/` (사용 파생 메시 Git 포함, `RUNTIME_ASSETS.md`); 운전자 연출·검증은 `TRUCK_LOGISTICS_DESIGN.md` |
 | 건물 외관·트럭 진입로·하역장 | `WAREHOUSE.md`의 외부 에셋 선정/설치 상태, `Scripts/build_warehouse_exterior.py`, `Scripts/verify_warehouse_exterior.py` | 맵의 `EXT_` 액터, `Content/Warehouse/Exterior/Materials/` |
 | 밝기·자동 노출 | `Config/DefaultEngine.ini`의 AutoExposure, 맵 생성 스크립트의 작업등 | 인게임 카메라·후처리 설정 |
 | 배치·충돌 검증 | `Scripts/verify_first_person_warehouse.py`, `Scripts/verify_forklift_training.py` | 실제 에디터의 충돌 뷰/플레이 테스트 |
-| 화물 품목·밀도/부피별 무게·상자 크기·향후 트럭 입고 규칙 | `CARGO_RULES.md`, `Source/msc_vr/WarehouseCargo.h/.cpp`, `Scripts/configure_cargo_variety.py`, `Scripts/verify_cargo_rules.py` | `Scripts/import_boxes_pallets_pack.py`, `Content/Warehouse/Cargo/BoxesPalletsPack/` (외부 파생은 로컬 재생성, `RUNTIME_ASSETS.md`), `SourceAssets/Cargo/BoxesPalletsPack/` (원본 팩 Git 제외), `Scripts/download_cargo_assets.ps1`, `Scripts/import_cargo_assets.py`, `Content/Warehouse/Cargo/PolyHaven/`, `SourceAssets/Cargo/PolyHaven/`, `Scripts/verify_cargo_variety_pie.py`; 화면 표시는 PlayerController, 하중은 DamageSystem |
+| 화물 품목·밀도/부피별 무게·상자 크기·향후 트럭 입고 규칙 | `CARGO_RULES.md`, `Source/msc_vr/WarehouseCargo.h/.cpp`, `Scripts/configure_cargo_variety.py`, `Scripts/verify_cargo_rules.py` | `Scripts/import_boxes_pallets_pack.py`, `Content/Warehouse/Cargo/BoxesPalletsPack/` (사용 파생 에셋 Git 포함, `RUNTIME_ASSETS.md`), `SourceAssets/Cargo/BoxesPalletsPack/` (원본 팩 Git 제외), `Scripts/download_cargo_assets.ps1`, `Scripts/import_cargo_assets.py`, `Content/Warehouse/Cargo/PolyHaven/`, `SourceAssets/Cargo/PolyHaven/`, `Scripts/verify_cargo_variety_pie.py`; 화면 표시는 PlayerController, 하중은 DamageSystem |
 | 상자·크레이트·빈 팔레트 집기·단단한 손 제어·막힘/지연 취소 | `Source/msc_vr/msc_vrCharacter.h/.cpp`, `Scripts/verify_carry_response_pie.py`, `Source/msc_vr/WarehouseCargo.h/.cpp`, `WarehousePallet.h/.cpp` | `WAREHOUSE.md`의 양손 운반, 계수는 `PHYSICS.md`; `Scripts/verify_carry_regression_suite.py`는 상자·팔레트·보행/손 모션 검사를 한 에디터에서 연속 실행 |
 | 온전한 상자·낙하 안정성·팔레트 동적 물리 | `Scripts/prepare_intact_cargo_physics.py`, `Scripts/apply_intact_cargo_physics.py`, `Scripts/verify_cargo_pallet_physics_pie.py` | `WarehouseCargo.cpp`의 `ConfigureCarryPhysics`, `msc_vrCharacter.cpp`의 `DropCargo`, `WarehousePallet.cpp`; 로컬 파생 메시 `SM_Carton_Intact_1/2`, `SM_Pallet_110` |
 | 캐릭터 미끄러짐·보행 애니메이션·제동 | `msc_vrCharacter.cpp`의 `UpdatePhysicalMovement`, `WarehouseWorker.cpp`의 `DriveCapsule`, `WarehouseLocomotionAnimInstance.h/.cpp`, `Scripts/verify_character_drive_response_pie.py` | `PHYSICS.md`, 모션 설치는 `TEAM_ASSETS.md`, 1인칭 복사는 `Content/FirstPerson/Anims/` |
-| Game Animation Sample 모션 교체·리타게팅·방향/속도별 보행·앉기·점프/착지 | `Scripts/import_game_animation_sample.py`, `Scripts/configure_game_animation_sample.py`, `WarehouseLocomotionAnimInstance.h/.cpp`, `Content/Warehouse/AnimationSample/` (사용32개 에셋은 로컬 생성) | `TEAM_ASSETS.md`의 외부 샘플 설치·사용 모션 생성, `RUNTIME_ASSETS.md`의 정확한 목록, `WAREHOUSE.md`의 적용 범위, 기존 물리 구동은 `msc_vrCharacter`/`WarehouseWorker`, 운반·스마트폰은 `WarehouseCarryAnimInstance`, `verify_character_drive_response_pie.py -SampleAnimationChecksOnly` |
+| Game Animation Sample 모션 교체·리타게팅·방향/속도별 보행·앉기·점프/착지 | `Scripts/import_game_animation_sample.py`, `Scripts/configure_game_animation_sample.py`, `WarehouseLocomotionAnimInstance.h/.cpp`, `Content/Warehouse/AnimationSample/` (사용32개 에셋 Git 포함) | `TEAM_ASSETS.md`의 Git/LFS 받기·선택적 모션 재생성, `RUNTIME_ASSETS.md`의 정확한 목록, `WAREHOUSE.md`의 적용 범위, 기존 물리 구동은 `msc_vrCharacter`/`WarehouseWorker`, 운반·스마트폰은 `WarehouseCarryAnimInstance`, `verify_character_drive_response_pie.py -SampleAnimationChecksOnly` |
 | 양손 운반 자세·걷기 연결·뒤통수 가림·외부 시점 손 접촉 | `Source/msc_vr/WarehouseCarryAnimInstance.h/.cpp`, `msc_vrCharacter.cpp`의 `InitializeCarryPresentation`/`InitializeCarryMesh`/`UpdateCarryPose` | `Scripts/verify_view_and_wheel_fixes_pie.py`, `Scripts/verify_character_drive_response_pie.py`, `Scripts/verify_two_hand_carry.py`, `Content/FirstPerson/Anims/`; 외부 운반/스마트폰은 `RemoteOperatorWorldMesh`를 공유 |
 | 지게차 가속·제동·자리 회전·1.8m/s·수동 입력 지연/주기적 정지 | `WarehouseForkliftPhysics.cpp`, `WarehouseForkliftRemote.cpp`, `Scripts/verify_remote_drive_continuity_pie.py` | `msc_vrCharacter::UpdateRemoteControl`, `apply_forklift_drive_tuning.py`, 기존 보행/운전자 외형은 `verify_character_drive_response_pie.py`, `VNSL14_SPEC.md`, `PHYSICS.md` |
 | 운반 물체 반투명·시야 확보 | `msc_vrCharacter.cpp`의 `TryPickupCargo`/`DropCargo`, `msc_vrCharacter.h`의 `CarryOpacity` | `Scripts/prepare_carry_material.py`, `Content/Warehouse/Materials/M_CarryTransparent.uasset`, `Scripts/verify_two_hand_carry.py` |
@@ -102,7 +104,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 주황 AGV 모델·바퀴·기계 리그·PBR 재질 | `REFINED_AGV.md`, `Scripts/prepare_refined_agv.py`, `Scripts/apply_refined_agv.py`, `Source/msc_vr/WarehouseForklift.cpp` | 바퀴 위치만 복원은 `Scripts/restore_front_wheel_mounts.py`; `SourceAssets/OrangeAGV/orange_agv_refined.fbx`, `Content/Warehouse/AGV/Meshes/`, `Content/Warehouse/AGV/Materials/`, `Scripts/verify_refined_agv.py`, `Scripts/verify_view_and_wheel_fixes_pie.py`, `Scripts/verify_refined_agv_pie.py`; 기존 prepare/apply Orange AGV 스크립트는 과거 모델 복원용 |
 | 팔레트 구멍·포크 정렬·삽입 조건 | `Source/msc_vr/WarehousePallet.h/.cpp`, `WarehouseForklift.cpp` | `Scripts/verify_forklift_training.py` |
 | 공통 목재 팔레트 모델·재질 | `WarehousePallet.cpp`, `Scripts/apply_real_world_scale.py`, `Scripts/prepare_warehouse_assets.py` | 원본 `Content/Scene_Warehouse/Assets/MS/3D/Ind_War_Storage_Pallet_Wood_Worn_01/`; 공통 실측 물리 복사본 `Content/Warehouse/Physics/SM_Pallet_110.uasset` (준비 스크립트로 재생성) |
-| 정적 삼각형·동적 볼록 충돌 에셋 | `Scripts/prepare_warehouse_assets.py`, `Source/msc_vr/WarehouseCargo.cpp` | `Content/Warehouse/Collision/`, `Content/Warehouse/Physics/` (로컬 재생성물) |
+| 정적 삼각형·동적 볼록 충돌 에셋 | `Scripts/prepare_warehouse_assets.py`, `Source/msc_vr/WarehouseCargo.cpp` | `Content/Warehouse/Collision/`, `Content/Warehouse/Physics/` (사용 파생 에셋 Git 포함) |
 | 물리 실측·LiDAR·경로 계획 확장 | `PHYSICS.md`의 실측 전 가정, `AUTONOMY.md`의 경로·인식 범위 | `WarehouseForkliftPhysics.cpp`, `Config/DefaultEngine.ini`, 관련 레벨/블루프린트 |
 | 별도 Agv 동역학·LiDAR·내비게이션 모듈 | `Source/msc_vr/Agv/FORKLIFT_NAVIGATION.md`, 같은 폴더의 관련 컴포넌트 | `Scripts/verify_agv_*.py`; 현재 맵 지게차의 자율 작업은 `WarehouseForkliftAI.cpp` |
 | 센서·고정 건물 지도·관측 정보 경계·1초 검사·원격 분리 | `AUTONOMY.md`, `WarehouseForkliftPerception.cpp`, `Agv/AgvShadowSensors.h/.cpp`, `Scripts/verify_forklift_sensors_pie.py` | 지도 태그·독립 시험 차량의 운용 맵 제외는 `Scripts/configure_sensor_structure_tags.py`, 경로 연결은 `WarehouseForkliftAI`, 원격은 `WarehouseForkliftRemote`. 별도 타이어/주행 AI는 연결하지 않음 |
@@ -111,8 +113,8 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 전지적 카메라 앞 가까운 벽 페이드·원본 재질 복원 | `WarehouseObserverWallFade.h/.cpp`, `msc_vrPlayerController::PlayerTick`, `Scripts/prepare_observer_wall_fade.py`, `Scripts/verify_observer_wall_fade_pie.py` | 대상 `ObserverFadeWall` 태그도 준비 스크립트가 저장. 로컬 팔레트·파생 재질은 `Content/Warehouse/Materials/ObserverWalls/`, 설치는 `TEAM_ASSETS.md`, 동작은 `WAREHOUSE.md` |
 | 1인칭 조작·카메라 | `Source/msc_vr/msc_vrCharacter.*`, `msc_vrPlayerController.*`, `msc_vrCameraManager.*` | `Content/FirstPerson/Blueprints/`, `Content/Input/`, `Config/DefaultInput.ini` |
 | 시작 맵·게임 모드 | `Config/DefaultEngine.ini`, `Source/msc_vr/msc_vrGameMode.*`, `Content/FirstPerson/Blueprints/` | `msc_vr.uproject` |
-| Fab 창고 에셋·팀원 설치 | `TEAM_ASSETS.md` (외부 6개·설치·목록 누락 해결·로컬 재생성), `WAREHOUSE.md`, `Scripts/prepare_warehouse_assets.py`, `.gitignore` | `Content/Scene_Warehouse/` 원본 팩 |
-| Fab 트럭·나무·관목 설치·배치 | `WAREHOUSE.md`의 외부 에셋 절, `Scripts/apply_exterior_fab_assets.py`, `Scripts/prepare_warehouse_assets.py` | `Content/VehicleVarietyPack/`, `Content/EuropeanBeech/`, `Content/MSPresets/`, `Content/GV_FreeShrubsPack/` (Git 제외 원본 팩) |
+| Fab 창고 에셋·팀원 설치 | `TEAM_ASSETS.md` (Git/LFS·누락 진단·선택적 원본 재생성), `WAREHOUSE.md`, `Scripts/prepare_warehouse_assets.py`, `.gitignore` | `Content/Scene_Warehouse/` 원본 팩 |
+| Fab 트럭·나무·관목 설치·배치 | `WAREHOUSE.md`의 외부 에셋 절, `Scripts/apply_exterior_fab_assets.py`, `Scripts/prepare_warehouse_assets.py` | `Content/VehicleVarietyPack/`, `Content/EuropeanBeech/`, `Content/MSPresets/`, `Content/GV_FreeShrubsPack/` (사용 의존 파일만 Git 포함) |
 | 구조 문서 갱신 | `AGENTS.md`, `Scripts/update_structure_summary.ps1`, 이 문서 | 없음 |
 | Unreal MCP 연결·공식 도구 조회·자동 시작 복구 | `MCP_SETUP.md`, `.codex/config.toml`, `msc_vr.uproject`, `Config/DefaultEditorPerProjectUserSettings.ini` | 연결 검사는 `Scripts/verify_mcp.py`; 에셋 설치는 `TEAM_ASSETS.md` |
 
@@ -257,7 +259,9 @@ msc_vr/
     verify_area_labels_pie.py
     verify_building_lift_four_floors_pie.py
     verify_building_saved_map_pie.py
+    verify_building_services_pie.py
     verify_building_shaft_layout_pie.py
+    verify_building_tiles_pie.py
     verify_cargo_elevator_pie.py
     verify_cargo_pallet_physics_pie.py
     verify_cargo_rules.py
@@ -333,6 +337,7 @@ msc_vr/
     verify_warehouse_experiments_pie.py
     verify_warehouse_exterior.py
     verify_warehouse_interaction_pie.py
+    verify_warehouse_loading_pie.py
     verify_warehouse_play_pie.py
     verify_warehouse_strength.py
     verify_warehouse_strength_pie.py
@@ -410,6 +415,8 @@ msc_vr/
       WarehouseLayoutInventory.h
       WarehouseLayoutSnap.cpp
       WarehouseLayoutSnap.h
+      WarehouseLoading.cpp
+      WarehouseLoading.h
       WarehouseLocomotionAnimInstance.cpp
       WarehouseLocomotionAnimInstance.h
       WarehouseLogisticsTruck.cpp
@@ -527,4 +534,4 @@ msc_vr/
 ```
 <!-- STRUCTURE:END -->
 
-`Content/Scene_Warehouse/`는 Fab 팩이며 Git에서 제외된다. 다른 팀원은 동일 경로에 설치해야 한다. `Binaries/`, `Intermediate/`, `Saved/`, `DerivedDataCache/`, `.vs/`는 생성물/캐시이므로 보통 탐색 대상이 아니다. `Variant_Horror`, `Variant_Shooter`, `Characters`, `Weapons`, `LevelPrototyping`은 현재 창고 기능의 핵심이 아닌 템플릿 콘텐츠다.
+`Content/Scene_Warehouse/`는 Fab 팩이며 게임이 참조하는 파일만 기존 경로로 Git에 포함한다. 정확한 범위는 `Config/RuntimeAssets.json`, 받는 방법과 출처는 `TEAM_ASSETS.md`·`RUNTIME_ASSETS.md`를 따른다. `Binaries/`, `Intermediate/`, `Saved/`, `DerivedDataCache/`, `.vs/`는 생성물/캐시이므로 보통 탐색 대상이 아니다. `Variant_Horror`, `Variant_Shooter`, `Characters`, `Weapons`, `LevelPrototyping`은 현재 창고 기능의 핵심이 아닌 템플릿 콘텐츠다.

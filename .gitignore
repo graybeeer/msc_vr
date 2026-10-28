@@ -84,8 +84,9 @@ __pycache__/
 # Blender automatic backups; keep the editable .blend sources.
 *.blend[0-9]
 
-# External source packs and their derivatives stay local, including used files.
-# Config/RuntimeAssets.json inventories dependencies, not permission to publish them.
+# Ignore whole external packs; only selected runtime dependencies are force-added.
+# Tracked files from Config/RuntimeAssets.json remain tracked despite these rules.
+# Source attribution and license terms are documented in RUNTIME_ASSETS.md.
 # Reproducible Fab Marketplace content (Warehouse)
 /Content/Scene_Warehouse/
 /Content/Warehouse/Collision/
@@ -93,7 +94,7 @@ __pycache__/
 /Content/__ExternalActors__/Scene_Warehouse/
 /Content/__ExternalObjects__/Scene_Warehouse/
 
-# Reinstall Fab exterior content per TEAM_ASSETS.md; do not publish source packs.
+# Exclude unused Fab exterior content; selected dependencies are tracked.
 /Content/GV_FreeShrubsPack/
 /Content/VehicleVarietyPack/
 /Content/EuropeanBeech/
@@ -102,7 +103,7 @@ __pycache__/
 # Rebuild intermediate FBX imports; source FBX and final AGV rig assets are tracked.
 /Content/Warehouse/AGV/SourceMeshes/
 
-# Licensed Fab Boxes & Pallets Pack: install locally per WAREHOUSE.md.
+# Keep source downloads local; track only selected imported runtime files.
 /SourceAssets/Cargo/BoxesPalletsPack/
 /Content/Warehouse/Cargo/BoxesPalletsPack/
 
@@ -112,14 +113,14 @@ __pycache__/
 # Rebuild refined model intermediate imports from the tracked FBX.
 /Content/Warehouse/AGV/RefinedSource/
 
-# Rebuild licensed Fab truck derivative locally with configure_truck_interior.py.
+# Track only selected truck derivatives, not every generated variant.
 /Content/Warehouse/Exterior/TruckInterior/
 
-# Regenerate the selected motions locally from the separately downloaded sample.
+# Track selected runtime motions; unused imported sample content stays local.
 /Content/Warehouse/AnimationSample/
 /Content/Characters/UE5_Mannequins/
 
-# Rebuild observer wall fade variants from each installed source material.
+# Track selected observer wall variants; unused generated variants stay local.
 /Content/Warehouse/Materials/ObserverWalls/
 
 # Local repeatable experiment fixtures; source test scripts recreate these maps.

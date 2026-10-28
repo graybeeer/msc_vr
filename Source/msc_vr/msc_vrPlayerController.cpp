@@ -149,8 +149,26 @@ public:
    for (double Y=FMath::CeilToDouble((Bounds.Min.Y-Origin.Y)/100.)*100.+Origin.Y;Y<=Bounds.Max.Y;Y+=100.)
     Line(FVector(Bounds.Min.X,Y,Bounds.Min.Z),FVector(Bounds.Max.X,Y,Bounds.Min.Z),FLinearColor(.25f,.65f,.8f,.16f));
    Rectangle(Bounds,FLinearColor(.3f,.65f,.75f,.65f),1.5f);
-   Rectangle(Building->GetTargetBounds(),WarehouseUIStyle::Accent,3.f);
-   Rectangle(Building->GetAtriumBounds(),WarehouseUIStyle::Warning,2.f);
+   if (Building->IsFloorTarget())
+   {
+    const double Z=Building->GetPlaneHeight();
+    for (const auto& Edge:Building->GetPreviewEdges())
+     Line(FVector(Origin.X+Edge.Key.X,Origin.Y+Edge.Key.Y,Z),FVector(Origin.X+Edge.Value.X,Origin.Y+Edge.Value.Y,Z),WarehouseUIStyle::Accent,3.f);
+    auto ChangedTile=[&](FIntPoint Cell,bool Added)
+    {
+     const FVector A(Origin.X+Cell.X*100.+4,Origin.Y+Cell.Y*100.+4,Z),B=A+FVector(92,92,0);
+     const FLinearColor Color=Added ? FLinearColor(.25f,1.f,.45f,.95f) : FLinearColor(1.f,.3f,.2f,.95f);
+     Rectangle(FBox(A,B),Color,2.f);Line(A,B,Color,2.f);
+     if (!Added) Line(FVector(B.X,A.Y,Z),FVector(A.X,B.Y,Z),Color,2.f);
+    };
+    for (FIntPoint Cell:Building->GetAddedTiles()) ChangedTile(Cell,true);
+    for (FIntPoint Cell:Building->GetRemovedTiles()) ChangedTile(Cell,false);
+   }
+   if (!Building->IsTileBrush())
+   {
+    Rectangle(Building->GetTargetBounds(),WarehouseUIStyle::Accent,2.f);
+    Rectangle(Building->GetAtriumBounds(),WarehouseUIStyle::Warning,2.f);
+   }
    for (FVector World:Building->GetResizeHandles())
    {
     FVector2D Point;if (Controller->ProjectWorldLocationToScreen(World,Point))
@@ -230,7 +248,7 @@ void Amsc_vrPlayerController::BeginPlay()
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(EmergencyAlertWidget.ToSharedRef(),200);
 		auto Tools=SNew(SVerticalBox);
 		LayoutCanvas=SNew(SWarehouseLayoutCanvas).Layout(LayoutEditor).Controller(this)
-			.OnEnded_Lambda([this]() { SetObserverRoofVisibility(false);SetObserverRoofVisibility(true); })
+			.OnEnded_Lambda([this]() { if (!(ConstructionEditor && ConstructionEditor->bActive && ConstructionEditor->IsTileBrush())) { SetObserverRoofVisibility(false);SetObserverRoofVisibility(true); } })
 			.Visibility_Lambda([this]() { return bObserverView && LayoutEditor && LayoutEditor->bEditing && !IsWarehouseMenuOpen() ? EVisibility::Visible:EVisibility::Collapsed; });
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(LayoutCanvas.ToSharedRef(),10);
 		auto Floors=SNew(SWrapBox).UseAllottedSize(true);
@@ -261,6 +279,24 @@ void Amsc_vrPlayerController::BeginPlay()
 				.OnClicked_Lambda([this,I]() { if (I<4) SetObserverFloor(I);ConstructionEditor->SetTarget(EWarehouseConstructionTarget(I));return FReply::Handled(); })
 				[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity_Lambda([this,I]() { return ConstructionEditor && int32(ConstructionEditor->Target)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(BuildingNames[I]))]];
 		BuildingTools->AddSlot().AutoHeight()[BuildingTargets];
+		auto TileTools=SNew(SWrapBox).UseAllottedSize(true)
+			.Visibility_Lambda([this]() { return ConstructionEditor && ConstructionEditor->IsFloorTarget() ? EVisibility::Visible : EVisibility::Collapsed; });
+		const TCHAR* TileBrushNames[]={TEXT("크기 · 위치"),TEXT("타일 추가"),TEXT("타일 제거")};
+		for (int32 I=0;I<UE_ARRAY_COUNT(TileBrushNames);++I)
+			TileTools->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+				.OnClicked_Lambda([this,I]() { ConstructionEditor->SetBrushMode(EWarehouseConstructionBrush(I));return FReply::Handled(); })
+				[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity_Lambda([this,I]() { return ConstructionEditor && int32(ConstructionEditor->BrushMode)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; })
+				.Text(FText::FromString(TileBrushNames[I]))]];
+		TileTools->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			.IsEnabled_Lambda([this]() { return ConstructionEditor && ConstructionEditor->bHasPendingTiles; })
+			.ToolTipText(FText::FromString(TEXT("모든 미확정 타일을 한 번에 적용하고 난간·장식·지지대를 재배치합니다.")))
+			.OnClicked_Lambda([this]() { if (ConstructionEditor->ApplyPendingTiles()) { SetObserverRoofVisibility(false);SetObserverRoofVisibility(true); }return FReply::Handled(); })
+			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("편집 적용")))]];
+		TileTools->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			.IsEnabled_Lambda([this]() { return ConstructionEditor && (ConstructionEditor->bHasPendingTiles || ConstructionEditor->bDragging); })
+			.OnClicked_Lambda([this]() { ConstructionEditor->CancelPendingTiles();return FReply::Handled(); })
+			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text(FText::FromString(TEXT("취소")))]];
+		BuildingTools->AddSlot().AutoHeight()[TileTools];
 		auto BuildingActions=SNew(SWrapBox).UseAllottedSize(true);
 		for (int32 Direction:{-1,1})
 			BuildingActions->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
@@ -683,7 +719,16 @@ void Amsc_vrPlayerController::SetObserverFloor(int32 Floor)
 {
  if (Floor < -1 || Floor > 3) return;
  if (FSlateApplication::IsInitialized()) FSlateApplication::Get().DismissAllMenus();
- if (ConstructionEditor) { ConstructionEditor->EndGesture(false);if (Floor<0) ConstructionEditor->SetActive(false); }
+ if (ConstructionEditor)
+ {
+  if (Floor!=ObserverFloor && (ConstructionEditor->bHasPendingTiles || ConstructionEditor->bDragging)) ConstructionEditor->CancelPendingTiles();
+  else ConstructionEditor->EndGesture(false);
+  if (Floor<0) ConstructionEditor->SetActive(false);
+  else if (ConstructionEditor->bActive && ConstructionEditor->IsFloorTarget())
+   ConstructionEditor->SetTarget(EWarehouseConstructionTarget(Floor));
+  else if (ConstructionEditor->bActive && ConstructionEditor->Target==EWarehouseConstructionTarget::Stairs && Floor>0)
+   ConstructionEditor->SetStairFloor(Floor);
+ }
  if (!bObserverView) ToggleObserverView();
  SetObserverRoofVisibility(false);
  ObserverFloor=Floor;

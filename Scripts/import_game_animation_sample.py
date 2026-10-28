@@ -51,5 +51,7 @@ options = unreal.MigrationOptions(prompt=False, asset_conflict=unreal.AssetMigra
 migration_packages=packages+['/Game/Characters/UE5_Mannequins/Meshes/SK_Mannequin']
 unreal.AssetToolsHelpers.get_asset_tools().migrate_packages(migration_packages, str(ROOT / 'Content'), options)
 report = dict(source_project=unreal.Paths.get_project_file_path(), source_names=names, packages=packages)
-(ROOT / 'Saved/Testing/GameAnimationSampleImport.json').write_text(json.dumps(report,indent=2), encoding='utf-8')
+report_path = ROOT / 'Saved/Testing/GameAnimationSampleImport.json'
+report_path.parent.mkdir(parents=True, exist_ok=True)
+report_path.write_text(json.dumps(report,indent=2), encoding='utf-8')
 print('GAME_ANIMATION_SAMPLE_IMPORT_PASSED', len(packages))
