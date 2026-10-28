@@ -383,39 +383,6 @@ void UAgvForkliftLocalizerComponent::StepOdometry(float Dt)
 	SideSlipResidualCm = (float)FMath::Sqrt(SideResidualSquared);
 }
 
-bool UAgvForkliftLocalizerComponent::EnsureLocalizationScanners()
-{
-	if (!LocalizationScanners.IsEmpty())
-	{
-		return true;
-	}
-	// Copies of the side safety scanners (same mount, model, field and noise model; own noise seeds).
-	for (const UAgvLidarComponent* Source : SensorKit->Lidars)
-	{
-		if (!Source || (Source->GetName() != TEXT("AgvShadowScannerL") && Source->GetName() != TEXT("AgvShadowScannerR")))
-		{
-			continue;
-		}
-		UAgvLidarComponent* Scanner = NewObject<UAgvLidarComponent>(Forklift, *(Source->GetName().Replace(TEXT("AgvShadow"), TEXT("AgvLocalization"))));
-		Scanner->SetupAttachment(Source->GetAttachParent());
-		Scanner->SetRelativeTransform(Source->GetRelativeTransform());
-		Scanner->bUseForLocalization = false;
-		Scanner->HorizontalFovDeg = Source->HorizontalFovDeg;
-		Scanner->HorizontalResolutionDeg = Source->HorizontalResolutionDeg;
-		Scanner->Channels = Source->Channels;
-		Scanner->VerticalMinDeg = Source->VerticalMinDeg;
-		Scanner->VerticalMaxDeg = Source->VerticalMaxDeg;
-		Scanner->MinRangeCm = Source->MinRangeCm;
-		Scanner->MaxRangeCm = Source->MaxRangeCm;
-		Scanner->RangeNoiseCm = Source->RangeNoiseCm;
-		Scanner->DropoutProbability = Source->DropoutProbability;
-		Scanner->NoiseSeed = Source->NoiseSeed + 1000;
-		Scanner->RegisterComponent();
-		LocalizationScanners.Add(Scanner);
-	}
-	return !LocalizationScanners.IsEmpty();
-}
-
 bool UAgvForkliftLocalizerComponent::EnsureMap()
 {
 	if (Map && SensorKit->MapRevision == SeenMapRevision)
@@ -530,42 +497,14 @@ bool UAgvForkliftLocalizerComponent::EnsureMap()
 
 void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 {
-	// Scans come from the vehicle's one-second observation snapshot (all five LiDARs) and, in between, from the two side
-	// safety scanners at LocalizationScanHz, as real AGVs localize with their safety scanners many times a second.
-	// Both pause while the observation frame is suspended (remote control, elevator ride, power, scanner fault).
-	if (!SensorKit || !SensorKit->bSnapshotValid)
+	// Scans come from the vehicle's one-second observation snapshot (all five LiDARs); none while the observation frame
+	// is suspended (remote control, elevator ride, power, scanner fault).
+	if (!SensorKit || !SensorKit->bSnapshotValid || SensorKit->SnapshotCount == SeenSnapshot)
 	{
 		return;
 	}
-	TArray<const UAgvLidarComponent*> Sources;
-	if (SensorKit->SnapshotCount != SeenSnapshot)
-	{
-		SeenSnapshot = SensorKit->SnapshotCount;
-		LocalizationScanClock = 0.0;
-		Sources.Append(SensorKit->Lidars);
-	}
-	else if (LocalizationScanHz > 0.f && Forklift->bSafetyScannerHealthy)
-	{
-		LocalizationScanClock += LastDt;
-		if (LocalizationScanClock < 1.0 / LocalizationScanHz || !EnsureLocalizationScanners())
-		{
-			return;
-		}
-		LocalizationScanClock = 0.0;
-		const double ScanStart = FPlatformTime::Seconds();
-		for (UAgvLidarComponent* Scanner : LocalizationScanners)
-		{
-			Scanner->CaptureSnapshot();
-			Sources.Add(Scanner);
-		}
-		LocalizationScanMilliseconds = (float)((FPlatformTime::Seconds() - ScanStart) * 1000.0);
-		++LocalizationScans;
-	}
-	if (Sources.IsEmpty())
-	{
-		return;
-	}
-	const bool bPartialScan = Sources.Num() < SensorKit->Lidars.Num();
+	SeenSnapshot = SensorKit->SnapshotCount;
+	const TArray<TObjectPtr<UAgvLidarComponent>>& Sources = SensorKit->Lidars;
 	const double Start = FPlatformTime::Seconds();
 	const bool bHadNoMap = bNoMap;
 	const bool bHaveMap = EnsureMap();
@@ -659,27 +598,13 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 		RecoveredMatches += Ratio >= MinInlierRatio;
 	}
 	LastInlierRatio = (float)Ratio;
-	if (Ratio >= MinInlierRatio && bPartialScan)
-	{
-		// Few points can fit the wrong place: a side-scanner scan only refines, it does not move the estimate far.
-		FVector2D Now;
-		double NowYaw;
-		ToMap(OdomPosition, OdomYaw, Now, NowYaw);
-		const FVector2D Matched = AgvMath::Rotate(Th, OdomPosition) + FVector2D(Tx, Ty);
-		if (Ratio < MinPartialInlierRatio || FVector2D::Distance(Now, Matched) > MaxPartialCorrectionCm)
-		{
-			Ratio = 0.0;
-			LastInlierRatio = 0.f;
-		}
-	}
 	if (Ratio >= MinInlierRatio)
 	{
 		FVector2D Before, After;
 		double BeforeYaw, AfterYaw;
 		ToMap(OdomPosition, OdomYaw, Before, BeforeYaw);
-		const double Gain = bPartialScan ? PartialCorrectionGain : CorrectionGain;
-		CorrectionOffset += (FVector2D(Tx, Ty) - CorrectionOffset) * Gain;
-		CorrectionYaw += AgvMath::Wrap(Th - CorrectionYaw) * Gain;
+		CorrectionOffset += (FVector2D(Tx, Ty) - CorrectionOffset) * CorrectionGain;
+		CorrectionYaw += AgvMath::Wrap(Th - CorrectionYaw) * CorrectionGain;
 		ToMap(OdomPosition, OdomYaw, After, AfterYaw);
 		LastCorrectionCm = (float)FVector2D::Distance(Before, After);
 		TravelSinceMatchCm = 0.f;
@@ -794,10 +719,10 @@ void UAgvForkliftLocalizerComponent::ResetStatistics()
 FString UAgvForkliftLocalizerComponent::Summary() const
 {
 	const int32 Matches = AcceptedMatches + RejectedMatches;
-	return FString::Printf(TEXT("%s %s: error mean %.1f p95 %.1f max %.1f cm, heading max %.2f deg (%d frames); matches %d/%d accepted, %d recovered, %.1f ms mean; lost %d (%d frames); reinit %d; encoder scale %.3f; side slip scale %.2f residual %.0f cm; localization scans %d (last %.1f ms); map %d builds, last %.0f ms"),
+	return FString::Printf(TEXT("%s %s: error mean %.1f p95 %.1f max %.1f cm, heading max %.2f deg (%d frames); matches %d/%d accepted, %d recovered, %.1f ms mean; lost %d (%d frames); reinit %d; encoder scale %.3f; side slip scale %.2f residual %.0f cm; map %d builds, last %.0f ms"),
 		Forklift ? *Forklift->GetName() : TEXT("?"), *StatusText, MeanErrorCm, P95ErrorCm, MaxErrorCm, MaxHeadingErrorDeg, ErrorSamples,
 		AcceptedMatches, Matches, RecoveredMatches, Matches ? MatchMillisecondsSum / Matches : 0.0, LostEvents, LostFrames, Reinitializations,
-		EncoderScale, SideSlipScale, SideSlipResidualCm, LocalizationScans, LocalizationScanMilliseconds, MapBuilds, MapBuildMilliseconds);
+		EncoderScale, SideSlipScale, SideSlipResidualCm, MapBuilds, MapBuildMilliseconds);
 }
 
 // --- Subsystem ----------------------------------------------------------------------------------------------------

@@ -102,15 +102,9 @@ public:
 	int32 NoiseSeed = 11;
 
 	/**
-	 * Localization scans per simulated second from the two side safety scanners, between the one-second observation
-	 * snapshots (0 = the snapshots only). Added when the drive wheel's spin and skid left 6-26 cm between one-second
-	 * scans; the load-wheel encoders removed that, and in the inbound area the side scans then pulled the estimate
-	 * 8-10 cm sideways into cargo (forklift 2 NO SAFE DETOUR, 2026-10-28), so they are off by default.
+	 * Lowest return used for matching, above the floor. Side-scanner localization scans (5 Hz, 2026-10-27) were removed
+	 * on 2026-10-28: after the load-wheel encoders they only pulled the estimate sideways into unmapped cargo.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Localization", meta=(ClampMin="0"))
-	float LocalizationScanHz = 0.f;
-
-	/** Lowest return used for matching, above the floor (the side scanners sweep at 27 cm). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Map")
 	float PointMinZCm = 10.f;
 
@@ -140,23 +134,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="0", ClampMax="1"))
 	float MinInlierRatio = 0.5f;
 
-	/** Fewest voxelized points for a match. The side scanners alone give about 120 (2026-10-27). */
+	/** Fewest voxelized points for a match. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="3"))
 	int32 MinMatchPoints = 50;
-
-	/**
-	 * Side-scanner-only matches. Their 27 cm sweep meets pallet faces standing proud of the rack posts, which are not
-	 * on the map and pulled the estimate 3-5 cm sideways, scan after scan, up to 17 cm (2026-10-27): they count only
-	 * when they fit cleanly, at a reduced share, and never move the estimate far. The full one-second scans decide.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="1"))
-	float MaxPartialCorrectionCm = 15.f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="0", ClampMax="1"))
-	float MinPartialInlierRatio = 0.85f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="0.05", ClampMax="1"))
-	float PartialCorrectionGain = 0.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="1"))
 	int32 MatchIterations = 20;
@@ -210,12 +190,6 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
 	float TravelSinceMatchCm = 0.f;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
-	int32 LocalizationScans = 0;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
-	float LocalizationScanMilliseconds = 0.f;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
 	int32 MapBuilds = 0;
@@ -272,7 +246,6 @@ private:
 	void StepOdometry(float Dt);
 	void CollectAndMatchScan();
 	bool EnsureMap();
-	bool EnsureLocalizationScanners();
 	void Measure();
 	void ToMap(const FVector2D& Position, double Yaw, FVector2D& OutPosition, double& OutYaw) const;
 	void SlewDrivingCorrection(float Dt);
@@ -284,8 +257,6 @@ private:
 	UPROPERTY(Transient) TArray<TObjectPtr<UPrimitiveComponent>> LoadWheels;
 	double LoadWheelRadiusCm = 8.0;
 	UPROPERTY(Transient) TObjectPtr<UAgvShadowSensorsComponent> SensorKit;
-	UPROPERTY(Transient) TArray<TObjectPtr<UAgvLidarComponent>> LocalizationScanners;
-	double LocalizationScanClock = 0.0;
 
 	TSharedPtr<const FAgvDistanceMap> Map;
 	uint64 MapKey = 0;
