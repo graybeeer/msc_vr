@@ -369,8 +369,15 @@ bool AWarehouseForklift::ConnectPoses(const FTransform& From,const FTransform& T
    if (Query->bGeometryFirst)
    {
     if (!Valid || Weighted>=Cost) ++Query->GeometryRejectedCandidates;
-    else for (const auto& Step : Candidate)
-     if (!NavigationClear(Step.Pose,Query)) { Valid=false;break; }
+    else
+    {
+     // Coarse to fine: a blocked curve is usually blocked over a stretch, so every 32nd sample first rejects it after
+     // a few queries. A clear curve still has every sample checked, so the chosen route is unchanged.
+     TBitArray<> Checked(false,Candidate.Num());
+     for (int32 Stride=32;Stride>=1 && Valid;Stride/=2)
+      for (int32 I=Stride-1;I<Candidate.Num();I+=Stride)
+       if (!Checked[I]) { Checked[I]=true; if (!NavigationClear(Candidate[I].Pose,Query)) { Valid=false;break; } }
+    }
    }
    if (Valid && Weighted<Cost) { Route=MoveTemp(Candidate); Cost=Weighted; }
   }
@@ -426,14 +433,20 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  const bool Diagnostics=FParse::Param(FCommandLine::Get(),TEXT("DriveDiagnostics"));
  Query.bDiagnostics=Diagnostics;Query.DiagnosticGoal=Goal.GetLocation();
  int32 CandidateCount=0,StartConnections=0,GoalConnections=0;bool Found=false;
+ // Planning runs inside the game-thread tick: every millisecond here stalls the whole editor.
+ const double PlanStartSeconds=FPlatformTime::Seconds();
  ON_SCOPE_EXIT
  {
+  const double PlanMs=(FPlatformTime::Seconds()-PlanStartSeconds)*1000.0;
   if (Found && Query.bInsertionRetryEscape) RecoveryStart=RouteStart;
+  if (Found && PlanMs>200.0)
+   UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_SLOW %s ms=%.0f candidates=%d queries=%u goal=%s"),*VehicleName,PlanMs,CandidateCount,
+    WarehouseNavigationQueryCount-QueryStart,*Goal.GetLocation().ToString());
   if (!Found)
   {
-   UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_NO_ROUTE %s from=%s goal=%s candidates=%d start_edges=%d goal_edges=%d start_clear=%d goal_clear=%d"),
+   UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_NO_ROUTE %s from=%s goal=%s candidates=%d start_edges=%d goal_edges=%d start_clear=%d goal_clear=%d ms=%.0f queries=%u"),
     *VehicleName,*GetActorLocation().ToString(),*Goal.GetLocation().ToString(),CandidateCount,StartConnections,GoalConnections,
-    NavigationClear(GetActorTransform(),&Query),NavigationClear(Goal,&Query));
+    NavigationClear(GetActorTransform(),&Query),NavigationClear(Goal,&Query),PlanMs,WarehouseNavigationQueryCount-QueryStart);
    // Name what stands in the way so the log says why, not only that: the goal pose itself and, when it is free, the
    // straight approach lane behind it (the stretch every route into this goal has to use last).
    auto Blockers=[&](const FTransform& Pose)
