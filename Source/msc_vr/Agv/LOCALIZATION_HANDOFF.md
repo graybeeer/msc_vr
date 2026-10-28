@@ -171,6 +171,18 @@
   4. Play로 직접 확인한다. 지게차 1이 작업할 때 1인칭 AI 시점이 움직이는지, `stat unit` 프레임 비용도 본다.
   - 실행 방법: 저장 맵 시나리오는 `UnrealEditor.exe msc_vr.uproject -ExecCmds="py <스크립트>" [-nullrhi] -unattended -nosplash -nop4 -abslog=<로그>`, 비교용 끔은 `-AgvLocOff`. 결과는 로그의 `AGV_LOC_SUMMARY`, `AGV_REPORT ... FAULT`, `_PASSED`로 판정한다.
 
+### 9-3. 검증 결과 (2026-10-28, `347526fe`, 결과 `Saved/Testing/LocSuite_20261027.txt`)
+9-2의 검증 목록을 실행했다. 실행 도중 고장이나 오류로 시험이 시간 제한까지 헛도는 것을 막으려고 감시 스크립트를 추가했다. 감시 조건은 로그 5분 정지, 오류 후 1분, 고장 차량만 남고 3분 진전 없음, 30분 초과다. 이번 검증에서 감시로 끊긴 시험은 없었다. 이전 실행들에서는 고장 뒤 5~8분을 헛돈 경우가 10여 건 있었다.
+
+| 시험 | 위치 | 결과 |
+| --- | --- | --- |
+| `two_jobs` 렌더링 r2 / NullRHI r2 | 추정 | 완료 3, 고장 0, 복구 5(자가 회복). 오차 평균 2.1/1.6cm, 95% 3.5/4.0cm, 최대 11.6/15.4cm. 렌더링과 NullRHI의 수치가 같았다(같은 조건에서 결정적). 렌더링 r1은 PC 잠자기로 실제 시간 제한에 걸려 무효 |
+| `scen.py three` 켬 / 끔 | 추정 / 정확 | 둘 다 완료 3, 고장 0. 켬은 복구 4회, 두 대 모두 이동해 sim 328s에 복귀. 끔은 복구 0회, sim 131s(지게차 1만 이동). 켬의 최대 오차 19.4cm |
+| `dual_forklifts_remote` 켬 / 끔 | 추정 / 정확 | 둘 다 운반 2건 완료 후, 원격 단계의 기존 실패("선택하지 않은 차량이 원격 입력에 반응")에서 같은 지점에서 실패 |
+| Entry 6개(`shared_charging`, `fleet_traffic`, `obstacle_interval`, `native_forklift_motion`, `remote_drive_continuity`, `elevator_route_visuals`) | 정확(1안) | 모두 통과. 이 장면에서는 스캔을 맞출 지도가 없어 요약의 오차 수치가 바퀴 계산만의 값이다. 주행에는 쓰이지 않으므로 판정에서 제외한다 |
+
+판단: 위치 추정을 켜서 새로 생긴 실패는 없다. 남은 차이는 두 가지다. 추정 주행에서 복구가 시험당 4~5회 나오고, 연속 출고 시나리오가 더 오래 걸린다(차량 배정이 달라 1:1 비교는 아님).
+
 ## 10. 제안하는 첫 단계 (2026-10-27 이전 제안)
 1. 이 문서와 [FORKLIFT_NAVIGATION.md](FORKLIFT_NAVIGATION.md)를 읽고, 사용자와 단계 (2)부터 갈지 범위를 확인한다.
 2. `UAgvLocalizerComponent`를 운용 차량에 붙이고 주입 오차 모델로 `FollowRoute` 이동 구간만 추정 위치를 쓰게 한다(정렬·도킹은 정확한 위치 유지).
