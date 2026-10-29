@@ -16,6 +16,9 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Views/SListView.h"
 #if WITH_EDITOR && !UE_BUILD_SHIPPING
+#include "Engine/World.h"
+#include "EngineUtils.h"
+#include "Components/PrimitiveComponent.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
@@ -75,6 +78,7 @@ FString TaskState(const FWarehouseComputerTask& Task)
 {
  if(Task.bCompleted) return TEXT("운반 완료");
  if(Task.bCancelled) return TEXT("취소됨");
+ if(Task.bDeferred) return TEXT("운반 보류 · 다른 작업 처리");
  if(!IsValid(Task.Vehicle.Get())) return TEXT("담당 차량 확인 필요");
  if(Task.Vehicle->ActiveJob.JobId==Task.JobId) return VehicleState(Task.Vehicle.Get());
  if(Task.Vehicle->PendingJobs.ContainsByPredicate([&Task](const FWarehouseWorkOrder& Job){return Job.JobId==Task.JobId;})) return TEXT("운반 순서 대기");
@@ -146,14 +150,27 @@ public:
    +SHorizontalBox::Slot().AutoWidth().Padding(5,0)[Action(TEXT("플레이어로 돌아가기"),[this](){ReturnToPlayer();})]
    +SHorizontalBox::Slot().AutoWidth().Padding(5,0)[Action(Campaign ? TEXT("설비 배치") : TEXT("창고 지형 · 물체 재배치"),[this](){OpenLayout();})]
    +SHorizontalBox::Slot().AutoWidth().Padding(5,0)[Action(TEXT("닫기 · Esc"),[this](){Close();})]];
-  Body->AddSlot().AutoHeight().Padding(0,8,0,5)[Text(Campaign ? TEXT("1. 설비 배치  →  2. 운행 시작  →  3. 입고 목표 달성") : TEXT("1. 운행 시작  →  2. 차량 상태 확인  →  필요하면 출고 운반 지시"),17,WarehouseUIStyle::Accent)];
+  Body->AddSlot().AutoHeight().Padding(0,8,0,5)[Text(Campaign ? TEXT("1. 설비 배치  →  2. 운행 시작  →  3. 입고 목표 달성") : TEXT("1. 입고 / 출고 선택  →  2. 운행 시작  →  3. 운반할 팔레트 선택"),17,WarehouseUIStyle::Accent)];
   Body->AddSlot().AutoHeight().Padding(0,0,0,14)[Text(Campaign ? TEXT("입고 검수와 랩핑은 자동입니다. 직접 운전하려면 화면을 닫고 지게차 가까이에서 바라본 뒤 G를 누르세요.") : TEXT("검수 · 랩핑 · 트럭 상하차는 자동입니다. 직접 운전하려면 화면을 닫고 지게차 가까이에서 바라본 뒤 G를 누르세요."),14,Muted)];
   Body->AddSlot().AutoHeight()[SNew(SHorizontalBox)
    +SHorizontalBox::Slot().AutoWidth().Padding(0,0,8,0)[Action(TEXT("전체 지게차 운행 시작"),[this](){SetFleet(true);})]
-   +SHorizontalBox::Slot().AutoWidth()[Action(TEXT("전체 지게차 일시정지"),[this](){SetFleet(false);})]
+   +SHorizontalBox::Slot().AutoWidth().Padding(0,0,8,0)[Action(TEXT("전체 지게차 일시정지"),[this](){SetFleet(false);})]
+   +SHorizontalBox::Slot().AutoWidth()[Action(TEXT("전체 작업 중지"),[this](){StopFleet();})]
    +SHorizontalBox::Slot().FillWidth(1).Padding(20,0).VAlign(VAlign_Center)[SNew(STextBlock).Font(WarehouseUIStyle::Font(16)).ColorAndOpacity(WarehouseUIStyle::Accent).AutoWrapText(true)
     .Text_Lambda([this](){return FText::FromString(Counts);})]];
-  Body->AddSlot().AutoHeight().Padding(0,12)[SAssignNew(FleetBox,SVerticalBox)];
+  Body->AddSlot().AutoHeight().Padding(0,12)[SNew(SHorizontalBox)
+   +SHorizontalBox::Slot().FillWidth(1.5f).Padding(0,0,12,0)[SNew(SVerticalBox)
+    +SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)
+     +SHorizontalBox::Slot().AutoWidth().Padding(0,0,8,0)[DirectionTab(true)]
+     +SHorizontalBox::Slot().AutoWidth()[DirectionTab(false)]]
+    +SVerticalBox::Slot().AutoHeight().Padding(0,8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(15)).ColorAndOpacity(Muted).AutoWrapText(true)
+     .Text_Lambda([this](){return FText::FromString(IsCampaign() ? TEXT("이 스테이지는 입고 운반이 목표입니다.") : bInbound ? TEXT("입고: 검수·랩핑된 팔레트를 창고 랙으로 운반합니다.") : TEXT("출고: 창고에 보관한 팔레트를 출고 구역으로 운반합니다."));})]
+    +SVerticalBox::Slot().AutoHeight()[Text(TEXT("일시정지: 작업을 잠깐 멈춤\n중지: 맡은 작업을 취소하고 차량을 정지"),13,Muted)]]
+   +SHorizontalBox::Slot().FillWidth(1)[SNew(SVerticalBox)
+    +SVerticalBox::Slot().AutoHeight()[Text(TEXT("차량 관리 · 휠로 목록 이동"),17,WarehouseUIStyle::Accent)]
+    +SVerticalBox::Slot().AutoHeight().Padding(0,5,0,0)[SNew(SBox).HeightOverride(150)
+     [SAssignNew(FleetScroll,SScrollBox).ConsumeMouseWheel(EConsumeMouseWheel::WhenScrollingPossible)
+      +SScrollBox::Slot()[SAssignNew(FleetBox,SVerticalBox)]]]]];
   auto WorkPanel=SNew(SVerticalBox);
   if(Campaign)
   {
@@ -163,19 +180,17 @@ public:
     .Text_Lambda([this](){return FText::FromString(Stage.IsValid() ? FString::Printf(TEXT("랙 보관 완료  %d / %d 팔레트"),Stage->Delivered,Stage->DeliveryGoal) : FString());})];
    WorkPanel->AddSlot().AutoHeight().Padding(0,8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(18)).AutoWrapText(true)
     .Text_Lambda([this](){return FText::FromString(Stage.IsValid() ? FString::Printf(TEXT("사용 가능한 예산  %s원"),*FText::AsNumber(Stage->BudgetWon).ToString()) : FString());})];
-   WorkPanel->AddSlot().AutoHeight().Padding(0,12)[Text(TEXT("들어온 팔레트를 지게차가 랙에 보관하면 목표가 올라갑니다.\n\n건물과 입고 수량은 정해져 있습니다. 예산 안에서 설비를 배치하고 운반 흐름을 개선하세요."),17)];
-   WorkPanel->AddSlot().AutoHeight().Padding(0,8)[Text(AWarehousePlayStage::UnlockDescription(Stage->StageIndex),15,Muted)];
-   WorkPanel->AddSlot().AutoHeight().Padding(0,12)[SNew(STextBlock).Font(WarehouseUIStyle::Font(16)).ColorAndOpacity(WarehouseUIStyle::Warning).AutoWrapText(true)
-    .Text_Lambda([this](){return FText::FromString(Stage.IsValid() ? FriendlyMessage(Stage->Status) : FString());})];
+   WorkPanel->AddSlot().AutoHeight().Padding(0,8)[Text(TEXT("들어온 팔레트를 지게차가 랙에 보관하면 목표가 올라갑니다."),15,Muted)];
   }
   else
   {
-   WorkPanel->AddSlot().AutoHeight()[Text(TEXT("출고할 팔레트"),21,WarehouseUIStyle::Accent)];
-   WorkPanel->AddSlot().AutoHeight().Padding(0,6,0,10)[Text(TEXT("검수 · 랩핑을 마친 팔레트 전체를 출고합니다. 차량 배정과 트럭 준비는 자동으로 처리합니다."),14,Muted)];
-   WorkPanel->AddSlot().FillHeight(1)[SAssignNew(PalletList,SListView<TSharedPtr<FReadyPallet>>).ListItemsSource(&Pallets).SelectionMode(ESelectionMode::None).OnGenerateRow(this,&SWarehouseFocusScreen::PalletRow)];
-   WorkPanel->AddSlot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font(15)).ColorAndOpacity(Muted).AutoWrapText(true)
-    .Text_Lambda([this](){return FText::FromString(Pallets.IsEmpty() ? TEXT("아직 출고할 팔레트가 없습니다. 입고 처리와 랙 운반이 끝나면 여기에 표시됩니다.") : FString());})];
+   WorkPanel->AddSlot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font(21)).ColorAndOpacity(WarehouseUIStyle::Accent)
+    .Text_Lambda([this](){return FText::FromString(bInbound ? TEXT("입고할 팔레트") : TEXT("출고할 팔레트"));})];
+   WorkPanel->AddSlot().AutoHeight().Padding(0,6,0,10)[Text(TEXT("검수·랩핑이 끝난 팔레트 전체를 운반합니다. 작업을 맡을 차량은 자동으로 배정합니다."),14,Muted)];
   }
+  WorkPanel->AddSlot().FillHeight(1)[SAssignNew(PalletList,SListView<TSharedPtr<FReadyPallet>>).ListItemsSource(&Pallets).SelectionMode(ESelectionMode::None).OnGenerateRow(this,&SWarehouseFocusScreen::PalletRow)];
+  WorkPanel->AddSlot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font(15)).ColorAndOpacity(Muted).AutoWrapText(true)
+   .Text_Lambda([this](){return FText::FromString(Pallets.IsEmpty() ? (bInbound ? TEXT("입고 대기 구역에 검수·랩핑을 마친 팔레트가 준비되면 표시됩니다.") : TEXT("출고할 수 있는 보관 팔레트가 없습니다.")) : FString());})];
   Body->AddSlot().FillHeight(1)[SNew(SHorizontalBox)
    +SHorizontalBox::Slot().FillWidth(1.5f).Padding(0,0,12,0)[SNew(SBorder).Padding(16).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(Surface)
     [WorkPanel]]
@@ -190,8 +205,8 @@ public:
   Body->AddSlot().AutoHeight().Padding(0,12,0,0)[SNew(STextBlock).Font(WarehouseUIStyle::Font(17)).ColorAndOpacity(WarehouseUIStyle::Warning).AutoWrapText(true)
    .Text_Lambda([this](){return FText::FromString(Notice);})];
   Body->AddSlot().AutoHeight().Padding(0,5)[SNew(STextBlock).Font(WarehouseUIStyle::Font(15)).ColorAndOpacity(FLinearColor(1,.4f,.35f)).AutoWrapText(true)
-   .Text_Lambda([this](){return FText::FromString(Controller.IsValid() ? Controller->EmergencyAlertText : FString());})];
-  ChildSlot[SNew(SBorder).Padding(24).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.012f,.022f,.035f,.98f))[Body]];
+   .Text_Lambda([this](){return FText::FromString(Controller.IsValid() ? FriendlyMessage(Controller->EmergencyAlertText+TEXT("\n")+Controller->ResourceAlertText) : FString());})];
+  ChildSlot[SNew(SBorder).Padding(24).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.012f,.022f,.035f,1))[Body]];
   Notice=Campaign ? TEXT("설비 배치를 마쳤다면 ‘전체 지게차 운행 시작’을 누르세요. 정해진 입고 물량을 자동으로 운반합니다.") : TEXT("처음에는 ‘전체 지게차 운행 시작’을 누르세요. 입고 운반과 나머지 창고 업무가 자동으로 시작됩니다.");
   Refresh();
  }
@@ -213,15 +228,44 @@ public:
  {
   const FString Command=Args.IsEmpty() ? TEXT("snapshot") : Args[0];
   const int32 Index=Args.Num()>1 ? FCString::Atoi(*Args[1]) : 0;
+  if(Command==TEXT("spawn_test_fleet") && Computer.IsValid())
+  {
+   for(int32 I=0;I<FMath::Clamp(Index,0,8);++I)
+   {
+    const FTransform Pose(FVector(-50000,I*300,1000));
+    auto* Vehicle=Computer->GetWorld()->SpawnActorDeferred<AWarehouseForklift>(AWarehouseForklift::StaticClass(),Pose);
+    if(!Vehicle) continue;
+    Vehicle->bAutoStart=false;Vehicle->bIdleParkingEnabled=false;
+    Vehicle->VehicleName=FString::Printf(TEXT("UI 확인 차량 %02d"),I+3);
+    Vehicle->Tags.Add(TEXT("FocusUITestVehicle"));Vehicle->FinishSpawning(Pose);
+    Vehicle->SetActorTickEnabled(false);Vehicle->SetActorEnableCollision(false);Vehicle->SetActorHiddenInGame(true);
+    TArray<UPrimitiveComponent*> Parts;Vehicle->GetComponents(Parts);
+    for(auto* Part:Parts) Part->SetSimulatePhysics(false);
+   }
+   Computer->RefreshState();
+  }
+  if(Command==TEXT("clear_test_fleet") && Computer.IsValid())
+  {
+   TArray<AActor*> Remove;for(TActorIterator<AWarehouseForklift> It(Computer->GetWorld());It;++It)
+    if(It->ActorHasTag(TEXT("FocusUITestVehicle"))) Remove.Add(*It);
+   for(auto* Actor:Remove) Actor->Destroy();
+   Computer->RefreshState();
+  }
   if(Command==TEXT("start") || Command==TEXT("stop")) SetFleet(Command==TEXT("start"));
+  if(Command==TEXT("stop_work")) StopFleet();
+  if(Command==TEXT("tab")) SelectInbound(Args.Num()<2 || Args[1]!=TEXT("outbound"));
+  if(Command==TEXT("inbound") && Pallets.IsValidIndex(Index)) RequestTransport(Pallets[Index]);
   if(Command==TEXT("outbound") && Pallets.IsValidIndex(Index)) RequestOutbound(Pallets[Index]);
   if(Command==TEXT("vehicle") && DisplayedFleet.IsValidIndex(Index)) SetVehicle(DisplayedFleet[Index],Args.Num()>2 && Args[2]==TEXT("start"));
+  if(Command==TEXT("vehicle_stop_work") && DisplayedFleet.IsValidIndex(Index)) StopVehicle(DisplayedFleet[Index]);
+  if(Command==TEXT("fleet_end") && FleetScroll.IsValid()) FleetScroll->ScrollToEnd();
+  if(Command==TEXT("fleet_top") && FleetScroll.IsValid()) FleetScroll->ScrollToStart();
   if(Command==TEXT("cancel") && TaskItems.IsValidIndex(Index)) CancelTask(TaskItems[Index]);
   if(Command==TEXT("player")) ReturnToPlayer();
   if(Command==TEXT("layout")) OpenLayout();
   Refresh();
   const FString Directory=FPaths::ProjectSavedDir()/TEXT("Testing/FocusUI");IFileManager::Get().MakeDirectory(*Directory,true);
-  const FString Json=FString::Printf(TEXT("{\"focus_screen\":true,\"fleet\":%d,\"pallets\":%d,\"tasks\":%d,\"manual_operations\":%s,\"stage\":%d,\"outbound_visible\":%s}"),DisplayedFleet.Num(),Pallets.Num(),TaskItems.Num(),Director.IsValid() && Director->IsManualOperations() ? TEXT("true") : TEXT("false"),IsCampaign() ? Stage->StageIndex : 0,IsCampaign() ? TEXT("false") : TEXT("true"));
+  const FString Json=FString::Printf(TEXT("{\"focus_screen\":true,\"fleet\":%d,\"pallets\":%d,\"tasks\":%d,\"manual_operations\":%s,\"stage\":%d,\"outbound_visible\":%s,\"inbound_selected\":%s,\"fleet_scroll_offset\":%.2f}"),DisplayedFleet.Num(),Pallets.Num(),TaskItems.Num(),Director.IsValid() && Director->IsManualOperations() ? TEXT("true") : TEXT("false"),IsCampaign() ? Stage->StageIndex : 0,IsCampaign() ? TEXT("false") : TEXT("true"),bInbound ? TEXT("true") : TEXT("false"),FleetScroll.IsValid() ? FleetScroll->GetScrollOffset() : 0.f);
   FFileHelper::SaveStringToFile(Json,*(Directory/TEXT("State.json")),FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
  }
 #endif
@@ -232,15 +276,25 @@ private:
  TWeakObjectPtr<AWarehouseFocusDirector> Director;
  TWeakObjectPtr<AWarehousePlayStage> Stage;
  TSharedPtr<SVerticalBox> FleetBox;
+ TSharedPtr<SScrollBox> FleetScroll;
  TArray<TWeakObjectPtr<AWarehouseForklift>> DisplayedFleet;
  TArray<TSharedPtr<FReadyPallet>> Pallets;
  TSharedPtr<SListView<TSharedPtr<FReadyPallet>>> PalletList;
  TArray<TSharedPtr<FVisibleTask>> TaskItems;
  TSharedPtr<SListView<TSharedPtr<FVisibleTask>>> TaskList;
  int32 LastRefresh=-1;
+ bool bInbound=true;
  FString Counts,Summary,Notice;
 
  bool IsCampaign() const {return Stage.IsValid() && Stage->StageIndex>0;}
+ TSharedRef<SWidget> DirectionTab(bool Inbound)
+ {
+  return SNew(SButton).IsFocusable(false).ContentPadding(FMargin(24,10))
+   .IsEnabled_Lambda([this,Inbound](){return Inbound || !IsCampaign();})
+   .ButtonColorAndOpacity_Lambda([this,Inbound](){return bInbound==Inbound ? FLinearColor(.1f,.65f,.7f) : FLinearColor(.3f,.35f,.4f);})
+   .OnClicked_Lambda([this,Inbound](){SelectInbound(Inbound);return FReply::Handled();})
+   [Text(Inbound ? TEXT("입고") : TEXT("출고"),18)];
+ }
  void Close() {if(Controller.IsValid()) Controller->CloseWarehouseComputer();}
  void ReturnToPlayer() {Close();if(Controller.IsValid() && Controller->IsObserverView()) Controller->ToggleObserverView();}
  void OpenLayout() {Close();if(Controller.IsValid()) Controller->SetLayoutEditing(true);}
@@ -252,6 +306,28 @@ private:
  void SetVehicle(TWeakObjectPtr<AWarehouseForklift> Vehicle,bool Running)
  {
   if(Computer.IsValid() && Vehicle.IsValid()) {Computer->SetVehicleRunning(Vehicle.Get(),Running);Notice=FriendlyMessage(Computer->LastMessage);}
+ }
+ void StopFleet()
+ {
+  if(Director.IsValid()) {Director->StopFleet();Notice=FriendlyMessage(Director->LastMessage);}
+ }
+ void StopVehicle(TWeakObjectPtr<AWarehouseForklift> Vehicle)
+ {
+  if(Director.IsValid() && Vehicle.IsValid()) {Director->StopVehicle(Vehicle.Get());Notice=FriendlyMessage(Director->LastMessage);}
+ }
+ void SelectInbound(bool Inbound)
+ {
+  if(!Inbound && IsCampaign()) {Notice=TEXT("이 스테이지에서는 입고 운반만 지시할 수 있습니다.");return;}
+  bInbound=Inbound;Refresh();
+ }
+ void RequestTransport(const TSharedPtr<FReadyPallet>& Item)
+ {
+  if(!bInbound) {RequestOutbound(Item);return;}
+  if(Director.IsValid() && Item->Pallet.IsValid())
+  {
+   const bool Accepted=Director->RequestInbound(Item->Pallet.Get());Notice=FriendlyMessage(Director->LastMessage);
+   if(Accepted) Item->bReserved=true;
+  }
  }
  void RequestOutbound(const TSharedPtr<FReadyPallet>& Item)
  {
@@ -271,7 +347,7 @@ private:
   return SNew(STableRow<TSharedPtr<FVisibleTask>>,Owner).Padding(FMargin(0,5))
    [SNew(SVerticalBox)
     +SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font(15)).AutoWrapText(true)
-     .Text_Lambda([Item](){const auto& Task=Item->Task;const FString Time=Task.bSubmissionTimeKnown ? FString::Printf(TEXT("%.0f초"),Task.ElapsedSimulationSeconds) : TEXT("시간 미기록");return FText::FromString(FString::Printf(TEXT("%s → %s\n%s · %s · %s"),*LocationLabel(Task.Source),*LocationLabel(Task.Destination),IsValid(Task.Vehicle.Get()) ? *Task.Vehicle->VehicleName : TEXT("배정 대기"),*TaskState(Task),*Time));})]
+     .Text_Lambda([Item](){const auto& Task=Item->Task;const FString Time=Task.bSubmissionTimeKnown ? FString::Printf(TEXT("%.0f초"),Task.ElapsedSimulationSeconds) : TEXT("시간 미기록");const FString State=Task.bDeferred ? FriendlyMessage(Task.State) : TaskState(Task);return FText::FromString(FString::Printf(TEXT("%s → %s\n%s · %s · %s"),*LocationLabel(Task.Source),*LocationLabel(Task.Destination),IsValid(Task.Vehicle.Get()) ? *Task.Vehicle->VehicleName : TEXT("배정 대기"),*State,*Time));})]
     +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right).Padding(0,4)[SNew(SBox).Visibility_Lambda([Item](){return Item->bCanCancel ? EVisibility::Visible : EVisibility::Collapsed;})
      [Action(TEXT("대기 작업 취소"),[this,Item](){CancelTask(Item);},[Item](){return Item->bCanCancel;})]]];
  }
@@ -281,7 +357,10 @@ private:
    [SNew(SHorizontalBox)
     +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,5,10,5)[SNew(STextBlock).Font(WarehouseUIStyle::Font(16)).AutoWrapText(true)
      .Text_Lambda([Item](){return FText::FromString(FString::Printf(TEXT("%s\n%s · %d상자 · %.0f kg%s"),*Item->Product,*LocationLabel(Item->Location),Item->Cartons,Item->MassKg,Item->bReserved ? TEXT(" · 운반 예약됨") : TEXT("")));})]
-    +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[Action(TEXT("출고 운반"),[this,Item](){RequestOutbound(Item);},[Item](){return Item->Pallet.IsValid() && !Item->bReserved;})]];
+    +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).WidthOverride(100)[SNew(SButton).IsFocusable(false).ContentPadding(FMargin(8,10))
+     .IsEnabled_Lambda([Item](){return Item->Pallet.IsValid() && !Item->bReserved;})
+     .OnClicked_Lambda([this,Item](){RequestTransport(Item);return FReply::Handled();})
+     [SNew(STextBlock).Font(WarehouseUIStyle::Font(16)).Text_Lambda([this](){return FText::FromString(bInbound ? TEXT("입고 운반") : TEXT("출고 운반"));})]]]];
  }
  void Refresh()
  {
@@ -291,16 +370,18 @@ private:
   TMap<TWeakObjectPtr<AWarehousePallet>,TSharedPtr<FReadyPallet>> Previous;
   for(const auto& Item:Pallets) Previous.Add(Item->Pallet,Item);
   Pallets.Reset();TMap<AWarehousePallet*,TSharedPtr<FReadyPallet>> Current;
-  if(!IsCampaign()) for(const auto& Cargo:Computer->Inventory)
+  for(const auto& Cargo:Computer->Inventory)
   {
    auto* Pallet=Cargo.Pallet.Get();
    if(!IsValid(Pallet) || Pallet->ReceiptState!=EWarehouseReceiptState::Confirmed || Pallet->ReceivingState!=EWarehouseReceivingState::Accepted || Pallet->bWrapping) continue;
+   const bool AtInbound=Director.IsValid() && Director->IsInboundCandidate(Pallet);
+   if(bInbound!=AtInbound) continue;
    auto* Existing=Current.Find(Pallet);
    if(!Existing)
    {
     auto Item=Previous.FindRef(TWeakObjectPtr<AWarehousePallet>(Pallet));if(!Item.IsValid()) Item=MakeShared<FReadyPallet>();
     Item->Pallet=Pallet;Item->Product=Cargo.Product;Item->Location=Cargo.Location;Item->Cartons=0;Item->MassKg=0;
-    Item->bReserved=Director.IsValid() && Director->IsOutboundPending(Pallet);
+    Item->bReserved=Director.IsValid() && (bInbound ? Director->IsInboundPending(Pallet) : Director->IsOutboundPending(Pallet));
     Pallets.Add(Item);Current.Add(Pallet,Item);Existing=Current.Find(Pallet);
    }
    (*Existing)->Cartons++;(*Existing)->MassKg+=Cargo.MassKg;(*Existing)->bReserved|=Cargo.bReserved;
@@ -309,23 +390,26 @@ private:
   TArray<TWeakObjectPtr<AWarehouseForklift>> Fleet;
   int32 Running=0,Completed=0,Working=0;
   for(AWarehouseForklift* Vehicle:Computer->Fleet) if(IsValid(Vehicle)) {Fleet.Add(Vehicle);if(Vehicle->bPowered) ++Running;}
+  Fleet.Sort([](const auto& A,const auto& B){return A.IsValid() && B.IsValid() ? A->VehicleName<B->VehicleName : A.IsValid();});
   if(Fleet!=DisplayedFleet)
   {
    DisplayedFleet=Fleet;FleetBox->ClearChildren();
    for(const auto Vehicle:Fleet)
    {
-    FleetBox->AddSlot().AutoHeight().Padding(0,3)[SNew(SHorizontalBox)
-     +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,0,10,0)[SNew(STextBlock).Font(WarehouseUIStyle::Font(16)).AutoWrapText(true)
+    FleetBox->AddSlot().AutoHeight().Padding(0,3)[SNew(SVerticalBox)
+     +SVerticalBox::Slot().AutoHeight().Padding(0,0,0,4)[SNew(STextBlock).Font(WarehouseUIStyle::Font(15)).AutoWrapText(true)
       .Text_Lambda([Vehicle](){return FText::FromString(Vehicle.IsValid() ? FString::Printf(TEXT("%s · 배터리 %.0f%% · %s"),*Vehicle->VehicleName,Vehicle->BatteryPercent,*VehicleState(Vehicle.Get())) : FString());})]
-     +SHorizontalBox::Slot().AutoWidth().Padding(3,0)[Action(TEXT("시작 / 재개"),[this,Vehicle](){SetVehicle(Vehicle,true);},[Vehicle](){return Vehicle.IsValid() && !Vehicle->bPowered && !Vehicle->IsRemoteControlled();})]
-     +SHorizontalBox::Slot().AutoWidth().Padding(3,0)[Action(TEXT("일시정지"),[this,Vehicle](){SetVehicle(Vehicle,false);},[Vehicle](){return Vehicle.IsValid() && Vehicle->bPowered && !Vehicle->IsRemoteControlled();})]];
+     +SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)
+      +SHorizontalBox::Slot().AutoWidth().Padding(0,0,4,0)[Action(TEXT("재개"),[this,Vehicle](){SetVehicle(Vehicle,true);},[Vehicle](){return Vehicle.IsValid() && !Vehicle->bPowered && !Vehicle->IsRemoteControlled();})]
+      +SHorizontalBox::Slot().AutoWidth().Padding(0,0,4,0)[Action(TEXT("일시정지"),[this,Vehicle](){SetVehicle(Vehicle,false);},[Vehicle](){return Vehicle.IsValid() && Vehicle->bPowered && !Vehicle->IsRemoteControlled();})]
+      +SHorizontalBox::Slot().AutoWidth()[Action(TEXT("중지"),[this,Vehicle](){StopVehicle(Vehicle);},[Vehicle](){return Vehicle.IsValid() && !Vehicle->IsRemoteControlled();})]]];
    }
    if(Fleet.IsEmpty()) FleetBox->AddSlot().AutoHeight()[Text(TEXT("지게차가 없습니다. 재배치에서 지게차와 충전 / 대기 자리를 추가하세요."),16,WarehouseUIStyle::Warning)];
   }
   TMap<FString,TSharedPtr<FVisibleTask>> PreviousTasks;
   for(const auto& Item:TaskItems) PreviousTasks.Add(Item->Task.JobId,Item);
   TaskItems.Reset();
-  for(const auto& Task:Computer->Tasks) {if(Task.bCompleted) ++Completed;else if(!Task.bCancelled) ++Working;}
+  for(const auto& Task:Computer->Tasks) {if(Task.bCompleted) ++Completed;else if(!Task.bCancelled && !Task.bDeferred) ++Working;}
   const auto* Shipping=AWarehouseShippingSystem::Find(Computer.Get());
   for(int32 I=Computer->Tasks.Num()-1;I>=FMath::Max(0,Computer->Tasks.Num()-8);--I)
   {
@@ -342,7 +426,7 @@ private:
 };
 #if WITH_EDITOR && !UE_BUILD_SHIPPING
 TWeakPtr<SWarehouseFocusScreen> TestScreen;
-FAutoConsoleCommand FocusTestCommand(TEXT("Warehouse.Focus.Test"),TEXT("Editor-only focus screen: snapshot/start/stop/outbound <index>/vehicle <index> start|stop/cancel <index>/player/layout."),
+FAutoConsoleCommand FocusTestCommand(TEXT("Warehouse.Focus.Test"),TEXT("Editor-only focus screen: snapshot/start/stop/stop_work/tab inbound|outbound/inbound|outbound <index>/vehicle <index> start|stop/vehicle_stop_work <index>/fleet_end/fleet_top/cancel <index>/player/layout."),
  FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args){if(auto Screen=TestScreen.Pin()) Screen->Test(Args);}));
 #endif
 }

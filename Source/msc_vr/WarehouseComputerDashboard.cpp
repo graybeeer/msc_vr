@@ -566,7 +566,7 @@ private:
   for (int32 I=Computer->Tasks.Num()-1;I>=0;--I)
   {
    const auto& Task=Computer->Tasks[I];auto& Item=TaskCache.FindOrAdd(Task.JobId);if (!Item) Item=MakeShared<FWarehouseComputerTask>();*Item=Task;TaskItems.Add(Item);CurrentTasks.Add(Task.JobId);
-   if (Task.bCompleted) ++CompletedTaskCount;else if (!Task.bCancelled) ++ActiveTaskCount;
+   if (Task.bCompleted) ++CompletedTaskCount;else if (!Task.bCancelled && !Task.bDeferred) ++ActiveTaskCount;
   }
   for (auto It=TaskCache.CreateIterator();It;++It) if (!CurrentTasks.Contains(It.Key())) It.RemoveCurrent();
   if (!CurrentTasks.Contains(SelectedTaskId)) SelectedTaskId.Reset();

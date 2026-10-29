@@ -30,6 +30,9 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
+| 작업 완전 중지·운반 불가 보류·다음 작업·입출고 탭/차량 스크롤 | `WarehouseForkliftWorkControl.cpp`, `WarehouseForkliftAI`, `WarehouseInboundZone`, `WarehouseShippingSystem`, `WarehouseFocusDirector`, `WarehouseFocusUI` | 중지/물리 정리와 보류 기준은 `AUTONOMY.md`, 조작은 `WAREHOUSE.md`; 검사 `verify_forklift_work_control_pie.py`, `verify_work_control_dispatch_pie.py`, `verify_focus_ui_pie.py` |
+| 랙 팔레트 즉시 집기·바닥/선반 즉시 안착·애니메이션 경로 오판 | `msc_vrCharacter::FindCarryTarget`/`CanPlaceHeldGroup`/`TryPlaceOnSurface`/`TryPlaceOnPallet`, `verify_instant_rack_carry_pie.py` | 플레이어만 최종 실형상·수평 받침을 검사해 즉시 이동. 보행 중 스윕과 놓은 뒤 물리는 유지. 기존 경계 검사는 `verify_arcade_carry_placement_pie.py`, 기준은 `PHYSICS.md` |
+| 바닥 비충돌 충전기 전선·실내 작업자 외부 배치 | `WarehouseChargerWiring`, `WarehouseWorker::RelocateIndoorWorkers`, `relocate_warehouse_workers_outside.py`, `verify_floor_wiring_workers_pie.py` | 전선 공통 기준은 `COLLISION_POLICY.md`, 배선은 `WAREHOUSE_SERVICES_MODEL.md`, 역할/배치는 `WAREHOUSE.md`; 시작·건물 편집 시 현재 외곽·실제 지지와 빈 공간을 확인 |
 | 기본 간소화·NPC 업무 자동 조정·수동 처리 옵션·지게차 전용 화면 | `WarehouseFocusDirector.h/.cpp`, `WarehouseOperationsSettings.h/.cpp`, `WarehouseFocusUI.h/.cpp`, `msc_vrGameMode`, `msc_vrPlayerController` | 기존 검수/배송편/운반 API만 호출. 정책은 `TRUCK_LOGISTICS_DESIGN.md`, 모드 경계는 `PLAY_MODE.md`, 조작은 `WAREHOUSE.md`. 검사 `Scripts/verify_forklift_focus_pie.py`, `verify_focus_ui_pie.py`; 새 공급은 최초 운행 전·편집/실험 중 대기. 설정은 로컬 Config이며 배치 스냅샷에서 업무 조정자는 제외 |
 | 로컬 용량·미사용 팩·생성 캐시 정리와 필수 에셋 재검사 | `Scripts/optimize_project_storage.py`, `Scripts/audit_runtime_assets.py`, `Scripts/verify_runtime_storage.py` | 정리·원본 복원은 `TEAM_ASSETS.md`의 로컬 용량 정리 절; 최신 참조·크기·경로 검증, 원본 ZIP 보관/무결성 검사, Git 추적 파일·사용자 저장·캡처 보존. 게임 사용 에셋 제거는 별도 Git 검토 |
 | 씬 시작·전환·배치 복원·건물 확정 로딩 화면 | `WarehouseLoading.h/.cpp`, `Scripts/verify_warehouse_loading_pie.py` | `WarehouseBuildingLayout::ApplySettings`, `WarehouseExperimentSubsystem` 복원 단계, `msc_vr.Build.cs`; 사용·표시 범위는 `WAREHOUSE.md`, 실제 건물 성공/실패 검사는 `verify_building_services_pie.py -BuildingLoadingChecks` |
@@ -250,6 +253,7 @@ msc_vr/
     refine_agv_original_proportions.py
     refine_cargo_elevator_call_stands.py
     refine_warehouse_services_layout.py
+    relocate_warehouse_workers_outside.py
     render_cargo_elevator.py
     render_warehouse_layout_icons.py
     restore_front_wheel_mounts.py
@@ -296,6 +300,7 @@ msc_vr/
     verify_fleet_layout_stress_pie.py
     verify_fleet_traffic_pie.py
     verify_fleet_workflow_pie.py
+    verify_floor_wiring_workers_pie.py
     verify_focus_ui_pie.py
     verify_forklift_autonomy.py
     verify_forklift_autonomy_pie.py
@@ -303,11 +308,13 @@ msc_vr/
     verify_forklift_recovery_pie.py
     verify_forklift_sensors_pie.py
     verify_forklift_training.py
+    verify_forklift_work_control_pie.py
     verify_heavy_test_cargo_pie.py
     verify_human_elevator_pie.py
     verify_human_landing_pie.py
     verify_inbound_area_pie.py
     verify_inbound_wrap_pie.py
+    verify_instant_rack_carry_pie.py
     verify_interaction_movement_pie.py
     verify_kinematic_human_elevator_pie.py
     verify_large_cargo_pie.py
@@ -362,6 +369,7 @@ msc_vr/
     verify_warehouse_strength.py
     verify_warehouse_strength_pie.py
     verify_warehouse_workers.py
+    verify_work_control_dispatch_pie.py
     verify_wrapping_white_pie.py
     warehouse_staging_layout.py
     wrap_orange_agv_labels.py
@@ -431,6 +439,7 @@ msc_vr/
       WarehouseForkliftPhysics.cpp
       WarehouseForkliftRecovery.cpp
       WarehouseForkliftRemote.cpp
+      WarehouseForkliftWorkControl.cpp
       WarehouseInboundZone.cpp
       WarehouseInboundZone.h
       WarehouseLayoutEditor.cpp

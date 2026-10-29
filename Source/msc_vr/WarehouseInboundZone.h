@@ -43,6 +43,8 @@ public:
  UFUNCTION(BlueprintCallable, Category="Inbound|Inspection") bool SetExpectedManifest(AWarehousePallet* Pallet,int32 CartonCount,const TMap<FString,int32>& CargoByKind);
  UFUNCTION(BlueprintCallable, Category="Inbound") void ScanInbound();
  UFUNCTION(BlueprintPure, Category="Inbound") bool ContainsPallet(const AWarehousePallet* Pallet) const;
+ UFUNCTION(BlueprintCallable, Category="Inbound") bool RequestTransport(AWarehousePallet* Pallet);
+ UFUNCTION(BlueprintPure, Category="Inbound") bool IsTransportRequested(AWarehousePallet* Pallet) const;
  void RecordInboundConfirmed(AWarehousePallet* Pallet);
  // Repeat experiments supply the orders; receiving inspection and wrapping still run normally.
  bool bExternalDispatchOnly=false;
@@ -56,6 +58,9 @@ private:
   FTransform Pose;
  };
  TArray<FReservation> Reservations;
+ TArray<TWeakObjectPtr<AWarehousePallet>> RequestedPallets;
+ TSet<TWeakObjectPtr<AWarehousePallet>> StoppedPallets;
+ TMap<TWeakObjectPtr<AWarehousePallet>,double> RetryAfter;
  struct FStableLoad
  {
   double Since=0;

@@ -7,6 +7,7 @@
 #include "WarehousePlayMode.h"
 #include "WarehouseOperationsSettings.h"
 #include "WarehouseForklift.h"
+#include "WarehouseWorker.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -34,6 +35,7 @@ void Amsc_vrGameMode::StartPlay()
 	// All bodies have completed BeginPlay, but no simulation tick has run yet.
 	// Saved layouts own their receipt state, including pending and torn units.
 	if (!Experiments || !Experiments->bLoading) AWarehousePallet::InitializeRackWrapping(GetWorld());
+	if (!Experiments || (!Experiments->bLoading && !Experiments->bBatchRunning)) AWarehouseWorker::RelocateIndoorWorkers(this);
 	// All gameplay modes use the simplified controls. The director delegates
 	// campaign arrivals to the stage's finite order generator. The main menu and
 	// test fixture worlds do not create office work. Restored layouts wait safely.

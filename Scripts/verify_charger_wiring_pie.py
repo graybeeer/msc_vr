@@ -29,7 +29,7 @@ for folder in ('__ExternalActors__', '__ExternalObjects__'):
     originals.extend((ROOT/'Content'/folder/'FirstPerson/Lvl_FirstPerson').rglob('*.uasset'))
 hashes = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in originals}
 report = dict(passed=False, checks=[], screenshots=[], os_input_tested=False,
-              scope='Unsaved Entry; production charger/models, physical supply conduit, native layout move/rotate/add/delete/cancel and building resize',
+              scope='Unsaved Entry; production charger/models, floor-level visual supply cable, native layout move/rotate/add/delete/cancel and building resize',
               limits=['No electrical circuit/load simulation', 'No full warehouse throughput benchmark'])
 if SAVED_MAP:
     report['scope'] = 'Actual default map PIE; existing chargers/cabinets and production service obstacles; no map save or transport-order test'
@@ -96,25 +96,24 @@ def connection(actor, expected=None):
                   if math.hypot(b.x-a.x, b.y-a.y) > 20]
     assert horizontal, ('No supply route', points)
     floor_z = math.floor((actor.get_actor_location().z+1)/400)*400
-    assert all(min(a.z, b.z) >= floor_z+275 for a, b in horizontal), ('Cable crosses driving height', [vec(p) for p in points])
+    assert all(abs(a.z-(floor_z+2.1)) < .2 and abs(b.z-(floor_z+2.1)) < .2 for a, b in horizontal), ('Cable floats above floor', [vec(p) for p in points])
     return target, points
 
 
-def physical_cables():
+def visual_cables():
     cables = cable_actors()
     assert cables, 'No generated supply geometry'
     count = 0
     for actor in cables:
-        assert actor.actor_has_tag('LayoutFixed') and actor.actor_has_tag('WarehouseMapStructure')
+        assert actor.actor_has_tag('LayoutFixed') and not actor.actor_has_tag('WarehouseMapStructure')
         assert not actor.is_actor_tick_enabled(), 'Cable must not tick'
         parts = actor.get_components_by_class(unreal.PrimitiveComponent)
         for part in parts:
-            if part.get_collision_enabled() == unreal.CollisionEnabled.NO_COLLISION:
-                continue
-            assert unreal.WarehouseDamageSystem.is_physical_contact(part), ('Cable does not share physical policy', part)
+            assert part.get_collision_enabled() == unreal.CollisionEnabled.NO_COLLISION
+            assert not unreal.WarehouseDamageSystem.is_physical_contact(part), ('Visual cable participates in physical policy', part)
             assert not part.is_simulating_physics(), 'Supply conduit must be fixed'
             count += 1
-    assert count, 'Supply cables have no physical geometry'
+    assert count, 'Supply cables have no visual geometry'
     return len(cables), count
 
 
@@ -215,15 +214,15 @@ def scenario_body():
     wall_runs = [(a, b) for a, b in zip(points, points[1:])
                  if abs(a.y-2000) < 35 and abs(b.y-2000) < 35 and abs(a.x-b.x) > 60]
     assert wall_runs, ('Cable did not use the nearby north wall', [vec(p) for p in points])
-    cables, parts = physical_cables()
-    check('nearest_panel_high_wall_route_and_physical_policy', panel=left.get_actor_label(),
-          route=[vec(p) for p in points], cable_actors=cables, physical_parts=parts)
+    cables, parts = visual_cables()
+    check('nearest_panel_floor_route_and_noncollision_policy', panel=left.get_actor_label(),
+          route=[vec(p) for p in points], cable_actors=cables, visual_parts=parts)
     revision = wiring.get_editor_property('rebuild_count')
     yield from frames(30)
     assert wiring.get_editor_property('rebuild_count') == revision, 'Idle frames rebuilt cable routes'
     check('idle_frames_do_not_regenerate_routes', frames=30, rebuild_count=revision)
 
-    phase = 'wall_height_fallback'
+    phase = 'overhead_obstruction'
     named['WallHeightObstruction'].set_actor_enable_collision(True)
     for side in ('E', 'W'):
         named['WH_Wall_'+side].set_actor_enable_collision(False)
@@ -235,7 +234,7 @@ def scenario_body():
     for side in ('E', 'W'):
         named['WH_Wall_'+side].set_actor_enable_collision(True)
     refresh()
-    check('blocked_standard_height_tries_other_wall_heights_before_interior_span', route=[vec(p) for p in fallback])
+    check('overhead_obstacles_do_not_raise_the_floor_cable', route=[vec(p) for p in fallback])
 
     phase = 'layout_move_cancel_rotation'
     pc.set_observer_floor(0)
@@ -312,7 +311,7 @@ def scenario_body():
     refresh()
     assert not station.get_editor_property('supply_cabinet') and not route(station)
     assert station.get_editor_property('supply_cable_status')
-    assert not cable_actors(), 'Missing panels leave stale physical supply cable'
+    assert not cable_actors(), 'Missing panels leave stale supply cable'
     assert station.get_editor_property('mains_power') == mains, 'Visual routing altered existing charge availability'
     for side in ('Left', 'Right'):
         for key in ('DistributionCabinet', 'DistributionDoor'):
@@ -360,7 +359,7 @@ def scenario_body():
     source_centre = unreal.SystemLibrary.get_component_bounds(next(c for c in station.get_components_by_class(unreal.StaticMeshComponent) if c.get_name() == 'Cabinet'))[0]
     expected = min(panels, key=lambda a: distance(unreal.SystemLibrary.get_component_bounds(a.static_mesh_component)[0], source_centre))
     connection(station, expected)
-    physical_cables()
+    visual_cables()
     for source in (left, right):
         assert source.get_editor_property('hidden'), 'Old panel remains active after replacement shell'
     previous_count = len(cable_actors())
@@ -408,9 +407,9 @@ def saved_map_scenario():
         _, points = connection(charger, nearest)
         assert bounds(charger) == source_bounds[charger.get_actor_label()], 'Derived wires altered real charger dimensions'
         rows.append(dict(charger=charger.get_actor_label(), panel=nearest.get_actor_label(), route=[vec(p) for p in points]))
-    cable_count, part_count = physical_cables()
+    cable_count, part_count = visual_cables()
     check('actual_map_begin_play_connects_existing_chargers_to_nearest_panels',
-          chargers=len(stations), panels=len(candidates), cables=cable_count, physical_parts=part_count, connections=rows)
+          chargers=len(stations), panels=len(candidates), cables=cable_count, visual_parts=part_count, connections=rows)
     wiring = next(o for o in unreal.ObjectIterator(unreal.WarehouseChargerWiring) if o.get_outer() == game)
     previous = wiring.get_editor_property('rebuild_count')
     yield from frames(30)

@@ -8,6 +8,7 @@ class AWarehousePallet;
 class AWarehouseShippingSystem;
 class AWarehouseLogisticsTruck;
 class AWarehouseDamageSystem;
+class AWarehouseForklift;
 
 /** Background office/NPC coordination. The existing forklift and shipping systems execute the work. */
 UCLASS()
@@ -24,6 +25,11 @@ public:
  UFUNCTION(BlueprintCallable,Category="Operations") void SetManualOperations(bool bManual,bool bPersist=true);
  UFUNCTION(BlueprintPure,Category="Operations") bool IsManualOperations() const { return bManualOperations; }
  UFUNCTION(BlueprintCallable,Category="Operations") bool SetFleetRunning(bool bRunning);
+ UFUNCTION(BlueprintCallable,Category="Operations") bool StopVehicle(AWarehouseForklift* Vehicle);
+ UFUNCTION(BlueprintCallable,Category="Operations") bool StopFleet();
+ UFUNCTION(BlueprintCallable,Category="Operations") bool RequestInbound(AWarehousePallet* Pallet);
+ UFUNCTION(BlueprintPure,Category="Operations") bool IsInboundPending(AWarehousePallet* Pallet) const;
+ UFUNCTION(BlueprintPure,Category="Operations") bool IsInboundCandidate(AWarehousePallet* Pallet) const;
  UFUNCTION(BlueprintCallable,Category="Operations") bool RequestOutbound(AWarehousePallet* Pallet);
  UFUNCTION(BlueprintPure,Category="Operations") bool IsOutboundPending(AWarehousePallet* Pallet) const;
  UFUNCTION(BlueprintPure,Category="Operations") FString GetSummary() const;
@@ -40,6 +46,7 @@ private:
  FString DispatchStatus;
  struct FPendingOrder { TWeakObjectPtr<AWarehousePallet> Pallet; bool bUserRequested=false; };
  TArray<FPendingOrder> PendingOrders;
+ TSet<TWeakObjectPtr<AWarehousePallet>> StoppedOutboundPallets;
  TMap<TWeakObjectPtr<AWarehousePallet>,double> StoredSince;
  TMap<TWeakObjectPtr<AWarehouseLogisticsTruck>,double> ReturnAt;
  TWeakObjectPtr<AWarehouseLogisticsTruck> InboundTruck;

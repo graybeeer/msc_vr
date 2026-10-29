@@ -30,6 +30,8 @@ public:
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Worker") FText RoleName;
  UFUNCTION(BlueprintCallable, Category="Worker") bool CopyPlayerAppearance(TSubclassOf<ACharacter> PlayerClass);
  UFUNCTION(BlueprintPure, Category="Worker") bool HasStandingClearance() const;
+ // Keep role presenters outside the test building without removing their real collisions.
+ UFUNCTION(BlueprintCallable,Category="Worker",meta=(WorldContext="Context")) static int32 RelocateIndoorWorkers(const UObject* Context);
  virtual void BeginPlay() override;
  virtual void Tick(float DeltaSeconds) override;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Worker|Physics") float HumanMassKg=80.f;

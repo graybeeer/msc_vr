@@ -130,6 +130,49 @@ bool AWarehouseFocusDirector::FleetRunning() const
  return false;
 }
 
+bool AWarehouseFocusDirector::IsInboundCandidate(AWarehousePallet* Pallet) const
+{
+ if (!IsValid(Pallet) || Pallet->ActorHasTag(TEXT("LogisticsInTransit")) || Pallet->ReceiptState!=EWarehouseReceiptState::Confirmed ||
+     Pallet->ReceivingState!=EWarehouseReceivingState::Accepted || Pallet->bWrapping) return false;
+ for (TActorIterator<AWarehouseInboundZone> It(GetWorld());It;++It) if (It->ContainsPallet(Pallet)) return true;
+ return false;
+}
+bool AWarehouseFocusDirector::IsInboundPending(AWarehousePallet* Pallet) const
+{
+ for (TActorIterator<AWarehouseInboundZone> It(GetWorld());It;++It) if (It->IsTransportRequested(Pallet)) return true;
+ return false;
+}
+bool AWarehouseFocusDirector::RequestInbound(AWarehousePallet* Pallet)
+{
+ FString Reason;
+ if (!HasAuthority() || bManualOperations || Paused(Reason)) {LastMessage=Reason.IsEmpty() ? TEXT("간소화 화면에서 요청하세요.") : Reason;return false;}
+ if (!IsInboundCandidate(Pallet)) {LastMessage=TEXT("입고 구역에서 검수·랩핑이 완료된 팔레트를 선택하세요.");return false;}
+ for (TActorIterator<AWarehouseInboundZone> It(GetWorld());It;++It) if (It->ContainsPallet(Pallet))
+ { const bool Accepted=It->RequestTransport(Pallet);if(Accepted) StoppedOutboundPallets.Remove(Pallet);LastMessage=It->Status;return Accepted; }
+ return false;
+}
+bool AWarehouseFocusDirector::StopVehicle(AWarehouseForklift* Vehicle)
+{
+ if (!HasAuthority() || !IsValid(Vehicle) || Vehicle->GetWorld()!=GetWorld()) return false;
+ TArray<AWarehousePallet*> Pallets;
+ if (IsValid(Vehicle->ActiveJob.Pallet)) Pallets.Add(Vehicle->ActiveJob.Pallet);
+ for (const auto& Job:Vehicle->PendingJobs) if (IsValid(Job.Pallet)) Pallets.AddUnique(Job.Pallet);
+ if (!Vehicle->StopCurrentWork()) {LastMessage=Vehicle->WorkStopStatus.IsEmpty() ? Vehicle->Status : Vehicle->WorkStopStatus;return false;}
+ for (auto* Pallet:Pallets) StoppedOutboundPallets.Add(Pallet);
+ LastMessage=Vehicle->VehicleName+TEXT(" · ")+Vehicle->WorkStopStatus;
+ return true;
+}
+bool AWarehouseFocusDirector::StopFleet()
+{
+ FString Reason;if (Paused(Reason)) {LastMessage=Reason;return false;}
+ for (const auto& Order:PendingOrders) StoppedOutboundPallets.Add(Order.Pallet);
+ PendingOrders.Reset();PendingOutboundCount=0;
+ int32 Stopped=0,Waiting=0;for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) if (StopVehicle(*It)) {++Stopped;if(It->bWorkStopRequested) ++Waiting;}
+ if (auto* Shipping=Existing<AWarehouseShippingSystem>(this)) Shipping->SetContinuousOperations(false);
+ LastMessage=FString::Printf(TEXT("지게차 %d대 중지 요청 · 승강기 하차 후 중지 %d대 · 취소된 지시는 재개하지 않습니다."),Stopped,Waiting);
+ return Stopped>0;
+}
+
 bool AWarehouseFocusDirector::Eligible(AWarehousePallet* Pallet,AWarehouseShippingSystem* Shipping,AWarehouseDamageSystem* Strength,FString& Reason) const
 {
  auto Fail=[&](const TCHAR* Text){Reason=Text;return false;};
@@ -166,7 +209,7 @@ bool AWarehouseFocusDirector::RequestOutbound(AWarehousePallet* Pallet)
  if (PendingOrders.Num()>=SupplyLimit) {LastMessage=TEXT("출고 대기 목록이 가득 찼습니다. 진행 중인 운반을 기다려 주세요.");return false;}
  const int32 FirstAutomatic=PendingOrders.IndexOfByPredicate([](const auto& O){return !O.bUserRequested;});
  FPendingOrder Order;Order.Pallet=Pallet;Order.bUserRequested=true;
- PendingOrders.Insert(Order,FirstAutomatic==INDEX_NONE ? PendingOrders.Num() : FirstAutomatic);
+ PendingOrders.Insert(Order,FirstAutomatic==INDEX_NONE ? PendingOrders.Num() : FirstAutomatic);StoppedOutboundPallets.Remove(Pallet);
  PendingOutboundCount=PendingOrders.Num();
  if (FleetRunning()) DispatchPending(Shipping,Strength);
  else DispatchStatus=TEXT("지게차 운행 시작 대기");
@@ -266,7 +309,7 @@ void AWarehouseFocusDirector::UpdateOutbound(AWarehouseShippingSystem* Shipping,
   if (Rack.Failure==EWarehouseFailure::Rack && !Rack.bFailed && !Rack.Members.IsEmpty() && IsValid(Rack.Members[0]))
    for (auto* A:Strength->GetSupportedActors(Rack.Members[0],false)) if (auto* P=Cast<AWarehousePallet>(A))
    {
-    FString Reason;if (Eligible(P,Shipping,Strength,Reason)) Stock.Add(P);
+    FString Reason;if (!StoppedOutboundPallets.Contains(P) && Eligible(P,Shipping,Strength,Reason)) Stock.Add(P);
    }
  for (auto It=StoredSince.CreateIterator();It;++It) if (!Stock.Contains(It.Key().Get())) It.RemoveCurrent();
  for (auto* P:Stock) if (!StoredSince.Contains(P)) StoredSince.Add(P,Now);

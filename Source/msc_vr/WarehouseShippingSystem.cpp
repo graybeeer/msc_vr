@@ -110,7 +110,7 @@ void AWarehouseShippingSystem::Tick(float Dt) { Super::Tick(Dt);RefreshShipping(
 FString AWarehouseShippingSystem::GetPalletShipment(AWarehousePallet* P) const
 {
  for (const auto& S:Shipments) if (!Finished(S))
-  for (const auto& L:S.Lines) if (L.Pallet==P) return S.ShipmentId;
+  for (const auto& L:S.Lines) if (L.Pallet==P && !L.bOperatorStopped) return S.ShipmentId;
  return FString();
 }
 FString AWarehouseShippingSystem::LocatePallet(AWarehousePallet* P) const
@@ -326,8 +326,20 @@ void AWarehouseShippingSystem::Advance(FWarehouseShipment& S,const FWarehouseShi
   if (!L.bDeliveryReported && !L.JobId.IsEmpty())
   {
    const bool Exists=IsValid(L.Vehicle) && (L.Vehicle->ActiveJob.JobId==L.JobId || L.Vehicle->PendingJobs.ContainsByPredicate([&](const auto& Job) { return Job.JobId==L.JobId; }));
-   if (!Exists) { L.JobId.Reset();L.Vehicle=nullptr;L.Status=TEXT("운반 지시 유실 · 가용 차량에 재배정 대기"); }
+   if (!Exists)
+   {
+    const int32 ReportIndex=IsValid(L.Vehicle) ? L.Vehicle->JobReports.FindLastByPredicate([&](const auto& R){return R.JobId==L.JobId && (R.Result==TEXT("CANCELLED") || R.Result==TEXT("DEFERRED"));}) : INDEX_NONE;
+    if (ReportIndex!=INDEX_NONE)
+    {
+     const auto& Report=L.Vehicle->JobReports[ReportIndex];
+     L.bOperatorStopped=Report.Detail.Contains(TEXT("[USER_STOP]"));
+     if (Report.Result==TEXT("DEFERRED")) L.RetryDispatchAt=Now+30.;
+     L.Status=L.bOperatorStopped ? TEXT("사용자가 작업을 중지했습니다.") : TEXT("운반 불가 · 다른 작업을 먼저 처리하고 30초 후 다시 확인합니다.");
+    }
+    L.JobId.Reset();L.Vehicle=nullptr;
+   }
   }
+  if (L.bOperatorStopped) {All=false;S.WaitReason=L.Status;continue;}
   const bool Reported=L.bDeliveryReported;
   FString Reason;
   const bool Ready=Reported && HasHandover(L,Z,Reason);
@@ -350,7 +362,7 @@ void AWarehouseShippingSystem::Advance(FWarehouseShipment& S,const FWarehouseShi
   {
    All=false;
    if (!Reason.IsEmpty()) S.WaitReason=Reason;
-   if (L.JobId.IsEmpty() && DispatchDue)
+   if (L.JobId.IsEmpty() && DispatchDue && Now>=L.RetryDispatchAt)
    {
     bool FreeVehicle=false;
     for (TActorIterator<AWarehouseForklift> V(GetWorld());V;++V)
@@ -363,10 +375,15 @@ void AWarehouseShippingSystem::Advance(FWarehouseShipment& S,const FWarehouseShi
     auto* Cargo=L.Cargo.IsEmpty() ? nullptr : Cast<AWarehouseCargo>(L.Cargo[0]);
     if (Dest==INDEX_NONE || !Cargo) { S.WaitReason=TEXT("출고 구역의 운반 목적지 또는 화물이 유효하지 않습니다.");continue; }
     if (!Console->IssueShipmentOutbound(Cargo,nullptr,Dest,S.ShipmentId)) { S.WaitReason=Console->LastMessage;continue; }
-    for (const auto& T:Console->Tasks) if (T.Pallet==L.Pallet && !T.bCompleted && !T.bCancelled)
+    for (const auto& T:Console->Tasks) if (T.Pallet==L.Pallet && !T.bCompleted && !T.bCancelled && !T.bDeferred)
     { L.JobId=T.JobId;L.Vehicle=T.Vehicle;break; }
    }
   }
+ }
+ if (!S.Lines.IsEmpty() && !S.Lines.ContainsByPredicate([](const auto& L){return !L.bOperatorStopped;}))
+ {
+  S.State=EWarehouseShipmentState::Cancelled;S.Status=TEXT("사용자 중지 · 배송편 취소");S.FinishedAt=Now;
+  S.ElapsedSeconds=Now-S.StartedAt;return;
  }
  S.bCargoReady=All;
  const bool Transferred=S.Lines.ContainsByPredicate([&](const auto& L) { return S.Direction==EWarehouseShipmentDirection::Outbound ? L.bLoaded : L.bArrived; });

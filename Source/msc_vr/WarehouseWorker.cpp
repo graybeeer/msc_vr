@@ -4,6 +4,9 @@
 #include "WarehousePhysics.h"
 #include "WarehouseDamageSystem.h"
 #include "WarehouseLogisticsTruck.h"
+#include "WarehouseBuildingLayout.h"
+#include "WarehouseLayoutEditor.h"
+#include "WarehousePlayMode.h"
 #include "msc_vrPlayerController.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Components/CapsuleComponent.h"
@@ -225,6 +228,68 @@ bool AWarehouseWorker::HasStandingClearance() const
  return !GetWorld()->OverlapBlockingTestByProfile(GetActorLocation(),GetActorQuat(),TEXT("Pawn"),
   FCollisionShape::MakeCapsule(GetCapsuleComponent()->GetScaledCapsuleRadius()+5,
    GetCapsuleComponent()->GetScaledCapsuleHalfHeight()-2),Params);
+}
+
+int32 AWarehouseWorker::RelocateIndoorWorkers(const UObject* Context)
+{
+ UWorld* World=Context ? Context->GetWorld() : nullptr;if (!World) return 0;
+ FBox Building(ForceInit);
+ if (const auto* Stage=AWarehousePlayStage::Find(Context);Stage && Stage->StageIndex>0)
+  Building=FBox(FVector(-Stage->HalfSizeCm.X,-Stage->HalfSizeCm.Y,0),FVector(Stage->HalfSizeCm.X,Stage->HalfSizeCm.Y,Stage->CeilingCm));
+ else for (TActorIterator<AWarehouseBuildingLayout> It(World);It;++It) {Building=It->GetFootprint();break;}
+ if (!Building.IsValid) for (TActorIterator<AActor> It(World);It;++It)
+  if (It->ActorHasTag(TEXT("ObserverFadeWall")) && It->GetActorEnableCollision()) Building+=It->GetComponentsBoundingBox(true);
+ if (!Building.IsValid) return 0;
+ TArray<AWarehouseWorker*> Workers;TArray<FVector> Occupied;
+ for (TActorIterator<AWarehouseWorker> It(World);It;++It) Workers.Add(*It);
+ Workers.Sort([](const AWarehouseWorker& A,const AWarehouseWorker& B){return A.GetName()<B.GetName();});
+ // Role presenters no longer belong to the physical staging-area groups.
+ // Clear references even when an earlier saved pass already placed them outside.
+ for (auto* Worker:Workers)
+ {
+  Worker->Tags.RemoveAll([](FName Tag){const FString Name=Tag.ToString();return Name.StartsWith(TEXT("LayoutGroup:")) || Name==TEXT("LayoutType:Zone");});
+  Worker->Tags.AddUnique(TEXT("LayoutType:Other"));
+  for (TActorIterator<AWarehouseLayoutEditor> It(World);It;++It) for (auto& Zone:It->Zones) Zone.Members.Remove(Worker);
+ }
+ const auto Inside=[&](const FVector& Point){return Point.X>Building.Min.X-45 && Point.X<Building.Max.X+45 && Point.Y>Building.Min.Y-45 && Point.Y<Building.Max.Y+45;};
+ for (auto* Worker:Workers) if (!Inside(Worker->GetActorLocation())) Occupied.Add(Worker->GetActorLocation());
+ int32 Moved=0;
+ for (auto* Worker:Workers)
+ {
+  if (!Inside(Worker->GetActorLocation()) || Worker->IsRagdoll()) continue;
+  auto* Capsule=Worker->GetCapsuleComponent();const float Half=Capsule->GetScaledCapsuleHalfHeight(),Radius=Capsule->GetScaledCapsuleRadius();
+  FCollisionQueryParams Query(SCENE_QUERY_STAT(ExteriorWorker),true,Worker);
+  FVector Destination=FVector::ZeroVector;bool Found=false;
+  // Use perimeter ground and clear standing space, starting near the corners
+  // so the central truck doors and approach lanes remain available.
+  for (int32 Side=0;Side<4 && !Found;++Side) for (int32 Row=0;Row<3 && !Found;++Row) for (int32 Slot=0;Slot<24 && !Found;++Slot)
+  {
+   const double Gap=180.+Row*140.;FVector Point;
+   if (Side<2)
+    Point=FVector(Side==0 ? Building.Min.X-Gap : Building.Max.X+Gap,Building.Min.Y+140.+Slot*140.,0);
+   else Point=FVector(Building.Min.X+140.+Slot*140.,Side==2 ? Building.Min.Y-Gap : Building.Max.Y+Gap,0);
+   if ((Side<2 && Point.Y>Building.Max.Y-140.) || (Side>=2 && Point.X>Building.Max.X-140.)) continue;
+   if (Occupied.ContainsByPredicate([&](const FVector& Other){return FVector::DistSquared2D(Point,Other)<FMath::Square(110.);})) continue;
+   TArray<FHitResult> Floors;
+   World->LineTraceMultiByObjectType(Floors,Point+FVector(0,0,150),Point-FVector(0,0,300),FCollisionObjectQueryParams::AllObjects,Query);
+   for (const auto& Floor:Floors)
+   {
+    auto* Part=Floor.GetComponent();
+    if (Floor.ImpactNormal.Z<.95 || !WarehousePhysics::IsPhysicalContact(Part) || Part->IsSimulatingPhysics() || Floor.ImpactPoint.Z>Building.Min.Z+80.) continue;
+    Point.Z=Floor.ImpactPoint.Z+Half+.8;
+    if (World->OverlapBlockingTestByChannel(Point,FQuat::Identity,ECC_Pawn,FCollisionShape::MakeCapsule(Radius+4,Half-1),Query)) continue;
+    Destination=Point;Found=true;break;
+   }
+  }
+  if (!Found) {UE_LOG(LogTemp,Warning,TEXT("WORKER_EXTERIOR_NO_CLEAR_GROUND %s"),*Worker->GetName());continue;}
+  Worker->SetActorLocationAndRotation(Destination,FRotator(0,90,0),false,nullptr,ETeleportType::TeleportPhysics);
+  if (Capsule->IsSimulatingPhysics()) {Capsule->SetPhysicsLinearVelocity(FVector::ZeroVector);Capsule->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);}
+  Worker->Tags.RemoveAll([](FName Tag){return Tag.ToString().StartsWith(TEXT("WarehouseFloor"));});
+  Worker->Tags.AddUnique(TEXT("WarehouseFloor0"));Worker->Tags.AddUnique(TEXT("LayoutType:Other"));
+  Occupied.Add(Destination);++Moved;
+  UE_LOG(LogTemp,Log,TEXT("WORKER_RELOCATED_OUTSIDE %s %s"),*Worker->GetName(),*Destination.ToString());
+ }
+ return Moved;
 }
 
 void AWarehouseWorker::Tick(float DeltaSeconds)

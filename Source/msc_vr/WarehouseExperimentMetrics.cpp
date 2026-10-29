@@ -265,6 +265,7 @@ void FWarehouseExperimentMetrics::RecordReport(const FWarehouseJobReport& Report
  auto& Job=Jobs[*Index];if (Job.IsTerminal()) return;
  if (Report.Result==TEXT("COMPLETED")) CompleteJob(*Index,At,TEXT("completed"),Report.Detail);
  else if (Report.Result==TEXT("CANCELLED")) CompleteJob(*Index,At,TEXT("cancelled"),Report.Detail);
+ else if (Report.Result==TEXT("DEFERRED")) CompleteJob(*Index,At,TEXT("failed"),Report.Detail);
  else if (Report.Result==TEXT("ACCEPTED"))
  { if (Job.StartedSeconds<0) Job.StartedSeconds=At;Job.Result=TEXT("active"); }
  else if (Report.Result==TEXT("FAULT"))

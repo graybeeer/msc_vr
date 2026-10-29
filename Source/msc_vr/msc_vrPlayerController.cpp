@@ -1027,14 +1027,14 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
      OperatorCharacter->IsPlacingCargo() ? TEXT("팔레트 위에 내려놓는 중 · E : 취소") : TEXT("E : 가까운 팔레트 위에 쌓기 / 안전한 곳에 내려놓기")));
   if (!bObserverView)
    if (Cast<AWarehouseComputer>(OperatorCharacter->GetInteractionTarget()))
-    return FText::FromString(AWarehouseFocusDirector::IsActive(this) ? TEXT("E : 지게차 명령\n운행 시작 · 정지 · 팔레트 출고 운반") : TEXT("E : 관제 컴퓨터 접속\n실시간 재고 · 운반 작업 · 지게차 관리"));
+    return FText::FromString(AWarehouseFocusDirector::IsActive(this) ? TEXT("E : 지게차 명령\n운행 관리 · 팔레트 입고 / 출고 운반") : TEXT("E : 관제 컴퓨터 접속\n실시간 재고 · 운반 작업 · 지게차 관리"));
   if (!bObserverView)
    if (auto* Lift=Cast<AWarehousePalletLift>(OperatorCharacter->GetInteractionTarget()))
     return Lift->GetInteractionText(FMath::Clamp(FMath::FloorToInt((OperatorCharacter->GetActorLocation().Z-Lift->GetActorLocation().Z)/400.f),0,Lift->FloorCount-1));
   if (!bObserverView)
    if (auto* Vehicle=Cast<AWarehouseForklift>(OperatorCharacter->GetInteractionTarget()))
     return FText::FromString(FString::Printf(TEXT("E : %s  |  G : 스마트폰 원격 조작\n%s\n속도 %.2f m/s · 배터리 %.0f%% · 적재 %.0f / %.0f kg"),
-     Vehicle->bPowered ? TEXT("자율 운행 정지") : TEXT("자율 운행 시작 / 재개"),
+     Vehicle->bPowered ? TEXT("자율 운행 일시정지") : TEXT("자율 운행 시작 / 재개"),
      *Vehicle->Status,FMath::Abs(Vehicle->CurrentSpeedCm)*.01f,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
  }
  const FVector Eye=PlayerCameraManager->GetCameraLocation();
@@ -1100,6 +1100,8 @@ void Amsc_vrPlayerController::UpdateEmergencyAlerts(float Dt)
   TArray<FString> Resources;
   for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
    if (!It->LastErrorMessage.IsEmpty()) Resources.Add(It->VehicleName+TEXT(": ")+It->LastErrorMessage);
+  for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It)
+   if (It->LastWorkAlertUntil>=GetWorld()->GetTimeSeconds() && !It->LastWorkAlert.IsEmpty()) Resources.Add(It->LastWorkAlert);
   ResourceAlertText=FString::Join(Resources,TEXT("\n"));
   if (Notices.IsEmpty())
   {

@@ -1,4 +1,4 @@
-"""Native carry placement/cancellation/wrap/layout boundary checks; never saves.
+"""Native immediate carry placement/wrap/layout boundary checks; never saves.
 
 Actual player BP, project pallet/carton meshes and Chaos support contacts.
 Calls the E/F1 handlers' native APIs, not OS keyboard input. Test obstacles
@@ -38,7 +38,7 @@ busy = finished = cleaning = False
 handle = None
 error = None
 report = dict(passed=False, checks=[], screenshots=[], recent_samples=[], os_keys_tested=False,
-              scope='Actual BP/project-mesh carry placement, bounded blocked-action cancellation, wrap binding and held-unit layout guards; unsaved transient PIE fixture')
+              scope='Actual BP/project-mesh immediate carry placement, final destination clearance, wrap binding and held-unit layout guards; unsaved transient PIE fixture')
 
 
 def check(name, **data):
@@ -288,25 +288,25 @@ def scenario_body():
     check('empty_pallet_snaps_to_real_pallet_then_dynamic_stack_remains', seconds=elapsed,
           upper_bottom_cm=high[0].z-high[1].z, lower_top_cm=low[0].z+low[1].z)
 
-    enter('blocked_extraction')
+    enter('instant_extraction')
     trapped = named['TrappedBox']
     relocate((-160, 1400, 100))
     yield from wait(.2)
     began = now
-    assert pawn.try_pickup_cargo(trapped), 'Fixture must exercise blocked motion after accepted pickup'
-    while pawn.get_held_cargo() and now-began < 3.4:
-        assert not pawn.is_physical_ragdoll()
-        yield
+    assert pawn.try_pickup_cargo(trapped), 'A clear final hand pose must not be blocked by the old extraction animation path'
+    assert pawn.get_held_cargo() == trapped and now-began == 0
+    assert trapped.get_actor_bounds(False)[0].x < -45, 'Instant extraction stayed in its old cage'
+    assert pawn.try_place_on_surface(unreal.Vector(-90,1400,0))
+    assert not pawn.get_held_cargo() and not pawn.is_placing_cargo()
     elapsed = now-began
-    assert not pawn.get_held_cargo() and not pawn.is_placing_cargo(), 'Blocked pickup never cancelled'
-    assert 1.4 <= elapsed <= 3.3, ('Cancellation deadline', elapsed)
+    assert elapsed == 0
     dynamic(trapped, 1000)
     assert abs(movement.get_editor_property('mass')-80) < .2
-    assert abs(trapped.get_actor_bounds(False)[0].x) < 25
+    assert abs(trapped.get_actor_bounds(False)[0].x+90) < 3
     origin = pawn.get_actor_location()
     yield from wait(.3, lambda: pawn.do_move(0, -1))
     assert (pawn.get_actor_location()-origin).length() > 50 and not pawn.is_physical_ragdoll()
-    check('blocked_pickup_cancels_with_mass_restored_and_player_movement_available', seconds=elapsed)
+    check('old_animation_path_does_not_block_instant_pickup_and_ground_snap', seconds=elapsed)
 
     enter('blocked_rotation')
     rotating = named['RotationPallet']
@@ -318,15 +318,24 @@ def scenario_body():
     named['RotationBlocker'].set_actor_location(unreal.Vector(-180, 2193, 130), False, True)
     ai.set_control_rotation(unreal.Rotator(yaw=90))
     began = now
-    while pawn.get_held_cargo() and now-began < 3.4:
-        assert not pawn.is_physical_ragdoll()
-        yield
-        assert_yaw(90)
+    yield from wait(.3)
+    assert_yaw(90)
     elapsed = now-began
-    assert not pawn.get_held_cargo() and 1.4 <= elapsed <= 3.3
+    assert pawn.get_held_cargo() == rotating, 'Closer hand pose should fit in front of the wall'
+    center, extent = rotating.get_actor_bounds(False)
+    pose = body(rotating).get_world_transform()
+    # The pallet's axis-aligned bounds include empty corners when partly turned.
+    # Query the real convex bodies, allowing their ordinary contact skin only.
+    pose.scale3d *= unreal.Vector(.998,.998,.998)
+    overlaps = unreal.SystemLibrary.component_overlap_components(body(rotating), pose,
+        [getattr(unreal.ObjectTypeQuery,'OBJECT_TYPE_QUERY'+str(i)) for i in range(1,7)],
+        unreal.PrimitiveComponent, [pawn, rotating]) or []
+    assert not any(part.get_owner()==named['RotationBlocker'] for part in overlaps), 'Held pallet penetrates the actual rotation blocker'
+    assert pawn.try_place_on_surface(center)
+    assert not pawn.get_held_cargo()
     dynamic(rotating, 25)
     assert abs(movement.get_editor_property('mass')-80) < .2
-    check('blocked_pallet_turn_cancels_in_bounded_time_without_knockdown', seconds=elapsed,
+    check('pallet_turn_uses_nearer_clear_hand_pose_without_knockdown', seconds=elapsed,
           requested_yaw=90, controller_yaw=ai.get_control_rotation().yaw, player_yaw=pawn.get_actor_rotation().yaw)
 
     enter('wrapped_group')

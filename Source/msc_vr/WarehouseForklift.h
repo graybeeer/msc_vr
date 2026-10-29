@@ -79,6 +79,12 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") TArray<FString> CompletedJobIds;
  UPROPERTY(BlueprintAssignable, Category="Autonomy") FWarehouseReportEvent OnJobReport;
  UFUNCTION(BlueprintCallable, Category="Autonomy") bool SubmitJob(const FWarehouseWorkOrder& Job);
+ // Cancel work rather than pausing it. A boarded elevator transfer finishes its safe exit first.
+ UFUNCTION(BlueprintCallable, Category="Autonomy") bool StopCurrentWork();
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Autonomy") bool bWorkStopRequested=false;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Autonomy") bool bWorkStopNeedsRecovery=false;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Autonomy") FString WorkStopStatus;
+ UFUNCTION(BlueprintPure,Category="Autonomy") bool IsWorkDeferred(AWarehousePallet* Pallet) const;
  // Floor handoff uses a reserved 120cm square, not a centre-only tolerance.
  static constexpr float FloorSlotHalfExtentCm = 60.f;
  UFUNCTION(BlueprintPure, Category="Autonomy") bool IsFloorFootprintValid(AWarehousePallet* Pallet,const FTransform& Reference,bool Refresh=true) const;
@@ -224,6 +230,10 @@ private:
  void TransitionAI(EWarehouseAIState Next,const FString& Message);
  void FaultAI(const FString& Reason);
  void ReportJob(const FString& Result,const FString& Detail);
+ bool TryDeferCurrentWork(const FString& Reason,const FString& PlayerMessage=TEXT(""));
+ bool WorkStopCanResume();
+ bool HasRetainedForkContact() const;
+ TMap<TWeakObjectPtr<AWarehousePallet>,double> DeferredWorkUntil;
  bool RackLoadAligned() const;
  FWarehouseNavigationQuery BuildNavigationQuery() const;
  bool bUseCurrentRackWaypoints=false;

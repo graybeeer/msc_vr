@@ -557,6 +557,7 @@ bool AWarehouseLayoutEditor::BeginAdd(FVector FloorPoint)
 }
 void AWarehouseLayoutEditor::RefreshAfterEdit(bool PublishTaskLocation)
 {
+ AWarehouseWorker::RelocateIndoorWorkers(this);
  UWarehouseChargerWiring::RefreshConnections(this);
  // Update office destinations only at committed layout boundaries, never while
  // shipping is iterating a reservation that refers to the zone array.

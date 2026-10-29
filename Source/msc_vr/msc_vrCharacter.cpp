@@ -225,11 +225,13 @@ void Amsc_vrCharacter::ToggleCarry()
 	if (IsValid(HeldCargo))
 	{
 		const FVector Eye=FirstPersonCameraComponent->GetComponentLocation();
+		FVector SurfaceAim=CarryBody(HeldCargo)->Bounds.Origin;
 		FHitResult Hit;
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(PlaceAim),true,this);
 		Params.AddIgnoredActors(GetHeldCargoGroup());
 		if (GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+FirstPersonCameraComponent->GetForwardVector()*250.f,ECC_Visibility,Params))
 		{
+			if (Hit.ImpactNormal.Z>.95f) SurfaceAim=Hit.ImpactPoint;
 			AWarehousePallet* TargetPallet=Cast<AWarehousePallet>(Hit.GetActor());
 			for (TActorIterator<AWarehousePallet> It(GetWorld()); It; ++It)
 			{
@@ -246,7 +248,8 @@ void Amsc_vrCharacter::ToggleCarry()
 				return;
 			}
 		}
-		DropCargo();
+		if (!TryPlaceOnSurface(SurfaceAim) && GEngine)
+			GEngine->AddOnScreenDebugMessage(41,2.f,FColor::Yellow,TEXT("가까운 바닥이나 비어 있는 수평 받침면을 바라보세요."));
 		return;
 	}
 
@@ -641,7 +644,7 @@ bool Amsc_vrCharacter::TryPickupObject(AActor* Cargo)
   Body->FirstPersonPrimitiveType=EFirstPersonPrimitiveType::None;Body->MarkRenderStateDirty();
  }
  if (auto* Box=Cast<AWarehouseCargo>(Cargo)) Box->WakeStackAbove();
- PickupTransform=Initial;CarryProgressPose=Initial;CarryStallTime=0.f;PickupTime=0.f;bPickupPending=true;
+ PickupTransform=Initial;CarryProgressPose=Initial;CarryStallTime=0.f;PickupTime=0.f;bPickupPending=true;bInstantCarryPickup=true;
  CarryMesh->SetComponentTickEnabled(true);CarryMesh->SetVisibility(true);
  FirstPersonMesh->SetVisibility(false,false);
  RemoteWorldMesh->SetComponentTickEnabled(true);RemoteWorldMesh->SetVisibility(true);
@@ -652,7 +655,7 @@ bool Amsc_vrCharacter::TryPickupObject(AActor* Cargo)
 
 void Amsc_vrCharacter::DropCargo()
 {
- PlacementTime=-1.f;PlacementPallet=nullptr;bPickupPending=false;CarryStallTime=0.f;
+ PlacementTime=-1.f;PlacementPallet=nullptr;bPickupPending=false;bInstantCarryPickup=false;CarryStallTime=0.f;
  // Restore every body before restarting film joints. No stored pickup momentum
  // or synthetic grip velocity is injected into the released unit.
  for (const auto& Saved:HeldBodies) if (auto* Body=Saved.Body.Get())
@@ -696,9 +699,53 @@ void Amsc_vrCharacter::CancelCarryAction(const TCHAR* Reason)
  DropCargo();
 }
 
-bool Amsc_vrCharacter::MoveHeldGroup(const FTransform& Target)
+bool Amsc_vrCharacter::CanPlaceHeldGroup(const FTransform& Target) const
 {
  if (!IsValid(HeldCargo) || HeldBodies.IsEmpty()) return false;
+ FComponentQueryParams Params(SCENE_QUERY_STAT(PlayerCarryDestination),this);
+ for (const auto& Saved:HeldBodies) if (auto* Actor=Saved.Actor.Get()) Params.AddIgnoredActor(Actor);
+ for (const auto& Saved:HeldBodies)
+ {
+  auto* Body=Saved.Body.Get();if (!Body || !Saved.Actor.IsValid()) return false;
+  const FTransform Pose=Saved.RelativePose*Target;
+  TArray<FOverlapResult> Hits;
+  GetWorld()->ComponentOverlapMultiByChannel(Hits,Body,Pose.GetLocation(),Pose.GetRotation(),Body->GetCollisionObjectType(),Params);
+  for (const auto& Hit:Hits) if (Hit.bBlockingHit && WarehousePhysics::IsPhysicalContact(Hit.GetComponent())) return false;
+ }
+ return true;
+}
+
+bool Amsc_vrCharacter::FindCarryTarget(FTransform& Target) const
+{
+ auto* Body=CarryBody(HeldCargo);if (!Body || !Body->GetStaticMesh()) return false;
+ const auto Bounds=Body->GetStaticMesh()->GetBounds();const FVector Scale=HeldCargo->GetActorScale3D();
+ const FVector Extent=Bounds.BoxExtent*Scale.GetAbs();
+ const FQuat Facing=FRotator(0,Controller ? Controller->GetControlRotation().Yaw : FirstPersonCameraComponent->GetComponentRotation().Yaw,0).Quaternion();
+ const float Forward=GetCapsuleComponent()->GetScaledCapsuleRadius()+8.f+Extent.X;
+ // Close to a rack, the normal hands-forward pose can still be inside the shelf.
+ // Keep the unit closer to the player until walking away gives it more room.
+ for (float Inset:{0.f,15.f,30.f,45.f,60.f,75.f,90.f})
+ {
+  const FVector Center=GetActorLocation()+Facing.RotateVector(FVector(FMath::Max(0.f,Forward-Inset),0,10.f+Extent.Z));
+  const FTransform Pose(Facing,Center-Facing.RotateVector(Bounds.Origin*Scale),Scale);
+  if (CanPlaceHeldGroup(Pose)) {Target=Pose;return true;}
+ }
+ return false;
+}
+
+bool Amsc_vrCharacter::MoveHeldGroup(const FTransform& Target,bool Instant)
+{
+ if (!IsValid(HeldCargo) || HeldBodies.IsEmpty()) return false;
+ // Player pickup/placement are immediate tools. A rack beam on the old visual
+ // approach path must not block a clear final pose; every destination body is
+ // still checked against real warehouse geometry before any member is moved.
+ if (Instant)
+ {
+  if (!CanPlaceHeldGroup(Target)) return false;
+  for (const auto& Saved:HeldBodies) if (auto* Actor=Saved.Actor.Get())
+   Actor->SetActorTransform(Saved.RelativePose*Target,false,nullptr,ETeleportType::TeleportPhysics);
+  return true;
+ }
  const FTransform Start=HeldCargo->GetActorTransform();
  const float Distance=FVector::Dist(Start.GetLocation(),Target.GetLocation());
  const float Angle=FMath::RadiansToDegrees(Start.GetRotation().AngularDistance(Target.GetRotation()));
@@ -859,17 +906,43 @@ bool Amsc_vrCharacter::FindPlacement(AWarehousePallet* Pallet, const FVector& Ai
 	return true;
 }
 
+bool Amsc_vrCharacter::TryPlaceOnSurface(FVector Aim)
+{
+ if (!IsValid(HeldCargo) || HeldBodies.IsEmpty()) return false;
+ auto* Body=CarryBody(HeldCargo);if (!Body || !Body->GetStaticMesh()) return false;
+ const auto Bounds=Body->GetStaticMesh()->GetBounds();const FVector Scale=HeldCargo->GetActorScale3D();
+ const FVector Extent=Bounds.BoxExtent*Scale.GetAbs();const FQuat Rotation=HeldCargo->GetActorQuat();
+ const FVector CurrentCenter=HeldCargo->GetActorTransform().TransformPosition(Bounds.Origin);
+ if (FVector::Dist2D(Aim,CurrentCenter)>120.f || FVector::Dist(Aim,GetActorLocation())>250.f) Aim=CurrentCenter;
+ FCollisionQueryParams Params(SCENE_QUERY_STAT(PlayerSurfacePlacement),true,this);
+ Params.AddIgnoredActors(GetHeldCargoGroup());
+ float High=-FLT_MAX;TArray<FVector> Supports;
+ const float Bottom=CurrentCenter.Z-Extent.Z;
+ const float TraceTop=FMath::Max(Bottom+20.f,float(Aim.Z)+20.f);
+ const float TraceBottom=FMath::Max(Bottom-220.f,float(GetActorLocation().Z-GetCapsuleComponent()->GetScaledCapsuleHalfHeight()-15.f));
+ for (float X:{-.85f,-.5f,-.15f,.15f,.5f,.85f}) for (float Y:{-.85f,-.5f,-.15f,.15f,.5f,.85f})
+ {
+  const FVector P=Aim+Rotation.RotateVector(FVector(X*Extent.X,Y*Extent.Y,0));FHitResult Hit;
+  if (!GetWorld()->LineTraceSingleByChannel(Hit,FVector(P.X,P.Y,TraceTop),FVector(P.X,P.Y,TraceBottom),ECC_Visibility,Params) ||
+      Hit.ImpactNormal.Z<.98f || !WarehousePhysics::IsPhysicalContact(Hit.GetComponent())) continue;
+  High=FMath::Max(High,float(Hit.ImpactPoint.Z));Supports.Add(FVector(X,Y,Hit.ImpactPoint.Z));
+ }
+ bool Quadrants[4]={false,false,false,false};
+ for (const FVector& P:Supports) if (High-P.Z<=2.5f) Quadrants[(P.X>0 ? 1:0)+(P.Y>0 ? 2:0)]=true;
+ for (bool Supported:Quadrants) if (!Supported) return false;
+ const FVector Center(Aim.X,Aim.Y,High+Extent.Z+1.f);
+ const FTransform Pose(Rotation,Center-Rotation.RotateVector(Bounds.Origin*Scale),Scale);
+ if (!MoveHeldGroup(Pose,true)) return false;
+ DropCargo();return true;
+}
+
 bool Amsc_vrCharacter::TryPlaceOnPallet(AWarehousePallet* Pallet, FVector Aim)
 {
-	if (PlacementTime>=0 || (!Cast<AWarehouseCargo>(HeldCargo) && !Cast<AWarehousePallet>(HeldCargo)) || !FindPlacement(Pallet,Aim,PlacementTarget)) return false;
-	PlacementPallet=Pallet;
-	PlacementPalletPose=Pallet->GetActorTransform();
-	PlacementStart=HeldCargo->GetActorTransform();
-	PlacementTime=0.f;
-	bPickupPending=false;
-	CarryStallTime=0.f;
-	CarryProgressPose=PlacementStart;
-	UpdateCarryPose(0.f);
+	if (PlacementTime>=0 || (!Cast<AWarehouseCargo>(HeldCargo) && !Cast<AWarehousePallet>(HeldCargo)) ||
+		!FindPlacement(Pallet,Aim,PlacementTarget) || !MoveHeldGroup(PlacementTarget,true)) return false;
+	// Snap the complete unit to the validated support immediately, then restore
+	// its independent bodies and wrap joints. No lift/travel/lower animation path.
+	DropCargo();
 	return true;
 }
 
@@ -913,8 +986,8 @@ void Amsc_vrCharacter::UpdateCarryPose(float DeltaSeconds)
  // CalcCamera later in this frame. No spring, turn-rate cap or mass lag.
  const FQuat Facing=FRotator(0,Controller ? Controller->GetControlRotation().Yaw : FirstPersonCameraComponent->GetComponentRotation().Yaw,0).Quaternion();
  // Pallets stay level, including their complete loose or wrapped payload.
- const FVector GoalCenter=Origin+Facing.RotateVector(FVector(GetCapsuleComponent()->GetScaledCapsuleRadius()+8.f+NativeExtent.X,0,10.f+NativeExtent.Z));
- FTransform Goal(Facing,GoalCenter-Facing.RotateVector(Bounds.Origin*HeldCargo->GetActorScale3D()),HeldCargo->GetActorScale3D());
+ FTransform Goal;
+ const bool CarryTargetClear=FindCarryTarget(Goal);
  PickupTime+=DeltaSeconds;
  bool Reached=false;
  if (PlacementTime>=0.f)
@@ -924,17 +997,13 @@ void Amsc_vrCharacter::UpdateCarryPose(float DeltaSeconds)
       !PlacementPallet->GetActorScale3D().Equals(PlacementPalletPose.GetScale3D(),.01f))
   { CancelCarryAction(TEXT("받침 위치가 바뀌어 놓기를 취소했습니다."));return; }
   PlacementTime+=DeltaSeconds;
-  const FVector StartCenter=PlacementStart.TransformPosition(Bounds.Origin);
-  const FVector EndCenter=PlacementTarget.TransformPosition(Bounds.Origin);
-  const float ClearZ=FMath::Max(StartCenter.Z,EndCenter.Z+NativeExtent.Z+8.f);
-  // Retain the clearance path and every native sweep, but execute it in the
-  // input call instead of playing a timed lift/travel/lower animation.
-  FTransform AboveStart=PlacementStart,AboveEnd=PlacementTarget;
-  AboveStart.AddToTranslation(FVector(0,0,ClearZ-StartCenter.Z));
-  AboveEnd.AddToTranslation(FVector(0,0,ClearZ-EndCenter.Z));
-  Reached=MoveHeldGroup(AboveStart) && MoveHeldGroup(AboveEnd) && MoveHeldGroup(PlacementTarget);
+  Reached=MoveHeldGroup(PlacementTarget,true);
+  if (!Reached) {CancelCarryAction(TEXT("놓을 위치에 다른 물체가 있어 동작을 취소했습니다."));return;}
  }
- else Reached=MoveHeldGroup(Goal);
+ else Reached=CarryTargetClear && MoveHeldGroup(Goal,bInstantCarryPickup);
+ if (bInstantCarryPickup && !Reached)
+ {CancelCarryAction(TEXT("플레이어 주변에 팔레트를 들 공간이 없습니다. 조금 떨어져 다시 시도하세요."));return;}
+ bInstantCarryPickup=false;
  const FTransform ActualPose=HeldCargo->GetActorTransform();
  const FVector ActualCenter=ActualPose.TransformPosition(Bounds.Origin);
  if (Reached) { CarryStallTime=0.f;bPickupPending=false; }

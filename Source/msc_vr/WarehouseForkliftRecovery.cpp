@@ -12,6 +12,7 @@ bool AWarehouseForklift::IsRecovering() const
 
 void AWarehouseForklift::RecoveryFault(const TCHAR* Reason,const TCHAR* PlayerMessage)
 {
+ if (TryDeferCurrentWork(Reason,PlayerMessage)) return;
  bEmergencyBlocked=true; EmergencyReason=PlayerMessage; EmergencyLocation=GetActorLocation();
  ReportJob(TEXT("EMERGENCY"),Reason);
  FaultAI(Reason);

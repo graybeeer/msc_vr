@@ -143,6 +143,20 @@ bool AWarehouseInboundZone::SlotClear(int32 Index,AWarehousePallet* Pallet,const
  }
  return true;
 }
+bool AWarehouseInboundZone::IsTransportRequested(AWarehousePallet* Pallet) const
+{
+ return RequestedPallets.Contains(Pallet) || Reservations.ContainsByPredicate([&](const auto& R){return R.Pallet==Pallet;});
+}
+bool AWarehouseInboundZone::RequestTransport(AWarehousePallet* Pallet)
+{
+ if (!HasAuthority() || !IsValid(Pallet) || !ContainsPallet(Pallet) ||
+     Pallet->ReceiptState!=EWarehouseReceiptState::Confirmed || Pallet->ReceivingState!=EWarehouseReceivingState::Accepted || Pallet->bWrapping)
+ {Status=TEXT("입고 구역에서 검수·랩핑이 끝난 팔레트를 선택하세요.");return false;}
+ if (IsTransportRequested(Pallet)) {Status=TEXT("이미 입고 운반을 요청한 팔레트입니다.");return false;}
+ StoppedPallets.Remove(Pallet);RetryAfter.Remove(Pallet);RequestedPallets.Add(Pallet);
+ Status=TEXT("입고 운반 요청 접수 · 사용 가능한 차량과 랙 자리를 기다립니다.");
+ return true;
+}
 void AWarehouseInboundZone::ScanInbound()
 {
  CSV_SCOPED_TIMING_STAT(Warehouse,InboundScan);
@@ -162,6 +176,14 @@ void AWarehouseInboundZone::ScanInbound()
   { ++CompletedCount; Reservations.RemoveAt(I); }
   else
   {
+   const bool Exists=Vehicle->ActiveJob.JobId==Entry.JobId || Vehicle->PendingJobs.ContainsByPredicate([&](const auto& J){return J.JobId==Entry.JobId;});
+   if (!Exists)
+   {
+    const int32 ReportIndex=Vehicle->JobReports.FindLastByPredicate([&](const auto& R){return R.JobId==Entry.JobId && (R.Result==TEXT("CANCELLED") || R.Result==TEXT("DEFERRED"));});
+    if (ReportIndex!=INDEX_NONE && Vehicle->JobReports[ReportIndex].Detail.Contains(TEXT("[USER_STOP]"))) StoppedPallets.Add(Entry.Pallet);
+    else RetryAfter.Add(Entry.Pallet,GetWorld()->GetTimeSeconds()+30.);
+    RequestedPallets.Remove(Entry.Pallet);Reservations.RemoveAt(I);continue;
+   }
    if (Vehicle->ActiveJob.JobId==Entry.JobId) Entry.Pose=Vehicle->ActiveJob.Destination;
    else for (const auto& Job:Vehicle->PendingJobs) if (Job.JobId==Entry.JobId) { Entry.Pose=Job.Destination;break; }
   }
@@ -175,7 +197,13 @@ void AWarehouseInboundZone::ScanInbound()
  TArray<AWarehousePallet*> Pallets;
  for (TActorIterator<AWarehousePallet> It(GetWorld());It;++It) if (ContainsPallet(*It)) Pallets.Add(*It);
  // Simultaneous arrivals use a stable identity tie-break; subsequent arrivals preserve their FIFO sequence.
- Pallets.Sort([](const AWarehousePallet& A,const AWarehousePallet& B) { return A.GetPathName()<B.GetPathName(); });
+ RequestedPallets.RemoveAll([&](const auto& P){return !P.IsValid() || !ContainsPallet(P.Get());});
+ Pallets.Sort([this](const AWarehousePallet& A,const AWarehousePallet& B)
+ {
+  const int32 IA=RequestedPallets.IndexOfByKey(const_cast<AWarehousePallet*>(&A)),IB=RequestedPallets.IndexOfByKey(const_cast<AWarehousePallet*>(&B));
+  if ((IA!=INDEX_NONE)!=(IB!=INDEX_NONE)) return IA!=INDEX_NONE;
+  return IA!=INDEX_NONE ? IA<IB : A.GetPathName()<B.GetPathName();
+ });
  for (auto* Pallet:Pallets)
  {
   Present.Add(Pallet);
@@ -251,7 +279,8 @@ void AWarehouseInboundZone::ScanInbound()
   { Pallet->TearWrap();--Confirmed;++QuarantinedCount;continue; }
   // Inspection/wrapping is independent of truck/rack/vehicle availability.
   // Only the shared pickup lane's dispatch remains serial.
-  if (bExternalDispatchOnly || !Reservations.IsEmpty() || Fleet.IsEmpty() || RackSlots.IsEmpty()) continue;
+  if ((bExternalDispatchOnly && !RequestedPallets.Contains(Pallet)) || StoppedPallets.Contains(Pallet) ||
+      RetryAfter.FindRef(Pallet)>Now || !Reservations.IsEmpty() || Fleet.IsEmpty() || RackSlots.IsEmpty()) continue;
   const float Mass=Pallet->PalletMassKg+Strength->GetSupportedMass(Pallet);
   const float Height=Bounds.Max.Z-Bounds.Min.Z;
   AWarehouseForklift* BestVehicle=nullptr;
@@ -278,7 +307,7 @@ void AWarehouseInboundZone::ScanInbound()
   if (BestVehicle->SubmitJob(Job))
   {
    FReservation Entry; Entry.Vehicle=BestVehicle; Entry.Pallet=Pallet; Entry.JobId=Job.JobId; Entry.Rack=RackSlots[BestSlot].Rack;Entry.Pose=RackSlots[BestSlot].Pose;
-   Reservations.Add(Entry); ++DispatchedCount;
+   Reservations.Add(Entry);RequestedPallets.Remove(Pallet); ++DispatchedCount;
    UE_LOG(LogTemp,Log,TEXT("INBOUND_DISPATCH %s pallet=%s rack=%s vehicle=%s mass=%.1f"),
     *Job.JobId,*Pallet->GetName(),*RackSlots[BestSlot].Name,*BestVehicle->VehicleName,Mass);
   }

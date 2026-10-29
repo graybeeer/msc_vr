@@ -111,7 +111,7 @@ double AWarehouseComputer::GetTaskElapsedSeconds(const FString& JobId) const
 void AWarehouseComputer::ReceiveJobReport(const FWarehouseJobReport& Report)
 {
  auto* Task=Tasks.FindByPredicate([&](const auto& T) { return T.JobId==Report.JobId; });
- if (!Task || Task->bCompleted || Task->bCancelled) return;
+ if (!Task || Task->bCompleted || Task->bCancelled || Task->bDeferred) return;
  if (Report.Result==TEXT("COMPLETED"))
  {
   Task->bCompleted=true;Task->State=TEXT("완료 · 재고 위치 갱신됨");
@@ -121,6 +121,13 @@ void AWarehouseComputer::ReceiveJobReport(const FWarehouseJobReport& Report)
  {
   Task->bCancelled=true;Task->State=TEXT("취소됨 · ")+Report.Detail;
   Task->FinishedSimulationSeconds=Report.SimulationSeconds;
+ }
+ else if (Report.Result==TEXT("DEFERRED"))
+ {
+  Task->bDeferred=true;Task->State=TEXT("운반 보류 · ")+Report.Detail;
+  Task->FinishedSimulationSeconds=Report.SimulationSeconds;
+  LastWorkAlert=TEXT("운반할 수 없는 작업을 보류했습니다. 다른 작업을 먼저 처리합니다.\n")+Task->Source+TEXT(" · ")+Report.Detail;
+  LastWorkAlertUntil=GetWorld()->GetTimeSeconds()+20.;
  }
  else if (Report.Result==TEXT("STATE") || Report.Result==TEXT("FAULT")) Task->State=Report.Detail;
  Task->ElapsedSimulationSeconds=GetTaskElapsedSeconds(Task->JobId);
@@ -209,12 +216,12 @@ void AWarehouseComputer::RefreshState()
   // Authored initial queues or a console spawned after dispatch have no known submission timestamp.
   RememberJob(Vehicle,Vehicle->ActiveJob,false);for (const auto& Job : Vehicle->PendingJobs) RememberJob(Vehicle,Job,false);
   // Recover an exact completion timestamp if the console missed a delegate during initialization.
-  for (const auto& Report : Vehicle->JobReports) if (Report.Result==TEXT("COMPLETED") || Report.Result==TEXT("CANCELLED")) ReceiveJobReport(Report);
+  for (const auto& Report : Vehicle->JobReports) if (Report.Result==TEXT("COMPLETED") || Report.Result==TEXT("CANCELLED") || Report.Result==TEXT("DEFERRED")) ReceiveJobReport(Report);
  }
  for (auto& Task : Tasks)
  {
   Task.ElapsedSimulationSeconds=GetTaskElapsedSeconds(Task.JobId);
-  if (Task.bCompleted || Task.bCancelled) continue;
+  if (Task.bCompleted || Task.bCancelled || Task.bDeferred) continue;
   auto* V=Task.Vehicle.Get();if (!IsValid(V)) { Task.State=TEXT("차량 연결 끊김");continue; }
   if (V->ActiveJob.JobId==Task.JobId) Task.State=V->Status;
   else if (V->PendingJobs.ContainsByPredicate([&](const auto& Job) { return Job.JobId==Task.JobId; })) Task.State=TEXT("작업 대기");
@@ -225,9 +232,9 @@ void AWarehouseComputer::RefreshState()
   else Task.State=TEXT("작업 연결 끊김 · 확인 필요");
  }
  // ponytail: keep all unfinished orders and 200 finished session records; durable WMS storage is a later integration.
- int32 FinishedCount=0;for (const auto& Task : Tasks) if (Task.bCompleted || Task.bCancelled) ++FinishedCount;
+ int32 FinishedCount=0;for (const auto& Task : Tasks) if (Task.bCompleted || Task.bCancelled || Task.bDeferred) ++FinishedCount;
  for (int32 I=0;I<Tasks.Num() && FinishedCount>200;)
-  if (Tasks[I].bCompleted || Tasks[I].bCancelled) { Tasks.RemoveAt(I);--FinishedCount; } else ++I;
+  if (Tasks[I].bCompleted || Tasks[I].bCancelled || Tasks[I].bDeferred) { Tasks.RemoveAt(I);--FinishedCount; } else ++I;
 }
 void AWarehouseComputer::RefreshLayoutDestinations()
 {
@@ -355,6 +362,8 @@ bool AWarehouseComputer::SetVehicleRunning(AWarehouseForklift* Vehicle,bool Runn
  { LastMessage=TEXT("차량을 선택하고 원격 조작을 해제하세요.");return false; }
  if (Running && !Vehicle->CheckSystems().IsEmpty()) { LastMessage=TEXT("고장 원인을 해결한 뒤 재개하세요.");return false; }
  if (Vehicle->bPowered!=Running) Vehicle->TogglePower();
+ if (Vehicle->bPowered!=Running)
+ {LastMessage=Vehicle->WorkStopStatus.IsEmpty() ? Vehicle->Status : Vehicle->WorkStopStatus;return false;}
  RefreshState();LastMessage=Running ? TEXT("자체 점검 후 운행을 재개합니다.") : TEXT("차량에 제동·일시정지를 요청했습니다.");return true;
 }
 bool AWarehouseComputer::CancelQueuedJob(const FString& JobId)

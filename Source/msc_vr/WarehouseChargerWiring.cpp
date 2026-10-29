@@ -59,7 +59,7 @@ namespace
   for (const auto* Part:Walls)
   {
    const FBox World=Part->Bounds.GetBox();
-   if (Z<World.Min.Z+Radius+1 || Z>World.Max.Z-Radius-1) continue;
+   if (Z<World.Min.Z+Radius+.1 || Z>World.Max.Z-Radius-.1) continue;
    FVector Min,Max;Part->GetLocalBounds(Min,Max);const auto& Pose=Part->GetComponentTransform();
    const FVector Size=(Max-Min)*Pose.GetScale3D().GetAbs();
    const bool AlongX=Size.X>=Size.Y;
@@ -72,7 +72,7 @@ namespace
    else { A.Y=Min.Y;B.Y=Max.Y;A.X=B.X=Sign>0 ? Max.X : Min.X; }
    A=Pose.TransformPosition(A)+Normal*WallOffset;B=Pose.TransformPosition(B)+Normal*WallOffset;
    // Stop just short of wall ends: the neighboring wall has finite thickness.
-   // Short clear diagonal bridges join these inset corner points above traffic.
+   // Short clear bridges join these inset corner points along the floor.
    const FVector Along=(B-A).GetSafeNormal2D();const double Inset=FMath::Min(65.,FVector::Distance(A,B)*.2);
    A+=Along*Inset;B-=Along*Inset;
    A.Z=B.Z=Z;Result.Add({A,B});
@@ -90,8 +90,8 @@ namespace
    const auto& Wall=Walls[I];Nodes.Add({Wall.A,I});Nodes.Add({Wall.B,I});
    Nodes.Add({Project(A,Wall),I});Nodes.Add({Project(B,Wall),I});
   }
-  // Visibility edges permit short corner bridges and an elevated feeder from
-  // an island charger. Wall runs are strongly preferred to unsupported spans.
+  // Visibility edges permit short corner bridges and a floor feeder from an
+  // island charger. Wall-edge runs are preferred to interior floor spans.
   const int32 N=Nodes.Num();
   const int32 Pass=AllowInteriorSpan ? 1 : 0;
    TArray<double> Distance;Distance.Init(MAX_dbl,N);TArray<int32> Parent;Parent.Init(INDEX_NONE,N);
@@ -107,7 +107,7 @@ namespace
      const bool OnWall=Nodes[U].Wall!=INDEX_NONE && Nodes[U].Wall==Nodes[V].Wall;
      const bool Corner=Nodes[U].Wall!=INDEX_NONE && Nodes[V].Wall!=INDEX_NONE && Length<140;
      // First try perpendicular feeders and a continuous wall route. Only if
-     // that is unavailable permit a clear elevated span through the interior.
+     // that is unavailable permit a clear floor span through the interior.
      if (Pass==0 && ((U==0 && (V<2 || (V-2)%4!=2)) ||
        (V==1 && (U<2 || (U-2)%4!=3)) || (U>=2 && V>=2 && !OnWall && !Corner))) continue;
      if (Pass==0 && U==0 && Nodes[V].Wall!=INDEX_NONE)
@@ -129,7 +129,7 @@ namespace
    TArray<FVector> Reverse;for (int32 I=1;I!=INDEX_NONE;I=Parent[I]) Reverse.Add(Nodes[I].P);
    for (int32 I=Reverse.Num()-1;I>=0;--I) Append(Route,Reverse[I]);Cost=Distance[1];return true;
  }
- FVector ChargerPort(AWarehouseChargingStation* Charger,bool Top=false)
+ FVector ChargerPort(AWarehouseChargingStation* Charger)
  {
   // Rear of the real cabinet, away from the contact plate and docking vehicle.
   const auto* Part=FindObject<UStaticMeshComponent>(Charger,TEXT("Cabinet"));
@@ -138,28 +138,44 @@ namespace
   FBox Local(ForceInit);
   for (int32 I=0;I<8;++I) Local+=Charger->GetActorTransform().InverseTransformPosition(Pose.TransformPosition(
    FVector(I&1 ? Max.X:Min.X,I&2 ? Max.Y:Min.Y,I&4 ? Max.Z:Min.Z)));
-  return Charger->GetActorTransform().TransformPosition(Top ?
-   FVector(Local.Min.X+8.,Local.GetCenter().Y,Local.Max.Z-.2) :
-   FVector(Local.Min.X-Radius+.2,Local.GetCenter().Y,Local.Min.Z+Local.GetSize().Z*.75));
+  return Charger->GetActorTransform().TransformPosition(
+   FVector(Local.Min.X-Radius-.8,Local.GetCenter().Y,Local.Min.Z+10));
+ }
+ bool SupportedFloor(UWorld* World,const FVector& Point,const AWarehouseChargingStation* Charger,const AActor* Panel)
+ {
+  FCollisionQueryParams Query(SCENE_QUERY_STAT(ChargerCableFloor),true);
+  Query.AddIgnoredActor(Charger);Query.AddIgnoredActor(Panel);
+  TArray<FHitResult> Hits;
+  World->LineTraceMultiByObjectType(Hits,Point+FVector(0,0,1),Point-FVector(0,0,Radius+2),FCollisionObjectQueryParams::AllObjects,Query);
+  for (const auto& Hit:Hits)
+   if (Hit.ImpactNormal.Z>.9 && WarehousePhysics::IsPhysicalContact(Hit.GetComponent()) &&
+       !Hit.GetActor()->ActorHasTag(TEXT("ChargerSupplyCable"))) return true;
+  return false;
  }
  bool MakeRoute(UWorld* World,AWarehouseChargingStation* Charger,const FPanel& Panel,
   const TArray<UStaticMeshComponent*>& Walls,const FVector& Interior,TArray<FVector>& Best)
  {
-  const FBox Box=Panel.Mesh->Bounds.GetBox();const FVector End(Box.GetCenter().X,Box.GetCenter().Y,Box.Max.Z-.2);
+  const FBox Box=Panel.Mesh->Bounds.GetBox();const FVector End(Box.GetCenter().X,Box.GetCenter().Y,Box.Min.Z+.2);
   const double Floor=FMath::FloorToDouble((Charger->GetActorLocation().Z+20.)/400.)*400.;
-  // Exhaust the usable wall elevations before allowing unsupported interior
-  // spans; an obstacle at the preferred height alone must not skip wall routing.
-  for (bool InteriorSpan:{false,true}) for (bool Top:{false,true}) for (double Height:{330.,300.,350.,280.,365.})
+  // All horizontal conductors lie just above the actual floor. Only cabinet
+  // terminal drops are vertical; never fall back to a floating overhead span.
+  for (bool InteriorSpan:{false,true})
   {
-   const FVector Start=ChargerPort(Charger,Top);
-   const double Z=FMath::Max(Floor+Height,End.Z+5.);
+   const FVector Start=ChargerPort(Charger);
+   const double Z=Floor+Radius+.9;
    FVector HighStart(Start.X,Start.Y,Z),HighEnd(End.X,End.Y,Z);
-   if (Z<Start.Z || !ClearSegment(World,Start,HighStart,Charger,Panel.Actor) || !ClearSegment(World,HighEnd,End,Charger,Panel.Actor)) continue;
+   if (!ClearSegment(World,Start,HighStart,Charger,Panel.Actor) || !ClearSegment(World,HighEnd,End,Charger,Panel.Actor)) continue;
    auto Faces=WallFaces(Walls,Interior,Z);TArray<FVector> Path;double Cost;
    if (!HorizontalRoute(World,HighStart,HighEnd,Faces,Charger,Panel.Actor,InteriorSpan,Path,Cost)) continue;
+   bool Grounded=true;
+   for (int32 I=1;I<Path.Num() && Grounded;++I)
+   {
+    const int32 Samples=FMath::Max(1,FMath::CeilToInt(FVector::Dist2D(Path[I-1],Path[I])/60.));
+    for (int32 Sample=0;Sample<=Samples;++Sample)
+     if (!SupportedFloor(World,FMath::Lerp(Path[I-1],Path[I],double(Sample)/Samples),Charger,Panel.Actor)) {Grounded=false;break;}
+   }
+   if (!Grounded) continue;
    Best.Reset();Append(Best,Start);for (const auto& P:Path) Append(Best,P);Append(Best,End);
-   // The preferred installation height wins once it is safe. Fallback heights
-   // are not recalculated merely to shave a few centimeters from the wire.
    for (int32 I=Best.Num()-2;I>0;--I)
     if (FVector::DotProduct((Best[I]-Best[I-1]).GetSafeNormal(),(Best[I+1]-Best[I]).GetSafeNormal())>.99999) Best.RemoveAt(I);
    return Best.Num()>=2;
@@ -240,29 +256,30 @@ void UWarehouseChargerWiring::Rebuild()
   if (!Nearest) { Charger->SupplyCableStatus=TEXT("배전함 없음 · 전선 연결 대기");continue; }
   Charger->SupplyCabinet=Nearest->Actor;
   if (!MakeRoute(GetWorld(),Charger,*Nearest,Walls,Charger->GetActorLocation(),Charger->SupplyCableRoute))
-  { Charger->SupplyCableStatus=TEXT("안전한 상부 배선 경로 없음 · 배치 확인 필요");continue; }
+  { Charger->SupplyCableStatus=TEXT("연속된 바닥 배선 경로 없음 · 배치 확인 필요");continue; }
   FActorSpawnParameters Params;Params.Owner=Charger;Params.ObjectFlags|=RF_Transient;
   AActor* Cable=GetWorld()->SpawnActor<AActor>(FVector::ZeroVector,FRotator::ZeroRotator,Params);
   if (!Cable) { Charger->SupplyCableRoute.Reset();Charger->SupplyCableStatus=TEXT("전선 생성 실패");continue; }
-  Cable->Tags={TEXT("LayoutFixed"),TEXT("WarehouseMapStructure"),TEXT("WarehouseServices"),TEXT("ChargerSupplyCable"),
+  Cable->Tags={TEXT("LayoutFixed"),TEXT("WarehouseVisualOnly"),TEXT("ChargerSupplyCable"),
    FName(*FString::Printf(TEXT("WarehouseFloor%d"),FMath::Clamp(FMath::FloorToInt((Charger->GetActorLocation().Z+20)/400.),0,3)))};
   auto* Root=NewObject<USceneComponent>(Cable,TEXT("CableRoot"));Cable->SetRootComponent(Root);Root->SetMobility(EComponentMobility::Static);Root->RegisterComponent();
   const auto& Points=Charger->SupplyCableRoute;
   for (int32 I=1;I<Points.Num();++I)
   {
    const FVector Delta=Points[I]-Points[I-1];if (Delta.Size()<.1) continue;
-   // One primitive per straight piece: the sensor's fixed-map cache uses each
-   // primitive's bounds. A combined ISM would incorrectly fill the whole bay.
+   // Supply wires are visual only. Their bounds must never reserve the bay or
+   // enter sensor, physical-contact or layout-obstruction queries.
    auto* Segment=NewObject<UStaticMeshComponent>(Cable,*FString::Printf(TEXT("Conduit%d"),I));Segment->SetupAttachment(Root);
    Segment->SetMobility(EComponentMobility::Movable);Segment->SetStaticMesh(CableMesh);
    if (CableMaterial) Segment->SetMaterial(0,CableMaterial);
    Segment->SetWorldTransform(FTransform(FRotationMatrix::MakeFromZ(Delta).ToQuat(),(Points[I]+Points[I-1])*.5,FVector(Radius/50.,Radius/50.,Delta.Size()/100.)));
-   Segment->SetCollisionProfileName(TEXT("BlockAll"));Segment->SetGenerateOverlapEvents(false);Segment->SetCanEverAffectNavigation(false);
+   Segment->SetCollisionProfileName(TEXT("NoCollision"));Segment->SetCollisionResponseToAllChannels(ECR_Ignore);
+   Segment->SetGenerateOverlapEvents(false);Segment->SetCanEverAffectNavigation(false);
    Segment->SetCastShadow(false);Segment->SetCullDistance(15000);Segment->RegisterComponent();
-   WarehousePhysics::ConfigureContact(Segment,EWarehouseSurface::Steel);Segment->SetMobility(EComponentMobility::Static);
+   Segment->SetMobility(EComponentMobility::Static);
   }
   GeneratedCables.Add(Cable);
-  Charger->SupplyCableStatus=FString::Printf(TEXT("%s 연결 · 벽면/상부 전선관"),*Nearest->Actor->GetActorNameOrLabel());
+  Charger->SupplyCableStatus=FString::Printf(TEXT("%s 연결 · 바닥 전선관"),*Nearest->Actor->GetActorNameOrLabel());
  }
  // Only invalidate the fixed map. Sampling remains on the existing one-second
  // autonomous schedule, and remote control performs no sensor/AI work.

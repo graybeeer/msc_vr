@@ -42,6 +42,7 @@ original_files = original_preferences = None
 resolution_index = 0
 stage_budget = stage_goal = stage_supply = stage_shipping_count = 0
 stage_started = 0
+extra_vehicles = []
 checks, screens = [], []
 report = dict(passed=False, checks=checks, screenshots=screens, osInputTested=False,
               nativeTransportTested=False, visualReviewRequired=True,
@@ -154,7 +155,7 @@ def end_session(next_phase):
 def _tick(dt):
     global game, pc, pawn, computer, director, stage, original_files, original_preferences
     global original_manual, resolution_index
-    global stage_budget, stage_goal, stage_supply, stage_shipping_count, stage_started
+    global stage_budget, stage_goal, stage_supply, stage_shipping_count, stage_started, extra_vehicles
     assert time.monotonic()-started < 600, ('Focus UI test timed out', phase)
     age = time.monotonic()-phase_at
     if phase == 'start':
@@ -217,6 +218,7 @@ def _tick(dt):
         assert pc.is_warehouse_computer_open() and pc.is_move_input_ignored() and pc.is_look_input_ignored()
         state = ui()
         assert state['focus_screen'] and not state['manual_operations'] and state['fleet'] == len(fleet)
+        assert state['inbound_selected'], 'The default tab must explain receiving transport'
         assert not unreal.GameplayStatics.is_game_paused(game), 'Command screen paused whole simulation'
         console('DisableAllScreenMessages')
         console('r.SetRes 1600x900w')
@@ -224,6 +226,33 @@ def _tick(dt):
         enter('focus_high')
     elif phase == 'focus_high' and age > 1:
         capture('1600x900_DefaultFocus')
+        state = ui('tab outbound')
+        assert not state['inbound_selected'] and state['outbound_visible'] and state['pallets'] > 0
+        enter('outbound_capture')
+    elif phase == 'outbound_capture' and age > .7:
+        capture('1600x900_OutboundTab')
+        assert ui('tab inbound')['inbound_selected']
+        # These extra actors exist only to verify the actual fleet viewport.
+        # Disable their ticks/contacts; this is a UI fixture, not a vehicle test.
+        ui('spawn_test_fleet 4')
+        computer.refresh_state()
+        assert ui()['fleet'] >= 6
+        ui('fleet_end')
+        enter('fleet_capture')
+    elif phase == 'fleet_capture' and age > .7:
+        state = ui()
+        assert state['fleet'] >= 6 and state['fleet_scroll_offset'] > 0, state
+        capture('1600x900_SixVehiclesScrolled')
+        ui('vehicle_stop_work 0')
+        ui('stop_work')
+        assert not any(v.get_editor_property('bPowered') for v in computer.get_editor_property('fleet'))
+        ui('clear_test_fleet')
+        extra_vehicles = []
+        computer.refresh_state()
+        ui('fleet_top')
+        check('Inbound/outbound tabs filter stock and six vehicle rows scroll in a bounded panel; explicit work-stop callbacks remain distinct from pause')
+        enter('focus_controls')
+    elif phase == 'focus_controls' and age > .7:
         ui('start')
         assert any(v.get_editor_property('bPowered') for v in computer.get_editor_property('fleet')), 'Shared start callback did not power a vehicle'
         ui('stop')

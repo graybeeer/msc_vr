@@ -86,6 +86,7 @@ void AWarehouseForklift::TransitionAI(EWarehouseAIState Next,const FString& Mess
 }
 void AWarehouseForklift::FaultAI(const FString& Reason)
 {
+ if (TryDeferCurrentWork(Reason)) return;
  if (AIState!=EWarehouseAIState::Fault)
  {
   if (AIState!=EWarehouseAIState::SelfCheck || !bResumeAfterCheck) ResumeAI=AIState;
@@ -99,6 +100,7 @@ void AWarehouseForklift::FaultAI(const FString& Reason)
 void AWarehouseForklift::ToggleAutonomy()
 {
  if (bMechanicalFailure) { SetMechanicalFailure(); return; }
+ if (!bPowered && !WorkStopCanResume()) return;
  if (bPowered)
  {
   if (AIState!=EWarehouseAIState::SelfCheck || !bResumeAfterCheck) ResumeAI=AIState;
@@ -117,6 +119,9 @@ void AWarehouseForklift::ToggleAutonomy()
 bool AWarehouseForklift::SubmitJob(const FWarehouseWorkOrder& Job)
 {
  if (!HasAuthority()) return false;
+ if (bWorkStopRequested || !WorkStopCanResume()) return false;
+ if (IsWorkDeferred(Job.Pallet))
+ { SetOperationError(TEXT("WORK_RETRY_WAIT"),TEXT("운반 불가 물류는 30초간 보류합니다. 다른 물류를 먼저 처리하세요."));return false; }
  if (const auto* Instance=GetWorld() ? GetWorld()->GetGameInstance() : nullptr)
   if (const auto* Experiment=Instance->GetSubsystem<UWarehouseExperimentSubsystem>();Experiment && Experiment->bBatchRunning && Job.SourceSystem!=TEXT("FMS-EXPERIMENT"))
   { SetOperationError(TEXT("EXPERIMENT_ACTIVE"),TEXT("반복 실험 중에는 저장된 공통 주문만 실행할 수 있습니다."));return false; }
@@ -1045,6 +1050,8 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
 {
  AITotalSeconds+=Dt;
  if (!bPowered || Dt<=0) return;
+ if (bWorkStopRequested && !bFloorTransfer)
+ { StopCurrentWork();return; }
  if (SensorMode!=EWarehouseSensorMode::Autonomous)
  {
   bExperimentSensorWaiting=true;

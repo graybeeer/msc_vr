@@ -38,6 +38,8 @@ struct FWarehouseShipmentLine
  UPROPERTY(BlueprintReadOnly) bool bArrived=false;
  UPROPERTY(BlueprintReadOnly) bool bLoaded=false;
  UPROPERTY(BlueprintReadOnly) bool bPrepared=false;
+ UPROPERTY(BlueprintReadOnly) bool bOperatorStopped=false;
+ double RetryDispatchAt=0;
  double PreparationStartedAt=-1;
  bool bDeliveryReported=false;
  UPROPERTY(BlueprintReadOnly) FString Status;

@@ -103,7 +103,10 @@ protected:
 	TArray<FHeldBodyState> HeldBodies;
 	TArray<FHeldJointState> HeldJoints;
 	float HeldMovementMass = -1.f;
-	bool MoveHeldGroup(const FTransform& Target);
+	bool MoveHeldGroup(const FTransform& Target,bool Instant=false);
+	bool CanPlaceHeldGroup(const FTransform& Target) const;
+	bool FindCarryTarget(FTransform& Target) const;
+	bool bInstantCarryPickup=false;
 
 	UPROPERTY(VisibleAnywhere, Category="Carry")
 	TObjectPtr<USkeletalMeshComponent> CarryMesh;
@@ -152,6 +155,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Carry")
 	bool TryPickupCargo(AWarehouseCargo* Cargo);
 	UFUNCTION(BlueprintCallable, Category="Carry") bool TryPickupPallet(AWarehousePallet* Pallet);
+	UFUNCTION(BlueprintCallable, Category="Carry") bool TryPlaceOnSurface(FVector Aim);
 	UFUNCTION(BlueprintCallable, Category="Carry")
 	void DropCargo();
 	UFUNCTION(BlueprintCallable, Category="Carry")
