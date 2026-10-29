@@ -172,11 +172,15 @@ bool UAgvShadowSensorsComponent::RefreshSnapshot(double SimNow, double FloorZCm)
 	LastBeamCount = 0;
 	TMap<TWeakObjectPtr<UPrimitiveComponent>,int32> Indices;
 	TMap<TWeakObjectPtr<UPrimitiveComponent>,TSet<FIntVector>> Voxels;
+	// The planner checks its footprint at NavigationTransform (the LiDAR estimate when localization drives). Points
+	// placed with the exact mount would sit off by the estimate error relative to that footprint, so place them from
+	// the same pose: sensor frame -> vehicle frame -> navigation pose. Precise zones return the exact pose (no change).
+	const FTransform ToNavigation = Forklift->GetActorTransform().Inverse() * Forklift->NavigationTransform();
 	for (UAgvLidarComponent* Sensor : Lidars)
 	{
 		Sensor->CaptureSnapshot();
 		LastBeamCount += Sensor->LastStepBeams;
-		const FTransform Mount = Sensor->GetComponentTransform();
+		const FTransform Mount = Sensor->GetComponentTransform() * ToNavigation;
 		for (const FAgvLidarReturn& Return : Sensor->GetLastReturns())
 		{
 			UPrimitiveComponent* Part = Return.Component.Get();
