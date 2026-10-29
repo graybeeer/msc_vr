@@ -5,9 +5,11 @@
 #include "WarehouseWaitingBay.h"
 #include "WarehouseElevator.h"
 #include "WarehouseDamageSystem.h"
+#include "Agv/AgvShadowSensors.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
+#include "Engine/OverlapResult.h"
 
 bool AWarehouseForklift::HasRetainedForkContact() const
 {
@@ -23,15 +25,110 @@ bool AWarehouseForklift::HasRetainedForkContact() const
 bool AWarehouseForklift::WorkStopCanResume()
 {
  if (!bWorkStopNeedsRecovery) return true;
- if (bFloorTransfer || (IsValid(Elevator) && Elevator->ReservedVehicle==this) ||
-     (bSupportingPallet && PalletOnForks()) || HasRetainedForkContact())
+ if (bFloorTransfer || (IsValid(Elevator) && Elevator->ReservedVehicle==this)) return false;
+ if (bClearingForksForWork) return true; // Retain the grounded target through withdrawal/verification, too.
+ if ((bSupportingPallet && PalletOnForks()) || HasRetainedForkContact())
  {
-  WorkStopStatus=TEXT("작업은 중지됐습니다. 적재물·포크 접촉을 유지하며 제동 중입니다. G 원격 조작으로 하역하고 포크를 빼세요.");
-  SetOperationError(TEXT("WORK_STOP_RECOVERY"),WorkStopStatus);
-  return false;
+  WorkStopStatus=TEXT("새 운반 지시를 받으면 기존 짐을 먼저 내려놓고 포크를 뺍니다.");
+  return true;
  }
  bWorkStopNeedsRecovery=false;bSupportingPallet=false;TargetPallet=nullptr;CarriedCargo.Reset();
  WorkStopStatus=TEXT("중지 후 물리 정리 완료 · 새 작업을 시작할 수 있습니다.");
+ return true;
+}
+
+bool AWarehouseForklift::FindRetainedLoadSupport(FTransform& Destination) const
+{
+ if (!IsValid(TargetPallet) || !SensorKit || !AutonomousSensorsReady()) return false;
+ const FTransform PalletPose=TargetPallet->GetActorTransform();
+ const FVector Point=PalletPose.TransformPosition(FVector(40,40,0));
+ const FVector Start=Point+FVector(0,0,1),End(Point.X,Point.Y,GetActorLocation().Z-4);
+ FAgvObstacleIndices Candidates;
+ FBox Column(ForceInit);Column+=Start;Column+=End;
+ SensorKit->FindKnownCandidates(Column.ExpandBy(5),Candidates);
+ double Highest=-DBL_MAX;
+ for (int32 Index:Candidates)
+ {
+  const auto& Obstacle=SensorKit->GetKnownObstacles()[Index];
+  // Only published fixed surfaces have certified geometry. Unseen movable
+  // objects never become a support just because a live world ray finds them.
+  auto* Part=Obstacle.Component.Get();
+  if (!Part || !UAgvShadowSensorsComponent::IsBuildingMapComponent(Part)) continue;
+  const FTransform Live=Part->GetComponentTransform();
+  const auto Remap=[&](FVector P) { return Live.TransformPosition(Obstacle.ObservedTransform.InverseTransformPosition(P)); };
+  FCollisionQueryParams Params(SCENE_QUERY_STAT(RetainedLoadSupport),false,this);
+  FHitResult Hit;
+  if (!Part->LineTraceComponent(Hit,Remap(Start),Remap(End),Params)) continue;
+  const FVector Normal=Obstacle.ObservedTransform.TransformVectorNoScale(Live.InverseTransformVectorNoScale(Hit.ImpactNormal));
+  const FVector Support=Obstacle.ObservedTransform.TransformPosition(Live.InverseTransformPosition(Hit.ImpactPoint));
+  if (Normal.Z<.98f || Support.Z>Point.Z+1 || Support.Z<=Highest) continue;
+  FTransform Pose(FRotator(0,PalletPose.Rotator().Yaw,0),FVector(PalletPose.GetLocation().X,PalletPose.GetLocation().Y,Support.Z));
+  bool Supported=true;
+  for (float X:{-40.f,40.f}) for (float Y:{-40.f,40.f})
+  {
+   FHitResult Foot;
+   Supported &= PerceivedFloorSupport(Pose.TransformPosition(FVector(X,Y,0)),&Foot) &&
+    FMath::Abs(Foot.ImpactPoint.Z-Support.Z)<=.5f;
+  }
+  if (Supported) { Highest=Support.Z;Destination=Pose; }
+ }
+ return Highest>-DBL_MAX;
+}
+
+bool AWarehouseForklift::PrepareForksForNextWork()
+{
+ if (!bSupportingPallet && !HasRetainedForkContact() && !PendingJobs.IsEmpty())
+ {
+  // Mechanical occupancy of the tine bed also catches a manually inserted
+  // pallet that was never lifted/assigned. This is not an ambient sensor scan.
+  TArray<FOverlapResult> Contacts;
+  const FTransform Forks=Carriage->GetComponentTransform();
+  GetWorld()->OverlapMultiByObjectType(Contacts,Forks.TransformPosition(FVector(57.5f,0,7.5f)),Forks.GetRotation(),
+   FCollisionObjectQueryParams::AllObjects,FCollisionShape::MakeBox(FVector(57.5f,43,7.5f)),
+   FCollisionQueryParams(SCENE_QUERY_STAT(RetainedForkOccupancy),false,this));
+  for (const auto& Contact:Contacts) if (auto* Pallet=Cast<AWarehousePallet>(Contact.GetActor()))
+  {
+   if (PalletClaimedByOther(Pallet))
+   { BrakeDrive();SetOperationError(TEXT("FORK_CLEARANCE_BLOCKED"),TEXT("포크와 다른 차량의 팔레트가 접촉해 새 작업을 대기합니다."));return true; }
+   TargetPallet=Pallet;bWorkStopNeedsRecovery=true;break;
+  }
+ }
+ if (!bSupportingPallet && !HasRetainedForkContact())
+ { WorkStopCanResume();return false; }
+ BrakeDrive();DesiredLift=LiftOffset;LiftMotorTarget=LiftOffset;
+ if (PendingJobs.IsEmpty())
+ { SetStatus(TEXT("기존 짐 유지 · 새 운반 지시를 받으면 먼저 하역합니다."));return true; }
+ if (ChassisBody->GetPhysicsLinearVelocity().Size()>=1.f || ChassisBody->GetPhysicsAngularVelocityInDegrees().Size()>=.5f) return true;
+ const double Now=GetWorld()->GetTimeSeconds();
+ if (Now<NextForkClearanceCheck) return true;
+ NextForkClearanceCheck=Now+1.;
+ // The new order stays in the queue until the actual load is grounded and the
+ // forks have withdrawn. This internal handoff has no customer job/completion ID.
+ FTransform Drop;
+ const FWarehouseWorkOrder Previous=ActiveJob;
+ ActiveJob=FWarehouseWorkOrder();ActiveJob.Pallet=TargetPallet;
+ TrackCargo();
+ bool Safe=FindRetainedLoadSupport(Drop);
+ if (Safe)
+ {
+  ActiveJob.Destination=Drop;
+  ActiveJob.bRackDestination=Drop.GetLocation().Z-GetActorLocation().Z>5.f;
+  Safe=DestinationClear() && IsFloorFootprintValid(TargetPallet,Drop,false);
+ }
+ if (!Safe)
+ {
+  ActiveJob=Previous;
+  WorkStopStatus=TEXT("새 운반 지시 대기 · 기존 짐을 내려놓을 안전한 받침·빈 공간이 없습니다. 주변을 정리하거나 G로 하역하세요.");
+  SetOperationError(TEXT("FORK_CLEARANCE_BLOCKED"),WorkStopStatus);
+  return true;
+ }
+ bClearingForksForWork=true;bWorkStopNeedsRecovery=true;
+ bPalletReleased=!bSupportingPallet;
+ WaitSeconds=0;DestinationTrafficSeconds=0;LostSupportSeconds=0;
+ bObservedTargetValid=false;bHasRecognizedTargetPose=false;
+ LastErrorCode=NAME_None;LastErrorMessage.Reset();
+ WorkStopStatus=TEXT("새 작업 준비 · 기존 짐 하역 → 포크 철수 중");
+ TransitionAI(EWarehouseAIState::LowerLoad,WorkStopStatus);
  return true;
 }
 
@@ -64,6 +161,7 @@ bool AWarehouseForklift::StopCurrentWork()
   }
  }
  bWorkStopRequested=false;
+ bClearingForksForWork=false;NextForkClearanceCheck=-1;
  bWorkStopNeedsRecovery=bSupportingPallet || HasRetainedForkContact();
  if (!ActiveJob.JobId.IsEmpty())
  {
@@ -80,7 +178,7 @@ bool AWarehouseForklift::StopCurrentWork()
  if (IsValid(WaitingBay)) WaitingBay->Release(this);
  if (IsValid(ChargingStation)) ChargingStation->ShowCharge(BatteryPercent,false);
  WorkStopStatus=bWorkStopNeedsRecovery ?
-  TEXT("작업 중지 · 적재물과 포크는 현재 위치에 유지합니다. G로 하역·포크 정리 후 새 작업을 시작하세요.") :
+  TEXT("작업 중지 · 적재물과 포크를 유지합니다. 새 운반 지시를 받으면 먼저 하역·포크 철수를 진행합니다.") :
   TEXT("현재 작업과 대기 작업을 중지했습니다. 재개해도 취소한 작업을 다시 실행하지 않습니다.");
  TransitionAI(EWarehouseAIState::Paused,WorkStopStatus);
  SetOperationError(TEXT("WORK_STOPPED"),WorkStopStatus);

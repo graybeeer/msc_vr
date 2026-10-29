@@ -148,9 +148,14 @@ void AWarehouseForklift::TogglePower()
  if (IsRemoteControlled()) return;
  if (bReplanAfterRemote)
  {
-  if (bSupportingPallet && (ActiveJob.JobId.IsEmpty() || TargetPallet!=ActiveJob.Pallet))
-  { SetStatus(TEXT("MANUAL LOAD - UNLOAD BEFORE AUTO / G: REMOTE")); return; }
-  if (!ActiveJob.JobId.IsEmpty())
+  if (bClearingForksForWork || ((bSupportingPallet || HasRetainedForkContact()) &&
+      (ActiveJob.JobId.IsEmpty() || TargetPallet!=ActiveJob.Pallet)))
+  {
+   if (!ActiveJob.JobId.IsEmpty()) PendingJobs.Insert(ActiveJob,0);
+   ActiveJob=FWarehouseWorkOrder();bClearingForksForWork=false;bWorkStopNeedsRecovery=true;
+   NextForkClearanceCheck=-1;ResumeAI=EWarehouseAIState::Ready;
+  }
+  else if (!ActiveJob.JobId.IsEmpty())
   {
    TargetPallet=ActiveJob.Pallet;
    ResumeAI=bSupportingPallet ? EWarehouseAIState::PlanDelivery : EWarehouseAIState::PlanPickup;

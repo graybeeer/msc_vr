@@ -264,10 +264,10 @@ int32 AWarehouseWorker::RelocateIndoorWorkers(const UObject* Context)
   // so the central truck doors and approach lanes remain available.
   for (int32 Side=0;Side<4 && !Found;++Side) for (int32 Row=0;Row<3 && !Found;++Row) for (int32 Slot=0;Slot<24 && !Found;++Slot)
   {
-   const double Gap=180.+Row*140.;FVector Point;
+   const double ExteriorOffset=180.+Row*140.;FVector Point;
    if (Side<2)
-    Point=FVector(Side==0 ? Building.Min.X-Gap : Building.Max.X+Gap,Building.Min.Y+140.+Slot*140.,0);
-   else Point=FVector(Building.Min.X+140.+Slot*140.,Side==2 ? Building.Min.Y-Gap : Building.Max.Y+Gap,0);
+    Point=FVector(Side==0 ? Building.Min.X-ExteriorOffset : Building.Max.X+ExteriorOffset,Building.Min.Y+140.+Slot*140.,0);
+   else Point=FVector(Building.Min.X+140.+Slot*140.,Side==2 ? Building.Min.Y-ExteriorOffset : Building.Max.Y+ExteriorOffset,0);
    if ((Side<2 && Point.Y>Building.Max.Y-140.) || (Side>=2 && Point.X>Building.Max.X-140.)) continue;
    if (Occupied.ContainsByPredicate([&](const FVector& Other){return FVector::DistSquared2D(Point,Other)<FMath::Square(110.);})) continue;
    TArray<FHitResult> Floors;

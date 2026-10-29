@@ -119,7 +119,7 @@ void AWarehouseForklift::ToggleAutonomy()
 bool AWarehouseForklift::SubmitJob(const FWarehouseWorkOrder& Job)
 {
  if (!HasAuthority()) return false;
- if (bWorkStopRequested || !WorkStopCanResume()) return false;
+ if (bWorkStopRequested) return false;
  if (IsWorkDeferred(Job.Pallet))
  { SetOperationError(TEXT("WORK_RETRY_WAIT"),TEXT("운반 불가 물류는 30초간 보류합니다. 다른 물류를 먼저 처리하세요."));return false; }
  if (const auto* Instance=GetWorld() ? GetWorld()->GetGameInstance() : nullptr)
@@ -156,6 +156,12 @@ bool AWarehouseForklift::SubmitJob(const FWarehouseWorkOrder& Job)
 }
 void AWarehouseForklift::RefreshAfterLayout(bool PublishTaskLocation)
 {
+ if (bClearingForksForWork)
+ {
+  bClearingForksForWork=false;ActiveJob=FWarehouseWorkOrder();NextForkClearanceCheck=-1;
+  ResumeAI=EWarehouseAIState::Ready;
+  if (bPowered) TransitionAI(EWarehouseAIState::Ready,TEXT("배치 변경 · 기존 짐 하역 위치 재확인"));
+ }
  if (FleetCoordinator) FleetCoordinator->Release(this);
  PlannedRoute.Reset();RouteIndex=0;bRouteStarted=false;
  LastObstacleCheckSeconds=-1;ObstacleCheckFrame=MAX_uint64;
@@ -1079,7 +1085,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
  }
  if (AIState!=EWarehouseAIState::Charging) ConsumeEnergy(100.f*Dt/3600.f);
  if (BatteryPercent<=0 && AIState!=EWarehouseAIState::Charging) { FaultAI(TEXT("BATTERY EMPTY")); return; }
- if (!ActiveJob.JobId.IsEmpty())
+ if (!ActiveJob.JobId.IsEmpty() || bClearingForksForWork)
  {
   if (!IsValid(TargetPallet)) { SetOperationError(TEXT("NO_PALLET"),TEXT("운반할 수 없다: 대상 팔레트가 삭제되었습니다."));FaultAI(Status);return; }
   if (TargetPallet->ReceiptState==EWarehouseReceiptState::WrapTorn) { FaultAI(TEXT("PALLET WRAP TORN - REINSPECTION REQUIRED"));return; }
@@ -1142,6 +1148,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   }
   break;
  case EWarehouseAIState::Ready:
+  if (PrepareForksForNextWork()) break;
   if (bChargePending || BatteryPercent<=ChargeBelowPercent) Next(EWarehouseAIState::PlanCharge,TEXT("PLAN CHARGING"));
   else if (!PendingJobs.IsEmpty())
   {
@@ -1426,6 +1433,8 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   break;
  }
  case EWarehouseAIState::LowerLoad:
+  if (bClearingForksForWork && AIElapsed>MaxForkHeightCm/11.5f+15.f)
+  { RecoveryFault(TEXT("RETAINED LOAD LOWERING TIMEOUT"),TEXT("기존 짐을 안전하게 내리지 못해 새 작업을 대기합니다. G로 적재 상태를 확인하세요."));break; }
   if (!bPalletReleased)
   {
    if (!WaitForDestinationClear(Dt)) break;
@@ -1532,6 +1541,15 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   break;
  }
  case EWarehouseAIState::ReportComplete:
+  if (bClearingForksForWork)
+  {
+   ReportJob(TEXT("FORKS_CLEARED"),TEXT("기존 짐 하역·포크 철수 완료 · 새 운반 지시 시작"));
+   bClearingForksForWork=false;bWorkStopNeedsRecovery=false;NextForkClearanceCheck=-1;
+   WorkStopStatus.Reset();LastErrorCode=NAME_None;LastErrorMessage.Reset();
+   ActiveJob=FWarehouseWorkOrder();TargetPallet=nullptr;CarriedCargo.Reset();
+   Next(EWarehouseAIState::Ready,TEXT("기존 짐 하역 완료 · 새 작업 준비"));
+   break;
+  }
   CompletedJobIds.AddUnique(ActiveJob.JobId); ReportJob(TEXT("COMPLETED"),TEXT("PALLET PLACED AND FORKS CLEAR"));
   ActiveJob=FWarehouseWorkOrder(); TargetPallet=nullptr; CarriedCargo.Reset();
   Next(EWarehouseAIState::Ready,TEXT("READY - WAITING FOR WORK ORDER"));

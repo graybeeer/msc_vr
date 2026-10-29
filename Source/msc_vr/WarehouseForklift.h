@@ -83,6 +83,7 @@ public:
  UFUNCTION(BlueprintCallable, Category="Autonomy") bool StopCurrentWork();
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Autonomy") bool bWorkStopRequested=false;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Autonomy") bool bWorkStopNeedsRecovery=false;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Autonomy") bool bClearingForksForWork=false;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Autonomy") FString WorkStopStatus;
  UFUNCTION(BlueprintPure,Category="Autonomy") bool IsWorkDeferred(AWarehousePallet* Pallet) const;
  // Floor handoff uses a reserved 120cm square, not a centre-only tolerance.
@@ -233,6 +234,9 @@ private:
  bool TryDeferCurrentWork(const FString& Reason,const FString& PlayerMessage=TEXT(""));
  bool WorkStopCanResume();
  bool HasRetainedForkContact() const;
+ bool PrepareForksForNextWork();
+ bool FindRetainedLoadSupport(FTransform& Destination) const;
+ double NextForkClearanceCheck=-1;
  TMap<TWeakObjectPtr<AWarehousePallet>,double> DeferredWorkUntil;
  bool RackLoadAligned() const;
  FWarehouseNavigationQuery BuildNavigationQuery() const;
