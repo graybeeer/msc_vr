@@ -553,7 +553,7 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  PlannedRoute.Reset(); RouteIndex=0;bEndpointDriving=false;bEndpointOrienting=false;bRouteTurning=false;EndpointSegment=-1;
  // Precise docking and alignment stay on the short lane connections they were tuned with.
  const bool PreciseState=AIState==EWarehouseAIState::AlignVehicle || AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::ElevatorApproach ||
-  AIState==EWarehouseAIState::DockCharge || AIState==EWarehouseAIState::NavigateCharge;
+  AIState==EWarehouseAIState::DockCharge || AIState==EWarehouseAIState::NavigateCharge || AIState==EWarehouseAIState::PlanCharge || bChargePending;
  // A traffic yield asks for this short move and no other way around: its corridor must stay as small as the fleet expects.
  const bool UseHybrid=SensorMode==EWarehouseSensorMode::Autonomous && !PreciseState && !bTrafficEscape && (PlannerOverride>=0 ? PlannerOverride>0 : CVarHybridPlanner.GetValueOnGameThread()!=0);
  if (UseHybrid)
@@ -1244,8 +1244,9 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
  {
   if (SensorMode==EWarehouseSensorMode::Autonomous && AIState==EWarehouseAIState::NavigatePickup &&
       bHasRecognizedTargetPose && bRouteStarted && !PlannedRoute.IsEmpty() &&
-      (FVector::Dist(Goal.GetLocation(),PlannedRoute.Last().Pose.GetLocation())>2.f ||
-       FMath::Abs(FMath::FindDeltaAngleDegrees(Goal.Rotator().Yaw,PlannedRoute.Last().Pose.Rotator().Yaw))>1.5f))
+      // Fork alignment re-reads the pallet anyway. A hybrid route does not stop and replan a few metres out for a small update (cost about 10s).
+      (FVector::Dist(Goal.GetLocation(),PlannedRoute.Last().Pose.GetLocation())>(bRouteFromHybrid ? 25.f : 2.f) ||
+       FMath::Abs(FMath::FindDeltaAngleDegrees(Goal.Rotator().Yaw,PlannedRoute.Last().Pose.Rotator().Yaw))>(bRouteFromHybrid ? 6.f : 1.5f)))
   {
    // A new model observation can update the WMS last-known pickup pose.
    // Brake physically before replacing the old path; never silently chase a
