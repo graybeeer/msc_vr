@@ -532,7 +532,7 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
    UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_BLOCKERS %s goal_pose=[%s] approach_lane=[%s]"),*VehicleName,*GoalBlockers,*LaneBlockers);
   }
  };
- PlannedRoute.Reset(); RouteIndex=0;bEndpointDriving=false;bEndpointOrienting=false;bRouteTurning=false;EndpointSegment=-1;
+ PlannedRoute.Reset(); RouteIndex=0;bEndpointDriving=false;bEndpointOrienting=false;bRouteTurning=false;EndpointSegment=-1;bRouteFromHybrid=false;
  // Precise docking and alignment stay on the short lane connections they were tuned with.
  const bool PreciseState=AIState==EWarehouseAIState::AlignVehicle || AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::ElevatorApproach ||
   AIState==EWarehouseAIState::DockCharge || AIState==EWarehouseAIState::NavigateCharge;
@@ -540,11 +540,13 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  if (UseHybrid)
  {
   FString HybridReport;
+  bHybridGoalBlocked=false;
   const bool HybridFound=PlanHybridRoute(StartPose,Goal,Query,!ActiveJob.JobId.IsEmpty(),PlannedRoute,&HybridReport);
   LastPlanReport=HybridReport;
-  if (HybridFound) { Found=true;return true; }
+  if (HybridFound) { Found=true;bRouteFromHybrid=true;return true; }
   PlannedRoute.Reset();
-  if (PlannerOverride>0) return false;
+  if (PlannerOverride>0 || bHybridGoalBlocked) return false;
+  UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_FALLBACK %s goal=%s %s"),*VehicleName,*Goal.GetLocation().ToString(),*HybridReport);
  }
  float DirectCost;
  if (ConnectLanePoses(StartPose,Goal,PlannedRoute,DirectCost,&Query)) { Found=true;return true; }
@@ -728,7 +730,20 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  if (ChargingAlignment && SegmentEnd==PlannedRoute.Num()-1 && Remaining<ChargingCaptureDistanceCm &&
      FMath::Abs(FVector::DotProduct(GetActorLocation()-GoalPose.GetLocation(),GoalPose.GetUnitAxis(EAxis::Y)))<ChargingDockLateralLimitCm)
   bEndpointOrienting=true;
- if (Remaining<(IntermediatePivot || RelaxedAlign ? 25.f : 80.f) && Wheels.Num()>=3 && AIState!=EWarehouseAIState::AlignUnload)
+ // Hybrid routes keep following the path to each stretch's end: the 20cm/s point chase below cost 4s per stop and could hunt for 30s.
+ // A stretch inside the route only hands over, so it ends once the vehicle has stopped close by, or has passed the end.
+ const bool HybridTravel=bRouteFromHybrid && (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery || AIState==EWarehouseAIState::NavigateParking);
+ if (HybridTravel && SegmentEnd<PlannedRoute.Num()-1)
+ {
+  const float Along=FVector::DotProduct(GoalPose.GetLocation()-Pose.GetLocation(),GoalPose.GetUnitAxis(EAxis::X))*(Goal.bReverse ? -1.f : 1.f);
+  if (Remaining<12.f || (Remaining<30.f && Along<0.f))
+  {
+   BrakeDrive();
+   if (FMath::Abs(CurrentSpeedCm)<2.f) { RouteIndex=SegmentEnd+1;bRouteTurning=false; }
+   return false;
+  }
+ }
+ if (!HybridTravel && Remaining<(IntermediatePivot || RelaxedAlign ? 25.f : 80.f) && Wheels.Num()>=3 && AIState!=EWarehouseAIState::AlignUnload)
  {
   // Finish a lane pose at the real load-wheel axle. Rotating at the actor
   // origin moved the origin away from the goal and repeatedly replanned tiny
@@ -1352,6 +1367,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   else if (AIElapsed>=3.f) FaultAI(TEXT("PALLET NOT VISIBLE"));
   break;
  case EWarehouseAIState::EstimatePose:
+  AlignRechecks=0;
   // This stacker has no certified mast tilt actuator. Reject tilted pallets instead of inventing one.
   if (FMath::Abs(ObservedPallet.Rotator().Pitch)>.5f || FMath::Abs(ObservedPallet.Rotator().Roll)>.5f)
   { FaultAI(TEXT("PALLET TILT EXCEEDS FORK ALIGNMENT RANGE")); break; }
@@ -1367,7 +1383,9 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   const bool OptAlign=CVarOptAlign.GetValueOnGameThread()!=0;
   const float AlignSide=FMath::Abs(FVector::DotProduct(AlignmentOffset,GetActorRightVector()));
   const float AlignAlong=FVector::DotProduct(AlignmentOffset,GetActorForwardVector());
-  if (OptAlign ? (AlignSide<=7.f && AlignmentYaw<1.8f) : (AlignSide<=5.f && AlignmentYaw<1.5f))
+  // The insertion line stops at 5cm sideways. What counts is the offset where the forks end up, which a small heading error adds to.
+  const float InsertSide=FMath::Abs(FVector::DotProduct(PalletApproach(ObservedPallet,65).GetLocation()-GetActorLocation(),GetActorRightVector()));
+  if (OptAlign ? (AlignSide<=7.f && InsertSide<=4.5f && AlignmentYaw<1.8f) : (AlignSide<=5.f && AlignmentYaw<1.5f))
   {
    if (OptAlign && FMath::Abs(AlignAlong)<=3.f)
    {
@@ -1376,6 +1394,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    }
    else if (MovePrecise(AlignmentPose.GetLocation(),15,Dt)) Next(EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"));
   }
+  else if (OptAlign && AlignRechecks<3) { if (!bRouteStarted) ++AlignRechecks;Route(AlignmentPose,EWarehouseAIState::AlignVehicle,TEXT("ALIGN VEHICLE TO PALLET"),15); }
   else Route(AlignmentPose,EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"),15);
   break;
  }

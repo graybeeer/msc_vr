@@ -259,6 +259,9 @@ private:
  bool PlanHybridRoute(const FTransform& Start,const FTransform& FinalGoal,const FWarehouseNavigationQuery& InQuery,bool bStraightIn,TArray<FWarehouseRoutePoint>& OutRoute,FString* OutReport=nullptr) const;
  float RouteTimeSeconds(const TArray<FWarehouseRoutePoint>& Route,const FTransform& Start,float* OutLength=nullptr,float* OutTurnDegrees=nullptr,int32* OutFlips=nullptr) const;
  int32 PlannerOverride=-1;
+ bool bRouteFromHybrid=false;
+ mutable bool bHybridGoalBlocked=false;
+ int32 AlignRechecks=0;
  FString LastPlanReport;
  bool FollowRoute(float Speed,float Dt);
  bool MovePrecise(FVector Destination,float Speed,float Dt);
