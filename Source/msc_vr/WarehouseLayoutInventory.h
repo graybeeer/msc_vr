@@ -84,6 +84,8 @@ public:
  bool ConsumeHeldCargo(FName Id);
  AWarehouseCargo* PreviewHeldCargo(FVector Point);
  void CapturePrototypes(AWarehouseLayoutEditor* Layout);
+ // Current world poses; includes catalogue slots when every dispatcher was removed.
+ TArray<FWarehouseRackSlot> RackSlotsFor(const AActor* Rack=nullptr) const;
  TArray<FString> Choices(EWarehouseLayoutCategory Category) const;
  FVector PreviewZoneSize(const TArray<AActor*>& Members) const;
  TArray<AActor*> SpawnPrototype(EWarehouseLayoutCategory Category,int32 Choice,FVector Point);

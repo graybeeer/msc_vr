@@ -317,6 +317,8 @@ Build3의 드문 경로 계획 최댓값은 NullRHI에서3998.788→3770.546ms�
 
 **2026-10-29 랙 집기 후속 검사:** `verify_arcade_carry_placement_pie.py`의 7개 확인에서 1000kg 상자 적재·빈 팔레트 쌓기·이전 시각 경로가 막힌 즉시 추출/바닥 안착·회전 중 실제 형상 비겹침·랩 연결과 물리 복원을 통과했다. `verify_instant_rack_carry_pie.py`의 4개 확인에서는 실제 프로젝트 랙의20cm/140cm 데크에 실린 팔레트와 상자를 함께 즉시 집고 같은 데크에 즉시 반환했다. 전체 묶음 상대 위치·질량·독립 강체·적재 지지를 보존했다. 두 검사는 미저장 시험 배치의 native API이며 OS 키 입력·새 시각 캡처·모든 창고 선반 검증은 아니다. 결과는 `Saved/Testing/ArcadeCarryPlacement/Report.json`, `InstantRackCarry/Report.json`이다.
 
+**2026-10-30 랙 E 즉시 적재:** `Saved/Testing/RackSnap_20261029/Build4.log` 빌드와 `verify_instant_rack_carry_pie.py` 기본 실행·`-RackGeometryOnly` 실행을 통과했다. 실제20cm/140cm 랙의 보를 향해 E에 연결된 `ToggleCarry`를 호출하여, 적재 팔레트·상자가 한 번에 안착하고25kg 팔레트 질량·화물 상대 위치·독립 강체·지지가 복원되는 것을 확인했다. 입고용 자리 등록이 없는 경우에도 실제 데크 형상에서 빈자리를 찾았다. 두 경우 모두 만석이면 겹쳐 놓거나 바닥에 떨어뜨리지 않고 손에 유지했다. 결과는 각각 `Saved/Testing/InstantRackCarry/Report.json`, `InstantRackCarryGeometry/Report.json`의5개 확인이며 미저장 native API 검사다. 시각적 선택 범위에 보 아래15cm를 포함하며 실제 랙 충돌 형상은 바꾸지 않는다. OS 키 입력·모든 사용자 랙 모델을 검사한 결과는 아니다.
+
 `Saved/Logs/ArcadePlayerBuild4_20261028.log`의 Development Editor 빌드와 새 프로세스의 `ArcadePlayerBuild4PIE_20261028.log`에서 아래 검사를 모두 통과했다. 실제 저장 플레이어 Blueprint·기존 모션·물류 모델을 사용한 미저장 PIE이며, 테스트의 입력 함수 호출을 실제 OS 키 입력이나 전체 창고 운송 검증으로 해석하지 않는다. 원본 BP·맵과 지게차/센서 소스 해시도 보존했다.
 
 | 검사 | 확인 범위와 결과 |
