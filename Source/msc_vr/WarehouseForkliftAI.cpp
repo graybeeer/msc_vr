@@ -835,7 +835,8 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
   BrakeDrive();
   if (!bRouteTurning && FMath::Abs(CurrentSpeedCm)>=1.f) return false;
   bRouteTurning=true;
-  if (FMath::Abs(HeadingError)<HeadingTolerance)
+  // After a hybrid route the alignment state that follows takes up small heading errors anyway.
+  if (FMath::Abs(HeadingError)<(HybridTravel ? FMath::DegreesToRadians(4.f) : HeadingTolerance))
   {
    if (FMath::Abs(CurrentSpeedCm)>=1.f || (ChassisBody && FMath::Abs(ChassisBody->GetPhysicsAngularVelocityInDegrees().Z)>=.5f)) return false;
    bRouteTurning=false;
@@ -1411,7 +1412,9 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   const float AlignAlong=FVector::DotProduct(AlignmentOffset,GetActorForwardVector());
   // Sideways in the pallet's frame: the insertion line holds this offset and keeps the tines parallel (see MoveToLine).
   const float PalletSide=FMath::Abs(FVector::DotProduct(AlignmentOffset,AlignmentPose.GetUnitAxis(EAxis::Y)));
-  if (OptAlign ? (PalletSide<=6.f && AlignmentYaw<1.8f) : (AlignSide<=5.f && AlignmentYaw<1.5f))
+  // The insertion line itself straightens the last few degrees before the tines reach the pallet; below that the point chase
+  // only creeps at 2cm/s (22s for 30cm, 2026-10-30).
+  if (OptAlign ? (PalletSide<=6.f && AlignmentYaw<6.f) : (AlignSide<=5.f && AlignmentYaw<1.5f))
   {
    if (OptAlign && FMath::Abs(AlignAlong)<=3.f)
    {
