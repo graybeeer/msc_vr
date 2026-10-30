@@ -1,12 +1,17 @@
 // Time-optimal route search for the forklift: a hybrid A* over arcs, straights and turns on the spot, in place of the fixed
-#include "Algo/Reverse.h"
 // lane anchors of PlanAutonomousRoute. Switch with Warehouse.Nav.HybridPlanner. See LOCALIZATION_HANDOFF.md 9-6.
 #include "WarehouseForklift.h"
 #include "WarehouseForkliftNavQuery.h"
+#include "WarehouseInboundZone.h"
+#include "EngineUtils.h"
+#include "Algo/Reverse.h"
 #include "WarehouseFleetCoordinator.h"
 #include "WarehousePallet.h"
 #include "AgvShadowSensors.h"
 #include "HAL/PlatformTime.h"
+#include "HAL/IConsoleManager.h"
+
+static TAutoConsoleVariable<int32> CVarHybridMemory(TEXT("Warehouse.Nav.HybridMemory"),1,TEXT("1: routes also keep off pallets the fleet saw earlier but cannot see now."));
 
 namespace AgvHybrid
 {
@@ -79,7 +84,7 @@ namespace AgvHybrid
 		double X = 0, Y = 0, Yaw = 0;
 		float G = 0;
 		int32 Parent = INDEX_NONE;
-		double Curvature = 0, Length = 0;
+		double Curvature = 0, Length = 0, TurnAngle = 0;
 		uint8 Mode = MoveRest;
 		int8 TurnSign = 0;
 	};
@@ -411,6 +416,67 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 			}
 		}
 	}
+	// What the fleet's sensors saw earlier and no longer see: a pallet does not vanish because a rack hides it.
+	constexpr double SeenForSeconds = 90.0;
+	constexpr double ZonePalletHalf = 95.0;
+	TArray<FBox2D> Remembered;
+	if (FleetCoordinator && CVarHybridMemory.GetValueOnGameThread() != 0)
+	{
+		const double Now = GetWorld()->GetTimeSeconds();
+		for (auto It = FleetCoordinator->SeenObstacles.CreateIterator(); It; ++It)
+		{
+			if (!It.Key().IsValid() || Now - It.Value().Seen > SeenForSeconds)
+			{
+				It.RemoveCurrent();
+				continue;
+			}
+			const FBox& Box = It.Value().Bounds;
+			if (Query.PerceptionIgnored.Contains(It.Key().Get()) || Box.Max.Z <= BaseZ + Query.Envelope.Min.Z || Box.Min.Z >= BaseZ + Query.Envelope.Max.Z)
+			{
+				continue;
+			}
+			// Already in the live scan: that copy is the current one.
+			if (SensorKit->HasObservedActor(It.Key().Get()))
+			{
+				continue;
+			}
+			Remembered.Add(FBox2D(FVector2D(Box.Min), FVector2D(Box.Max)));
+			int32 X0, Y0, X1, Y1;
+			Field.Cell(Box.Min.X, Box.Min.Y, X0, Y0);
+			Field.Cell(Box.Max.X, Box.Max.Y, X1, Y1);
+			for (int32 Y = FMath::Max(0, Y0); Y <= FMath::Min(Field.Height - 1, Y1); ++Y)
+			{
+				for (int32 X = FMath::Max(0, X0); X <= FMath::Min(Field.Width - 1, X1); ++X)
+				{
+					Field.Occupied[Field.Index(X, Y)] = 1;
+				}
+			}
+		}
+	}
+	// Pallets waiting in the inbound zones: receiving knows them even when no sensor sees them now. The lane between them stays open.
+	TArray<FTransform> ZonePallets;
+	for (TActorIterator<AWarehousePallet> It(GetWorld()); It; ++It)
+	{
+		for (TActorIterator<AWarehouseInboundZone> Zone(GetWorld()); Zone; ++Zone)
+		{
+			if (Zone->ContainsPallet(*It) && *It != TargetPallet)
+			{
+				ZonePallets.Add(It->GetActorTransform());
+				const FVector Centre = It->GetActorLocation();
+				int32 X0, Y0, X1, Y1;
+				Field.Cell(Centre.X - ZonePalletHalf, Centre.Y - ZonePalletHalf, X0, Y0);
+				Field.Cell(Centre.X + ZonePalletHalf, Centre.Y + ZonePalletHalf, X1, Y1);
+				for (int32 Y = FMath::Max(0, Y0); Y <= FMath::Min(Field.Height - 1, Y1); ++Y)
+				{
+					for (int32 X = FMath::Max(0, X0); X <= FMath::Min(Field.Width - 1, X1); ++X)
+					{
+						Field.Occupied[Field.Index(X, Y)] = 1;
+					}
+				}
+				break;
+			}
+		}
+	}
 	BuildClearance(Field);
 	BuildGoalTime(Field, StartXY, GoalXY, Spec.Speed);
 	const double BuildMs = (FPlatformTime::Seconds() - StartedAt) * 1000.0;
@@ -430,6 +496,36 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 		}
 	}
 	constexpr double PersonKeepOutCm = 300.0;
+	const FVector2D BodyExtent(TargetEnvelope.GetExtent());
+	const auto BodyOverlaps = [&](const FTransform& Pose, const FVector2D& Centre, const FVector2D& AxisX, const FVector2D& AxisY, const FVector2D& Half)
+	{
+		const FVector2D BodyCentre(Pose.TransformPosition(TargetEnvelope.GetCenter()));
+		const FVector2D BodyX(Pose.GetUnitAxis(EAxis::X)), BodyY(Pose.GetUnitAxis(EAxis::Y));
+		const FVector2D Between = Centre - BodyCentre;
+		for (const FVector2D& Axis : { BodyX, BodyY, AxisX, AxisY })
+		{
+			const double Reach = BodyExtent.X * FMath::Abs(Axis | BodyX) + BodyExtent.Y * FMath::Abs(Axis | BodyY) +
+				Half.X * FMath::Abs(Axis | AxisX) + Half.Y * FMath::Abs(Axis | AxisY);
+			if (FMath::Abs(Between | Axis) > Reach)
+			{
+				return false;
+			}
+		}
+		return true;
+	};
+	const auto ZoneBlocks = [&](const FTransform& Pose)
+	{
+		for (const FTransform& Pallet : ZonePallets)
+		{
+			const FVector2D Centre(Pallet.GetLocation()), AxisX(Pallet.GetUnitAxis(EAxis::X)), AxisY(Pallet.GetUnitAxis(EAxis::Y));
+			// A vehicle already touching the rectangle, such as one that picked up beside it, may still leave.
+			if (BodyOverlaps(Pose, Centre, AxisX, AxisY, FVector2D(ZonePalletHalf)) && !BodyOverlaps(Start, Centre, AxisX, AxisY, FVector2D(ZonePalletHalf)))
+			{
+				return true;
+			}
+		}
+		return false;
+	};
 	const auto HitsTarget = [&](const FTransform& Pose)
 	{
 		const FVector2D At(Pose.GetLocation());
@@ -441,26 +537,18 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 				return true;
 			}
 		}
-		if (!bGuardTarget)
+		if (ZoneBlocks(Pose))
 		{
-			return false;
+			return true;
 		}
-		const FVector2D BodyCentre(Pose.TransformPosition(TargetEnvelope.GetCenter()));
-		const FVector2D BodyExtent(TargetEnvelope.GetExtent());
-		const FVector2D BodyX(Pose.GetUnitAxis(EAxis::X)), BodyY(Pose.GetUnitAxis(EAxis::Y));
-		const FVector2D LoadCentre(TargetPose.GetLocation());
-		const FVector2D LoadX(TargetPose.GetUnitAxis(EAxis::X)), LoadY(TargetPose.GetUnitAxis(EAxis::Y));
-		const FVector2D Between = LoadCentre - BodyCentre;
-		for (const FVector2D& Axis : { BodyX, BodyY, LoadX, LoadY })
+		for (const FBox2D& Box : Remembered)
 		{
-			const double Reach = BodyExtent.X * FMath::Abs(Axis | BodyX) + BodyExtent.Y * FMath::Abs(Axis | BodyY) +
-				TargetHalf * (FMath::Abs(Axis | LoadX) + FMath::Abs(Axis | LoadY));
-			if (FMath::Abs(Between | Axis) > Reach)
+			if (BodyOverlaps(Pose, Box.GetCenter(), FVector2D(1.0, 0.0), FVector2D(0.0, 1.0), Box.GetExtent()))
 			{
-				return false;
+				return true;
 			}
 		}
-		return true;
+		return bGuardTarget && BodyOverlaps(Pose, FVector2D(TargetPose.GetLocation()), FVector2D(TargetPose.GetUnitAxis(EAxis::X)), FVector2D(TargetPose.GetUnitAxis(EAxis::Y)), FVector2D(TargetHalf));
 	};
 	// A vehicle stopped close to something, as after a withdrawal, has to leave it: the first stretch only needs the real body clear.
 	FWarehouseNavigationQuery EscapeQuery = Query;
@@ -470,7 +558,8 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 	const auto FullyClear = [&](const FTransform& Pose)
 	{
 		const bool bEscape = bStartBlocked && FVector2D::DistSquared(FVector2D(Pose.GetLocation()), StartXY) < EscapeCm * EscapeCm;
-		return NavigationClear(Pose, bEscape ? &EscapeQuery : &Query);
+		// The tip of a fork that stopped beside something can stay inside even the reduced box while backing off: then the real parts decide.
+		return NavigationClear(Pose, bEscape ? &EscapeQuery : &Query) || (bEscape && PhysicalPoseClear(Pose, true));
 	};
 
 	// Collision: far from every obstacle only the floor and traffic need asking; otherwise the same query as the old planner.
@@ -582,6 +671,34 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 			{
 				continue;
 			}
+			// Moves are checked here, when the search reaches them, not when they are proposed: most proposals are never reached,
+			// and checking them all spent the whole query budget a few metres into a search (2026-10-31).
+			if (Node.Parent != INDEX_NONE)
+			{
+				const FNode& From = Nodes[Node.Parent];
+				bool bMoveClear = true;
+				if (Node.Mode == MoveTurn)
+				{
+					const FVector2D Wheel = Axle(0.0, 0.0, From.Yaw) + FVector2D(From.X, From.Y);
+					const int32 Samples = FMath::Max(1, FMath::CeilToInt32(FMath::Abs(Node.TurnAngle) / 5.0));
+					for (int32 I = 1; I <= Samples && bMoveClear; ++I)
+					{
+						const double Yaw = From.Yaw + Node.TurnAngle * I / Samples;
+						const FVector2D At = Wheel - Axle(0.0, 0.0, Yaw);
+						bMoveClear = PoseClear(At.X, At.Y, Yaw);
+					}
+				}
+				else
+				{
+					bMoveClear = SweepClear(From.X, From.Y, From.Yaw, Node.Curvature, (Node.Mode == MoveForward ? 1.0 : -1.0) * Node.Length);
+				}
+				if (!bMoveClear)
+				{
+					// Another way into the same cell may still be clear.
+					Best.Remove(Key(Node.X, Node.Y, Node.Yaw, Node.Mode));
+					continue;
+				}
+			}
 			++Local;
 			if ((Local & 255) == 0)
 			{
@@ -641,7 +758,7 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 				}
 			}
 			const double Clearance = Field.ClearanceAt(Node.X, Node.Y);
-			const auto Push = [&](double X, double Y, double Yaw, double Curvature, double Length, uint8 Mode, int8 TurnSign, double Cost)
+			const auto Push = [&](double X, double Y, double Yaw, double Curvature, double Length, uint8 Mode, int8 TurnSign, double Cost, double TurnAngle = 0.0)
 			{
 				const double H = Heuristic(X, Y);
 				if (H >= Unreached)
@@ -660,7 +777,7 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 				Best.Add(NodeKey, G);
 				FNode Child;
 				Child.X = X; Child.Y = Y; Child.Yaw = Yaw; Child.G = G; Child.Parent = Top.Node;
-				Child.Curvature = Curvature; Child.Length = Length; Child.Mode = Mode; Child.TurnSign = TurnSign;
+				Child.Curvature = Curvature; Child.Length = Length; Child.Mode = Mode; Child.TurnSign = TurnSign; Child.TurnAngle = TurnAngle;
 				const int32 Index = Nodes.Add(Child);
 				Open.HeapPush({ (float)(G + SearchWeight * H), Index });
 			};
@@ -670,10 +787,7 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 				const double Change = (Node.Mode == MoveForward || Node.Mode == MoveReverse) && Node.Mode != Mode ? Spec.StopGo : 0.0;
 				const double Step = Clearance > LongStepClearanceCm ? LongStepCm : StepCm;
 				const double Theta = FMath::DegreesToRadians(Node.Yaw);
-				if (SweepClear(Node.X, Node.Y, Node.Yaw, 0.0, Sign * Step))
-				{
-					Push(Node.X + Sign * Step * FMath::Cos(Theta), Node.Y + Sign * Step * FMath::Sin(Theta), Node.Yaw, 0.0, Step, Mode, 0, Change + Spec.Travel(Step, 0.0, Mode == MoveReverse));
-				}
+				Push(Node.X + Sign * Step * FMath::Cos(Theta), Node.Y + Sign * Step * FMath::Sin(Theta), Node.Yaw, 0.0, Step, Mode, 0, Change + Spec.Travel(Step, 0.0, Mode == MoveReverse));
 				for (const double Radius : { ArcRadiusTight, ArcRadiusWide })
 				{
 					for (const double Side : { 1.0, -1.0 })
@@ -688,12 +802,9 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 						const double Length = FMath::Abs(Sweep) * Radius;
 						const double Curvature = Sign * Sweep / Length;
 						const double Signed = Sign * Length;
-						if (SweepClear(Node.X, Node.Y, Node.Yaw, Curvature, Signed))
-						{
-							const double Next = Theta + Curvature * Signed;
-							Push(Node.X + (FMath::Sin(Next) - FMath::Sin(Theta)) / Curvature, Node.Y - (FMath::Cos(Next) - FMath::Cos(Theta)) / Curvature, NextYaw, Curvature, Length, Mode, 0,
-								Change + Spec.Travel(Length, Curvature, Mode == MoveReverse));
-						}
+						const double Next = Theta + Curvature * Signed;
+						Push(Node.X + (FMath::Sin(Next) - FMath::Sin(Theta)) / Curvature, Node.Y - (FMath::Cos(Next) - FMath::Cos(Theta)) / Curvature, NextYaw, Curvature, Length, Mode, 0,
+							Change + Spec.Travel(Length, Curvature, Mode == MoveReverse));
 					}
 				}
 			}
@@ -711,19 +822,8 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 					continue;
 				}
 				const FVector2D Wheel = Axle(0.0, 0.0, Node.Yaw) + FVector2D(Node.X, Node.Y);
-				bool bClear = true;
-				const int32 Samples = FMath::Max(1, FMath::CeilToInt32(FMath::Abs(Angle) / 5.0));
-				FVector2D End(Node.X, Node.Y);
-				for (int32 I = 1; I <= Samples && bClear; ++I)
-				{
-					const double Yaw = Node.Yaw + Angle * I / Samples;
-					End = Wheel - Axle(0.0, 0.0, Yaw);
-					bClear = PoseClear(End.X, End.Y, Yaw);
-				}
-				if (bClear)
-				{
-					Push(End.X, End.Y, NextYaw, 0.0, 0.0, MoveTurn, TurnSign, FMath::DegreesToRadians(FMath::Abs(Angle)) / Spec.TurnRate + (Node.Mode == MoveTurn ? 0.0 : Spec.TurnEntry));
-				}
+				const FVector2D End = Wheel - Axle(0.0, 0.0, Node.Yaw + Angle);
+				Push(End.X, End.Y, NextYaw, 0.0, 0.0, MoveTurn, TurnSign, FMath::DegreesToRadians(FMath::Abs(Angle)) / Spec.TurnRate + (Node.Mode == MoveTurn ? 0.0 : Spec.TurnEntry), Angle);
 			}
 		}
 		Expansions += Local;

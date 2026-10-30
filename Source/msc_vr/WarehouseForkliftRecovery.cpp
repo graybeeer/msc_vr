@@ -183,6 +183,34 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  RecoveryDirection=bRetryInsertion || From==EWarehouseAIState::WithdrawFork || FailedDeliveryRoute || FloorAlignmentRetry ? -1.f : -LastDriveDirection;
  if (ChargerForwardRecovery) RecoveryDirection=1.f;
  RecoveryDistance=150.f;
+ // "Away from where it was driving" is not always away from what stopped it: a vehicle reversing past a pallet with its forks
+ // beside it pushed that pallet round while backing off forward (2026-10-31). Take the way that is actually free of what was sensed.
+ if (SensorMode==EWarehouseSensorMode::Autonomous && !bRetryInsertion && !ChargerForwardRecovery && !FloorAlignmentRetry && From!=EWarehouseAIState::WithdrawFork)
+ {
+  const FBox Body=NavigationEnvelope();
+  const TArray<AActor*> Loads=GetPhysicalLoads();
+  auto WayFree=[&](float Direction)
+  {
+   for (float Along : {40.f,80.f,120.f,160.f})
+   {
+    FTransform Pose=GetActorTransform();
+    Pose.AddToTranslation(GetActorForwardVector().GetSafeNormal2D()*Direction*Along);
+    if (!PerceivedBoxClear(Pose,Body,Loads)) return false;
+    if (FleetCoordinator)
+    {
+     const FBox World=Body.TransformBy(Pose.ToMatrixWithScale());
+     for (const auto& Pair : FleetCoordinator->SeenObstacles)
+      if (!Loads.Contains(Pair.Key.Get()) && Pair.Value.Bounds.Intersect(World)) return false;
+    }
+   }
+   return true;
+  };
+  if (!WayFree(RecoveryDirection) && WayFree(-RecoveryDirection))
+  {
+   UE_LOG(LogTemp,Log,TEXT("AGV_RECOVERY_DIRECTION_SWAPPED %s to %.0f"),*VehicleName,-RecoveryDirection);
+   RecoveryDirection=-RecoveryDirection;
+  }
+ }
  if (bRetryInsertion)
  {
   // Leave enough steering distance for a new alignment after real contact drift.

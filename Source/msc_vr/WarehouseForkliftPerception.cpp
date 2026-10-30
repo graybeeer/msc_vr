@@ -158,6 +158,18 @@ void AWarehouseForklift::UpdateSensorSnapshot()
   if (It.Key()!=ActiveJob.JobId && !PendingJobs.ContainsByPredicate([&](const FWarehouseWorkOrder& Job) { return Job.JobId==It.Key(); })) It.RemoveCurrent();
  bObservedTargetValid=false;
  if (!SensorKit->RefreshSnapshot(GetWorld()->GetTimeSeconds(),FloorBase(GetActorLocation().Z))) return;
+ if (!FleetCoordinator) FleetCoordinator=AWarehouseFleetCoordinator::Find(this);
+ if (FleetCoordinator)
+ {
+  const TArray<AActor*> Loads=GetPhysicalLoads();
+  for (const auto& Obstacle : SensorKit->GetObservedObstacles())
+   if (!Obstacle.bPerson && Obstacle.Actor.IsValid() && Obstacle.Actor.Get()!=this && !Cast<AWarehouseForklift>(Obstacle.Actor.Get()) &&
+       !Loads.Contains(Obstacle.Actor.Get()) && Obstacle.WorldBounds.IsValid)
+   {
+    auto& Seen=FleetCoordinator->SeenObstacles.FindOrAdd(Obstacle.Actor);
+    Seen.Bounds=Obstacle.WorldBounds;Seen.Seen=GetWorld()->GetTimeSeconds();
+   }
+ }
  // Existing close-range pallet-model recognition remains a dedicated sensor:
  // range, FOV, actual visibility and the common scan must all confirm it.
  // Its model-fit pose is cached only on this frame, never polled while hidden.
