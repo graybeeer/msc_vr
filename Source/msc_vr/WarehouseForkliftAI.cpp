@@ -1,4 +1,5 @@
 #include "WarehouseForklift.h"
+#include "WarehouseForkliftNavQuery.h"
 #include "WarehousePerformance.h"
 #include "WarehouseExperimentMetrics.h"
 #include "WarehouseExperimentSubsystem.h"
@@ -34,25 +35,11 @@ static TAutoConsoleVariable<int32> CVarOptIntermediatePivot(TEXT("Warehouse.Opt.
 static TAutoConsoleVariable<int32> CVarOptAlign(TEXT("Warehouse.Opt.Align"),1,TEXT("1: relaxed fork alignment tolerances and arrival-first decision before insertion."));
 static TAutoConsoleVariable<float> CVarOptArrivalTol(TEXT("Warehouse.Opt.ArrivalTol"),8.f,TEXT("Position tolerance (cm) for ordinary lane-pose arrival. 5 made the bearing of a few-cm offset flip with noise and the vehicle swung left/right in place."));
 
+static TAutoConsoleVariable<int32> CVarHybridPlanner(TEXT("Warehouse.Nav.HybridPlanner"),1,TEXT("1: time-optimal hybrid A* route search, falling back to the lane graph; 0: lane graph only."));
 static TAutoConsoleVariable<int32> CVarWarehouseGeometryPruning(TEXT("Warehouse.NavigationGeometryPruning"),1,
  TEXT("Reject unexecutable curves before native collision queries; 0 preserves the reference query order."));
 
 // Each synchronous plan owns its query setup; every native collision check stays live.
-struct FWarehouseNavigationQuery
-{
- FCollisionQueryParams Params;
- FBox Envelope;
- FVector Pivot;
- bool bHasPivot;
- TArray<AActor*> PerceptionIgnored;
- FVector DiagnosticGoal=FVector::ZeroVector;
- bool bDiagnostics=false;
- bool bInsertionRetryEscape=false;
- bool bObservedPickupEscape=false;
- mutable uint8 GoalBlockReports=0;
- bool bGeometryFirst=false;
- mutable uint32 GeometryRejectedCandidates=0;
-};
 
 FString AWarehouseForklift::CheckSystems(bool bIncludeAutonomySensors) const
 {
@@ -458,6 +445,24 @@ bool AWarehouseForklift::ConnectLanePoses(const FTransform& Start,const FTransfo
  }
  return Cost<FLT_MAX;
 }
+FString AWarehouseForklift::BenchRoutePlan(const FTransform& Goal,bool bHybrid)
+{
+ const auto SavedRoute=PlannedRoute;const int32 SavedIndex=RouteIndex,SavedEndpoint=EndpointSegment;
+ const bool SavedDriving=bEndpointDriving,SavedOrienting=bEndpointOrienting,SavedTurning=bRouteTurning;
+ PlannerOverride=bHybrid ? 1 : 0;LastPlanReport.Reset();
+ const FTransform Start=bUseAgvLocalization ? NavigationTransform() : GetActorTransform();
+ const uint32 Queries=WarehouseNavigationQueryCount;
+ const double Begin=FPlatformTime::Seconds();
+ const bool Found=PlanAutonomousRoute(Goal);
+ const double Ms=(FPlatformTime::Seconds()-Begin)*1000.0;
+ float Length=0,Turned=0;int32 Flips=0;
+ const float Time=Found ? RouteTimeSeconds(PlannedRoute,Start,&Length,&Turned,&Flips) : -1.f;
+ const FString Out=FString::Printf(TEXT("found=%d time=%.1f len=%.0f turn=%.0f flips=%d ms=%.0f queries=%u %s"),Found,Time,Length,Turned,Flips,Ms,WarehouseNavigationQueryCount-Queries,*LastPlanReport);
+ PlannerOverride=-1;
+ PlannedRoute=SavedRoute;RouteIndex=SavedIndex;EndpointSegment=SavedEndpoint;
+ bEndpointDriving=SavedDriving;bEndpointOrienting=SavedOrienting;bRouteTurning=SavedTurning;
+ return Out;
+}
 bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
 {
  RouteObstacleSnapshot=INDEX_NONE;
@@ -524,6 +529,19 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
   }
  };
  PlannedRoute.Reset(); RouteIndex=0;bEndpointDriving=false;bEndpointOrienting=false;bRouteTurning=false;EndpointSegment=-1;
+ // Precise docking and alignment stay on the short lane connections they were tuned with.
+ const bool PreciseState=AIState==EWarehouseAIState::AlignVehicle || AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::ElevatorApproach ||
+  AIState==EWarehouseAIState::DockCharge || AIState==EWarehouseAIState::NavigateCharge;
+ const bool UseHybrid=SensorMode==EWarehouseSensorMode::Autonomous && !PreciseState && (PlannerOverride>=0 ? PlannerOverride>0 : CVarHybridPlanner.GetValueOnGameThread()!=0);
+ if (UseHybrid)
+ {
+  FString HybridReport;
+  const bool HybridFound=PlanHybridRoute(StartPose,Goal,Query,PlannedRoute,&HybridReport);
+  LastPlanReport=HybridReport;
+  if (HybridFound) { Found=true;return true; }
+  PlannedRoute.Reset();
+  if (PlannerOverride>0) return false;
+ }
  float DirectCost;
  if (ConnectLanePoses(StartPose,Goal,PlannedRoute,DirectCost,&Query)) { Found=true;return true; }
  // Pose graph: each edge is a swept, curvature-limited cubic. Anchors describe warehouse travel lanes.

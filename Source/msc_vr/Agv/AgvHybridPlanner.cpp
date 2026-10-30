@@ -1,0 +1,720 @@
+// Time-optimal route search for the forklift: a hybrid A* over arcs, straights and turns on the spot, in place of the fixed
+#include "Algo/Reverse.h"
+// lane anchors of PlanAutonomousRoute. Switch with Warehouse.Nav.HybridPlanner. See LOCALIZATION_HANDOFF.md 9-6.
+#include "WarehouseForklift.h"
+#include "WarehouseForkliftNavQuery.h"
+#include "WarehouseFleetCoordinator.h"
+#include "WarehousePallet.h"
+#include "AgvShadowSensors.h"
+#include "HAL/PlatformTime.h"
+
+namespace AgvHybrid
+{
+	constexpr double CellCm = 25.0;
+	constexpr double HeadingDeg = 15.0;
+	constexpr int32 HeadingBins = 24;
+	constexpr double ArcRadiusTight = 130.0; // the planner's curvature limit is 117.3 cm
+	constexpr double ArcRadiusWide = 260.0;
+	constexpr double StepCm = 40.0;
+	constexpr double LongStepCm = 120.0;
+	constexpr double LongStepClearanceCm = 450.0;
+	constexpr double HeuristicInflateCm = 55.0;
+	constexpr double HeuristicFreeNearCm = 250.0;
+	constexpr double ReversePenalty = 1.05;
+	constexpr double SearchWeight = 1.5;
+	constexpr double AnalyticRangeCm = 1200.0;
+	constexpr int32 MaxExpansions = 30000;
+	constexpr int32 MaxAnalyticTries = 40;
+	constexpr int32 ExtraExpansionsAfterFound = 1500;
+	constexpr double MaxSearchSeconds = 0.5;
+	constexpr int32 MaxSearches = 3;
+	constexpr float Unreached = 1e9f;
+
+	enum EMode : uint8 { MoveForward, MoveReverse, MoveTurn, MoveRest };
+
+	/** Time per route element, from the speed limits of the route follower. Limits themselves stay in FollowRoute. */
+	struct FSpec
+	{
+		double Speed = 180.0;
+		double LateralAccel = 80.0;
+		double TurnRate = 0.4;
+		double StopGo = 2.0;
+		double TurnEntry = 3.0;
+
+		double Travel(double Length, double Curvature, bool bReverse) const
+		{
+			const double Limit = FMath::Abs(Curvature) > 1e-6 ? FMath::Min(Speed, FMath::Sqrt(LateralAccel / FMath::Abs(Curvature))) : Speed;
+			return Length / Limit * (bReverse ? ReversePenalty : 1.0);
+		}
+	};
+
+	/** Obstacle grid of one plan: clearance for cheap collision checks, drive time to the goal as the heuristic. */
+	struct FGrid
+	{
+		FVector2D Origin = FVector2D::ZeroVector;
+		int32 Width = 0, Height = 0;
+		TArray<uint8> Occupied;
+		TArray<float> Clearance;
+		TArray<float> GoalTime;
+		bool bGoalTimeUsable = false;
+
+		bool Cell(double X, double Y, int32& OutX, int32& OutY) const
+		{
+			OutX = FMath::FloorToInt32((X - Origin.X) / CellCm);
+			OutY = FMath::FloorToInt32((Y - Origin.Y) / CellCm);
+			return OutX >= 0 && OutY >= 0 && OutX < Width && OutY < Height;
+		}
+		int32 Index(int32 X, int32 Y) const { return Y * Width + X; }
+		float ClearanceAt(double X, double Y) const
+		{
+			int32 CX, CY;
+			return Cell(X, Y, CX, CY) ? Clearance[Index(CX, CY)] : 0.f;
+		}
+	};
+
+	struct FNode
+	{
+		double X = 0, Y = 0, Yaw = 0;
+		float G = 0;
+		int32 Parent = INDEX_NONE;
+		double Curvature = 0, Length = 0;
+		uint8 Mode = MoveRest;
+		int8 TurnSign = 0;
+	};
+
+	struct FOpen
+	{
+		float F;
+		int32 Node;
+		bool operator<(const FOpen& Other) const { return F < Other.F; }
+	};
+
+	static void Rasterize(FGrid& Field, const FAgvObservedObstacle& Entry)
+	{
+		const FBox2D World(FVector2D(Entry.WorldBounds.Min), FVector2D(Entry.WorldBounds.Max));
+		int32 X0, Y0, X1, Y1;
+		Field.Cell(World.Min.X, World.Min.Y, X0, Y0);
+		Field.Cell(World.Max.X, World.Max.Y, X1, Y1);
+		X0 = FMath::Clamp(X0, 0, Field.Width - 1); X1 = FMath::Clamp(X1, 0, Field.Width - 1);
+		Y0 = FMath::Clamp(Y0, 0, Field.Height - 1); Y1 = FMath::Clamp(Y1, 0, Field.Height - 1);
+		const bool bLocal = Entry.LocalBounds.IsValid != 0;
+		for (int32 Y = Y0; Y <= Y1; ++Y)
+		{
+			for (int32 X = X0; X <= X1; ++X)
+			{
+				const FVector Centre(Field.Origin.X + (X + 0.5) * CellCm, Field.Origin.Y + (Y + 0.5) * CellCm, 0.0);
+				bool bInside = true;
+				if (bLocal)
+				{
+					const FVector Local = Entry.ObservedTransform.InverseTransformPosition(FVector(Centre.X, Centre.Y, Entry.ObservedTransform.GetLocation().Z));
+					bInside = Local.X >= Entry.LocalBounds.Min.X - CellCm && Local.X <= Entry.LocalBounds.Max.X + CellCm &&
+						Local.Y >= Entry.LocalBounds.Min.Y - CellCm && Local.Y <= Entry.LocalBounds.Max.Y + CellCm;
+				}
+				if (bInside)
+				{
+					Field.Occupied[Field.Index(X, Y)] = 1;
+				}
+			}
+		}
+	}
+
+	/** Two-pass chamfer distance in cm. Overestimates true distance by up to 8%; the caller keeps that as margin. */
+	static void BuildClearance(FGrid& Field)
+	{
+		const float Straight = (float)CellCm, Diagonal = (float)(CellCm * 1.4142);
+		Field.Clearance.Init(Unreached, Field.Occupied.Num());
+		for (int32 I = 0; I < Field.Occupied.Num(); ++I)
+		{
+			if (Field.Occupied[I])
+			{
+				Field.Clearance[I] = 0.f;
+			}
+		}
+		auto Relax = [&](int32 X, int32 Y, int32 DX, int32 DY, float Step)
+		{
+			const int32 NX = X + DX, NY = Y + DY;
+			if (NX >= 0 && NY >= 0 && NX < Field.Width && NY < Field.Height)
+			{
+				float& Value = Field.Clearance[Field.Index(X, Y)];
+				Value = FMath::Min(Value, Field.Clearance[Field.Index(NX, NY)] + Step);
+			}
+		};
+		for (int32 Y = 0; Y < Field.Height; ++Y)
+		{
+			for (int32 X = 0; X < Field.Width; ++X)
+			{
+				Relax(X, Y, -1, 0, Straight); Relax(X, Y, 0, -1, Straight); Relax(X, Y, -1, -1, Diagonal); Relax(X, Y, 1, -1, Diagonal);
+			}
+		}
+		for (int32 Y = Field.Height - 1; Y >= 0; --Y)
+		{
+			for (int32 X = Field.Width - 1; X >= 0; --X)
+			{
+				Relax(X, Y, 1, 0, Straight); Relax(X, Y, 0, 1, Straight); Relax(X, Y, 1, 1, Diagonal); Relax(X, Y, -1, 1, Diagonal);
+			}
+		}
+	}
+
+	/** Drive time from every cell to the goal around inflated obstacles. Reports whether the start can reach the goal. */
+	static void BuildGoalTime(FGrid& Field, const FVector2D& Start, const FVector2D& Goal, double Speed)
+	{
+		Field.GoalTime.Init(Unreached, Field.Occupied.Num());
+		int32 GX, GY, SX, SY;
+		if (!Field.Cell(Goal.X, Goal.Y, GX, GY) || !Field.Cell(Start.X, Start.Y, SX, SY))
+		{
+			return;
+		}
+		struct FItem { float T; int32 I; bool operator<(const FItem& O) const { return T < O.T; } };
+		TArray<FItem> Heap;
+		Field.GoalTime[Field.Index(GX, GY)] = 0.f;
+		Heap.HeapPush({ 0.f, Field.Index(GX, GY) });
+		const float Straight = (float)(CellCm / Speed), Diagonal = (float)(CellCm * 1.4142 / Speed);
+		const double NearSquared = HeuristicFreeNearCm * HeuristicFreeNearCm;
+		while (Heap.Num())
+		{
+			FItem Item;
+			Heap.HeapPop(Item, EAllowShrinking::No);
+			if (Item.T > Field.GoalTime[Item.I])
+			{
+				continue;
+			}
+			const int32 CX = Item.I % Field.Width, CY = Item.I / Field.Width;
+			for (int32 DY = -1; DY <= 1; ++DY)
+			{
+				for (int32 DX = -1; DX <= 1; ++DX)
+				{
+					const int32 NX = CX + DX, NY = CY + DY;
+					if ((!DX && !DY) || NX < 0 || NY < 0 || NX >= Field.Width || NY >= Field.Height)
+					{
+						continue;
+					}
+					const int32 Next = Field.Index(NX, NY);
+					if (Field.Clearance[Next] < HeuristicInflateCm)
+					{
+						const FVector2D P(Field.Origin.X + (NX + 0.5) * CellCm, Field.Origin.Y + (NY + 0.5) * CellCm);
+						if (FVector2D::DistSquared(P, Goal) > NearSquared && FVector2D::DistSquared(P, Start) > NearSquared)
+						{
+							continue;
+						}
+					}
+					const float T = Item.T + (DX && DY ? Diagonal : Straight);
+					if (T < Field.GoalTime[Next])
+					{
+						Field.GoalTime[Next] = T;
+						Heap.HeapPush({ T, Next });
+					}
+				}
+			}
+		}
+		Field.bGoalTimeUsable = Field.GoalTime[Field.Index(SX, SY)] < Unreached;
+	}
+
+	/** Point at signed arc length S along a constant-curvature move. */
+	static FORCENOINLINE void ArcPoint(double X, double Y, double Yaw, double Curvature, double S, double& OutX, double& OutY, double& OutYaw)
+	{
+		const double Theta = FMath::DegreesToRadians(Yaw);
+		if (FMath::Abs(Curvature) < 1e-6)
+		{
+			OutX = X + S * FMath::Cos(Theta);
+			OutY = Y + S * FMath::Sin(Theta);
+			OutYaw = Yaw;
+			return;
+		}
+		const double Next = Theta + Curvature * S;
+		OutX = X + (FMath::Sin(Next) - FMath::Sin(Theta)) / Curvature;
+		OutY = Y - (FMath::Cos(Next) - FMath::Cos(Theta)) / Curvature;
+		OutYaw = FMath::RadiansToDegrees(Next);
+	}
+
+	static double Snap(double Yaw)
+	{
+		return FMath::GridSnap(Yaw, HeadingDeg);
+	}
+
+	static uint64 Key(double X, double Y, double Yaw, uint8 Mode)
+	{
+		const int32 CX = FMath::FloorToInt32(X / CellCm) + 100000, CY = FMath::FloorToInt32(Y / CellCm) + 100000;
+		const int32 Bin = FMath::RoundToInt32(FRotator::ClampAxis(Yaw) / HeadingDeg) % HeadingBins;
+		return (uint64(CX) << 36) | (uint64(CY) << 8) | (uint64(Bin) << 2) | Mode;
+	}
+}
+
+float AWarehouseForklift::RouteTimeSeconds(const TArray<FWarehouseRoutePoint>& Route, const FTransform& Start, float* OutLength, float* OutTurnDegrees, int32* OutFlips) const
+{
+	using namespace AgvHybrid;
+	const FSpec Spec = bSupportingPallet ? FSpec{ FMath::Min(100.0, (double)LoadedTravelSpeedCm), 40.0, 0.3, 1.33, 2.33 } : FSpec{ FMath::Min(180.0, (double)EmptyTravelSpeedCm), 80.0, 0.4, 2.0, 3.0 };
+	double Time = 0, Length = 0, Turned = 0;
+	int32 Flips = 0;
+	uint8 Mode = MoveRest;
+	FTransform Previous = Start;
+	for (const FWarehouseRoutePoint& Point : Route)
+	{
+		const double DeltaYaw = FMath::Abs(FMath::FindDeltaAngleDegrees(Previous.Rotator().Yaw, Point.Pose.Rotator().Yaw));
+		if (Point.bPivot)
+		{
+			Time += FMath::DegreesToRadians(DeltaYaw) / Spec.TurnRate + (Mode == MoveTurn ? 0.0 : Spec.TurnEntry);
+			Turned += DeltaYaw;
+			Mode = MoveTurn;
+		}
+		else
+		{
+			const double Segment = FVector::Dist2D(Previous.GetLocation(), Point.Pose.GetLocation());
+			if (Segment > 0.01)
+			{
+				const uint8 Move = Point.bReverse ? MoveReverse : MoveForward;
+				if (Mode != Move && Mode != MoveRest && Mode != MoveTurn)
+				{
+					Time += Spec.StopGo;
+					++Flips;
+				}
+				Mode = Move;
+				Time += Spec.Travel(Segment, FMath::DegreesToRadians(DeltaYaw) / Segment, Point.bReverse);
+				Length += Segment;
+				Turned += DeltaYaw;
+			}
+		}
+		Previous = Point.Pose;
+	}
+	if (OutLength) *OutLength = (float)Length;
+	if (OutTurnDegrees) *OutTurnDegrees = (float)Turned;
+	if (OutFlips) *OutFlips = Flips;
+	return (float)Time;
+}
+
+bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransform& Goal, const FWarehouseNavigationQuery& Query, TArray<FWarehouseRoutePoint>& OutRoute, FString* OutReport) const
+{
+	using namespace AgvHybrid;
+	OutRoute.Reset();
+	if (!SensorKit || !Query.bHasPivot || FMath::Abs(Start.GetLocation().Z - Goal.GetLocation().Z) > 1.0)
+	{
+		return false;
+	}
+	const double StartedAt = FPlatformTime::Seconds();
+	const double BaseZ = Start.GetLocation().Z;
+	const FSpec Spec = bSupportingPallet ? FSpec{ FMath::Min(100.0, (double)LoadedTravelSpeedCm), 40.0, 0.3, 1.33, 2.33 } : FSpec{ FMath::Min(180.0, (double)EmptyTravelSpeedCm), 80.0, 0.4, 2.0, 3.0 };
+	const FVector2D StartXY(Start.GetLocation()), GoalXY(Goal.GetLocation());
+	const auto Ignored = [&](const FAgvObservedObstacle& Entry)
+	{
+		return Entry.Actor.Get() == this || Query.PerceptionIgnored.Contains(Entry.Actor.Get());
+	};
+
+	// The obstacle grid.
+	const auto RelevantKnown = [&](const FAgvObservedObstacle& Entry)
+	{
+		if (!Entry.WorldBounds.IsValid || Ignored(Entry) || Entry.WorldBounds.Max.Z <= BaseZ + Query.Envelope.Min.Z || Entry.WorldBounds.Min.Z >= BaseZ + Query.Envelope.Max.Z)
+		{
+			return false;
+		}
+		const FVector Size = Entry.WorldBounds.GetSize();
+		return Size.X * Size.Y < 400.0 * 10000.0; // a building-sized part is not a footprint; NavigationClear still tests its real shape
+	};
+	FBox2D Bounds(ForceInit);
+	Bounds += StartXY;
+	Bounds += GoalXY;
+	for (const FAgvObservedObstacle& Entry : SensorKit->GetKnownObstacles())
+	{
+		if (RelevantKnown(Entry))
+		{
+			Bounds += FVector2D(Entry.WorldBounds.Min);
+			Bounds += FVector2D(Entry.WorldBounds.Max);
+		}
+	}
+	FGrid Field;
+	Field.Origin = Bounds.Min - FVector2D(600.0);
+	Field.Width = FMath::CeilToInt32((Bounds.Max.X - Bounds.Min.X + 1200.0) / CellCm);
+	Field.Height = FMath::CeilToInt32((Bounds.Max.Y - Bounds.Min.Y + 1200.0) / CellCm);
+	if ((int64)Field.Width * Field.Height > 2000000)
+	{
+		return false;
+	}
+	Field.Occupied.Init(0, Field.Width * Field.Height);
+	for (const FAgvObservedObstacle& Entry : SensorKit->GetKnownObstacles())
+	{
+		if (RelevantKnown(Entry))
+		{
+			Rasterize(Field, Entry);
+		}
+	}
+	for (const FAgvObservedObstacle& Entry : SensorKit->GetObservedObstacles())
+	{
+		if (Ignored(Entry))
+		{
+			continue;
+		}
+		for (const FVector& Point : Entry.WorldPoints)
+		{
+			int32 CX, CY;
+			if (Point.Z > BaseZ + Query.Envelope.Min.Z && Point.Z < BaseZ + Query.Envelope.Max.Z && Field.Cell(Point.X, Point.Y, CX, CY))
+			{
+				Field.Occupied[Field.Index(CX, CY)] = 1;
+			}
+		}
+	}
+	BuildClearance(Field);
+	BuildGoalTime(Field, StartXY, GoalXY, Spec.Speed);
+	const double BuildMs = (FPlatformTime::Seconds() - StartedAt) * 1000.0;
+
+	// A pallet about to be picked up may be out of the sensors' view. The job says where it stands: do not drive through it.
+	const bool bGuardTarget = !bSupportingPallet && IsValid(TargetPallet) && !Query.PerceptionIgnored.Contains(TargetPallet);
+	const FTransform TargetPose = bGuardTarget ? TaskSourcePose() : FTransform::Identity;
+	const auto HitsTarget = [&](const FTransform& Pose)
+	{
+		if (!bGuardTarget)
+		{
+			return false;
+		}
+		const FBox2D Local(FVector2D(Query.Envelope.Min), FVector2D(Query.Envelope.Max));
+		for (const double CX : { -65.0, 65.0 })
+		{
+			for (const double CY : { -65.0, 65.0 })
+			{
+				const FVector P = Pose.InverseTransformPosition(TargetPose.TransformPosition(FVector(CX, CY, 0.0)));
+				if (P.X >= Local.Min.X && P.X <= Local.Max.X && P.Y >= Local.Min.Y && P.Y <= Local.Max.Y)
+				{
+					return true;
+				}
+			}
+		}
+		return FVector2D::DistSquared(FVector2D(Pose.GetLocation()), FVector2D(TargetPose.GetLocation())) < 65.0 * 65.0;
+	};
+
+	// Collision: far from every obstacle only the floor and traffic need asking; otherwise the same query as the old planner.
+	const double Circumradius = FVector2D(FMath::Max(FMath::Abs(Query.Envelope.Min.X), FMath::Abs(Query.Envelope.Max.X)),
+		FMath::Max(FMath::Abs(Query.Envelope.Min.Y), FMath::Abs(Query.Envelope.Max.Y))).Size();
+	const float FreeClearance = (float)(Circumradius * 1.1 + CellCm * 1.5);
+	TMap<int64, bool> FloorCache;
+	int32 NativeQueries = 0;
+	const auto PoseClear = [&](double X, double Y, double Yaw)
+	{
+		const FTransform Pose(FRotator(0.0, Yaw, 0.0), FVector(X, Y, BaseZ));
+		const bool bNearStart = FVector2D::DistSquared(FVector2D(X, Y), StartXY) < 60.0 * 60.0;
+		if (!bNearStart && HitsTarget(Pose))
+		{
+			return false;
+		}
+		if (Field.ClearanceAt(X, Y) > FreeClearance)
+		{
+			if (FleetCoordinator && !FleetCoordinator->PlanningClear(this, Query.Envelope.TransformBy(Pose.ToMatrixWithScale())))
+			{
+				return false;
+			}
+			const int64 FloorKey = (int64(FMath::FloorToInt32(X / 50.0)) << 32) ^ int64(uint32(FMath::FloorToInt32(Y / 50.0)));
+			if (const bool* Known = FloorCache.Find(FloorKey))
+			{
+				return *Known;
+			}
+			const bool bFloor = PerceivedFloorSupport(FVector(X, Y, BaseZ));
+			FloorCache.Add(FloorKey, bFloor);
+			return bFloor;
+		}
+		++NativeQueries;
+		return NavigationClear(Pose, &Query);
+	};
+	const auto SweepClear = [&](double X, double Y, double Yaw, double Curvature, double Signed)
+	{
+		const int32 Samples = FMath::Max(1, FMath::CeilToInt32(FMath::Abs(Signed) / 15.0));
+		for (int32 I = 1; I <= Samples; ++I)
+		{
+			const double S = Signed * I / Samples;
+			double PX, PY, PYaw;
+			ArcPoint(X, Y, Yaw, Curvature, S, PX, PY, PYaw);
+			if (!PoseClear(PX, PY, PYaw))
+			{
+				return false;
+			}
+		}
+		return true;
+	};
+	const auto Axle = [&](double X, double Y, double Yaw)
+	{
+		return FVector2D(X, Y) + FVector2D(FRotator(0.0, Yaw, 0.0).RotateVector(Query.Pivot));
+	};
+
+	int32 Expansions = 0, AnalyticTries = 0, Searches = 0;
+	TArray<FNode> Nodes;
+	TArray<FWarehouseRoutePoint> BestRoute;
+	bool bValid = false;
+	bool bTimedOut = false;
+	for (; Searches < MaxSearches && !bValid && !bTimedOut; ++Searches)
+	{
+		Nodes.Reset();
+		FNode Root;
+		Root.X = StartXY.X; Root.Y = StartXY.Y; Root.Yaw = Start.Rotator().Yaw;
+		Nodes.Add(Root);
+		const auto Heuristic = [&](double X, double Y)
+		{
+			if (Field.bGoalTimeUsable)
+			{
+				int32 CX, CY;
+				if (Field.Cell(X, Y, CX, CY) && Field.GoalTime[Field.Index(CX, CY)] < Unreached)
+				{
+					return (double)Field.GoalTime[Field.Index(CX, CY)];
+				}
+				return (double)Unreached;
+			}
+			return FVector2D::Distance(FVector2D(X, Y), GoalXY) / Spec.Speed;
+		};
+		TArray<FOpen> Open;
+		Open.HeapPush({ (float)(SearchWeight * FVector2D::Distance(StartXY, GoalXY) / Spec.Speed), 0 });
+		TMap<uint64, float> Best;
+		TSet<uint64> Tried;
+		double BestTotal = TNumericLimits<float>::Max();
+		int32 BestNode = INDEX_NONE;
+		TArray<FWarehouseRoutePoint> BestEdge;
+		int32 ExpansionLimit = MaxExpansions;
+		int32 Local = 0;
+		const auto PoseOf = [&](const FNode& Node) { return FTransform(FRotator(0.0, Node.Yaw, 0.0), FVector(Node.X, Node.Y, BaseZ)); };
+		while (Open.Num() && Local < ExpansionLimit)
+		{
+			FOpen Top;
+			Open.HeapPop(Top, EAllowShrinking::No);
+			const FNode Node = Nodes[Top.Node];
+			if (BestNode != INDEX_NONE && Node.G + FVector2D::Distance(FVector2D(Node.X, Node.Y), GoalXY) / Spec.Speed >= BestTotal)
+			{
+				continue;
+			}
+			++Local;
+			if ((Local & 255) == 0 && FPlatformTime::Seconds() - StartedAt > MaxSearchSeconds)
+			{
+				bTimedOut = true;
+				break;
+			}
+			// Try to finish with a curve or turn-drive-turn onto the exact goal pose.
+			if (FVector2D::Distance(FVector2D(Node.X, Node.Y), GoalXY) < AnalyticRangeCm && AnalyticTries < MaxAnalyticTries)
+			{
+				const uint64 Coarse = (uint64(FMath::FloorToInt32(Node.X / 100.0) + 100000) << 32) | (uint64(FMath::FloorToInt32(Node.Y / 100.0) + 100000) << 8) |
+					(uint64(FMath::RoundToInt32(FRotator::ClampAxis(Node.Yaw) / 45.0)) & 15);
+				if (!Tried.Contains(Coarse))
+				{
+					Tried.Add(Coarse);
+					++AnalyticTries;
+					TArray<FWarehouseRoutePoint> Edge;
+					float Unused;
+					if (ConnectLanePoses(PoseOf(Node), Goal, Edge, Unused, &Query))
+					{
+						const double Total = Node.G + RouteTimeSeconds(Edge, PoseOf(Node));
+						if (Total < BestTotal)
+						{
+							if (BestNode == INDEX_NONE)
+							{
+								ExpansionLimit = FMath::Min(ExpansionLimit, Local + ExtraExpansionsAfterFound);
+							}
+							BestTotal = Total;
+							BestNode = Top.Node;
+							BestEdge = MoveTemp(Edge);
+						}
+					}
+				}
+			}
+			const double Clearance = Field.ClearanceAt(Node.X, Node.Y);
+			const auto Push = [&](double X, double Y, double Yaw, double Curvature, double Length, uint8 Mode, int8 TurnSign, double Cost)
+			{
+				const double H = Heuristic(X, Y);
+				if (H >= Unreached)
+				{
+					return;
+				}
+				const float G = (float)(Node.G + Cost);
+				const uint64 NodeKey = Key(X, Y, Yaw, Mode);
+				if (const float* Seen = Best.Find(NodeKey))
+				{
+					if (*Seen <= G)
+					{
+						return;
+					}
+				}
+				Best.Add(NodeKey, G);
+				FNode Child;
+				Child.X = X; Child.Y = Y; Child.Yaw = Yaw; Child.G = G; Child.Parent = Top.Node;
+				Child.Curvature = Curvature; Child.Length = Length; Child.Mode = Mode; Child.TurnSign = TurnSign;
+				const int32 Index = Nodes.Add(Child);
+				Open.HeapPush({ (float)(G + SearchWeight * H), Index });
+			};
+			for (const uint8 Mode : { (uint8)MoveForward, (uint8)MoveReverse })
+			{
+				const double Sign = Mode == MoveForward ? 1.0 : -1.0;
+				const double Change = (Node.Mode == MoveForward || Node.Mode == MoveReverse) && Node.Mode != Mode ? Spec.StopGo : 0.0;
+				const double Step = Clearance > LongStepClearanceCm ? LongStepCm : StepCm;
+				const double Theta = FMath::DegreesToRadians(Node.Yaw);
+				if (SweepClear(Node.X, Node.Y, Node.Yaw, 0.0, Sign * Step))
+				{
+					Push(Node.X + Sign * Step * FMath::Cos(Theta), Node.Y + Sign * Step * FMath::Sin(Theta), Node.Yaw, 0.0, Step, Mode, 0, Change + Spec.Travel(Step, 0.0, Mode == MoveReverse));
+				}
+				for (const double Radius : { ArcRadiusTight, ArcRadiusWide })
+				{
+					for (const double Side : { 1.0, -1.0 })
+					{
+						// Arcs end on a whole heading step, so straight runs line up with the warehouse aisles.
+						const double NextYaw = Snap(Node.Yaw + Side * HeadingDeg);
+						const double Sweep = FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(Node.Yaw, NextYaw));
+						if (FMath::Abs(Sweep) < FMath::DegreesToRadians(3.0))
+						{
+							continue;
+						}
+						const double Length = FMath::Abs(Sweep) * Radius;
+						const double Curvature = Sign * Sweep / Length;
+						const double Signed = Sign * Length;
+						if (SweepClear(Node.X, Node.Y, Node.Yaw, Curvature, Signed))
+						{
+							const double Next = Theta + Curvature * Signed;
+							Push(Node.X + (FMath::Sin(Next) - FMath::Sin(Theta)) / Curvature, Node.Y - (FMath::Cos(Next) - FMath::Cos(Theta)) / Curvature, NextYaw, Curvature, Length, Mode, 0,
+								Change + Spec.Travel(Length, Curvature, Mode == MoveReverse));
+						}
+					}
+				}
+			}
+			for (const double Delta : { 15.0, -15.0, 45.0, -45.0 })
+			{
+				const int8 TurnSign = Delta > 0 ? 1 : -1;
+				if (Node.Mode == MoveTurn && Node.TurnSign == -TurnSign)
+				{
+					continue;
+				}
+				const double NextYaw = Snap(Node.Yaw + Delta);
+				const double Angle = FMath::FindDeltaAngleDegrees(Node.Yaw, NextYaw);
+				if (FMath::Abs(Angle) < 3.0)
+				{
+					continue;
+				}
+				const FVector2D Wheel = Axle(0.0, 0.0, Node.Yaw) + FVector2D(Node.X, Node.Y);
+				bool bClear = true;
+				const int32 Samples = FMath::Max(1, FMath::CeilToInt32(FMath::Abs(Angle) / 5.0));
+				FVector2D End(Node.X, Node.Y);
+				for (int32 I = 1; I <= Samples && bClear; ++I)
+				{
+					const double Yaw = Node.Yaw + Angle * I / Samples;
+					End = Wheel - Axle(0.0, 0.0, Yaw);
+					bClear = PoseClear(End.X, End.Y, Yaw);
+				}
+				if (bClear)
+				{
+					Push(End.X, End.Y, NextYaw, 0.0, 0.0, MoveTurn, TurnSign, FMath::DegreesToRadians(FMath::Abs(Angle)) / Spec.TurnRate + (Node.Mode == MoveTurn ? 0.0 : Spec.TurnEntry));
+				}
+			}
+		}
+		Expansions += Local;
+		if (BestNode == INDEX_NONE)
+		{
+			break;
+		}
+
+		// The node chain, start first.
+		TArray<int32> Chain;
+		for (int32 I = BestNode; I != INDEX_NONE; I = Nodes[I].Parent)
+		{
+			Chain.Add(I);
+		}
+		Algo::Reverse(Chain);
+
+		// Build the route, replacing stretches of the lattice with a single smooth connection where that is faster. Heading
+		// steps of 15 degrees cannot follow a diagonal: left as they are, they would make the vehicle slow for every little arc.
+		TArray<FWarehouseRoutePoint> Route;
+		int32 Shortcuts = 0;
+		for (int32 At = 0; At + 1 < Chain.Num();)
+		{
+			const FNode& From = Nodes[Chain[At]];
+			bool bJumped = false;
+			for (int32 Reach = FMath::Min(Chain.Num() - 1 - At, 64); Reach >= 4 && Shortcuts < 30; Reach /= 2)
+			{
+				const FNode& To = Nodes[Chain[At + Reach]];
+				++Shortcuts;
+				TArray<FWarehouseRoutePoint> Edge;
+				float Unused;
+				if (ConnectLanePoses(PoseOf(From), PoseOf(To), Edge, Unused, &Query) && RouteTimeSeconds(Edge, PoseOf(From)) + 0.05 < To.G - From.G)
+				{
+					Route.Append(Edge);
+					At += Reach;
+					bJumped = true;
+					break;
+				}
+			}
+			if (bJumped)
+			{
+				continue;
+			}
+			const FNode& To = Nodes[Chain[At + 1]];
+			if (To.Mode == MoveTurn)
+			{
+				TArray<FWarehouseRoutePoint> Edge;
+				float Unused;
+				if (!ConnectPoses(PoseOf(From), PoseOf(To), Edge, Unused, &Query))
+				{
+					FWarehouseRoutePoint Step;
+					Step.Pose = PoseOf(To);
+					Step.bPivot = true;
+					Route.Add(Step);
+				}
+				else
+				{
+					Route.Append(Edge);
+				}
+			}
+			else
+			{
+				const double Sign = To.Mode == MoveForward ? 1.0 : -1.0;
+				const double Theta = FMath::DegreesToRadians(From.Yaw);
+				const int32 Samples = FMath::Max(1, FMath::CeilToInt32(To.Length / 5.0));
+				for (int32 I = 1; I <= Samples; ++I)
+				{
+					const double S = Sign * To.Length * I / Samples;
+					FWarehouseRoutePoint Step;
+					Step.bReverse = To.Mode == MoveReverse;
+					if (FMath::Abs(To.Curvature) < 1e-6)
+					{
+						Step.Pose = FTransform(FRotator(0.0, From.Yaw, 0.0), FVector(From.X + S * FMath::Cos(Theta), From.Y + S * FMath::Sin(Theta), BaseZ));
+					}
+					else
+					{
+						const double Next = Theta + To.Curvature * S;
+						Step.Pose = FTransform(FRotator(0.0, FMath::RadiansToDegrees(Next), 0.0),
+							FVector(From.X + (FMath::Sin(Next) - FMath::Sin(Theta)) / To.Curvature, From.Y - (FMath::Cos(Next) - FMath::Cos(Theta)) / To.Curvature, BaseZ));
+					}
+					Route.Add(Step);
+				}
+			}
+			++At;
+		}
+		Route.Append(BestEdge);
+
+		// Every point meets the full query, whatever the cheap check assumed. A blocked point goes into the grid for the next search.
+		bValid = true;
+		TBitArray<> Checked(false, Route.Num());
+		for (int32 Stride = 32; Stride >= 1 && bValid; Stride /= 2)
+		{
+			for (int32 I = Stride - 1; I < Route.Num() && bValid; I += Stride)
+			{
+				if (!Checked[I])
+				{
+					Checked[I] = true;
+					const FTransform& Pose = Route[I].Pose;
+					const bool bNearStart = FVector2D::DistSquared(FVector2D(Pose.GetLocation()), StartXY) < 60.0 * 60.0;
+					if (!NavigationClear(Pose, &Query) || (!bNearStart && HitsTarget(Pose)))
+					{
+						bValid = false;
+						int32 CX, CY;
+						if (Field.Cell(Pose.GetLocation().X, Pose.GetLocation().Y, CX, CY))
+						{
+							Field.Clearance[Field.Index(CX, CY)] = 0.f;
+						}
+					}
+				}
+			}
+		}
+		if (bValid)
+		{
+			BestRoute = MoveTemp(Route);
+		}
+	}
+	const double TotalMs = (FPlatformTime::Seconds() - StartedAt) * 1000.0;
+	if (OutReport)
+	{
+		*OutReport = FString::Printf(TEXT("hybrid_ms=%.0f grid_ms=%.0f expansions=%d native=%d analytic=%d searches=%d timeout=%d reachable=%d"),
+			TotalMs, BuildMs, Expansions, NativeQueries, AnalyticTries, Searches, bTimedOut, Field.bGoalTimeUsable);
+	}
+	if (!bValid)
+	{
+		return false;
+	}
+	OutRoute = MoveTemp(BestRoute);
+	return true;
+}
