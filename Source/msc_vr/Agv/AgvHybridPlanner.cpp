@@ -419,8 +419,28 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 	// Two rectangles in the plane: the vehicle body with 3cm to spare, not the 25cm travel margin, and the load's footprint.
 	const FBox TargetEnvelope = Query.Envelope.ExpandBy(FVector(-22.0, -22.0, 0.0));
 	constexpr double TargetHalf = 95.0;
+	// The follower stops for a person inside a box swept ahead of the vehicle, far wider than the collision envelope, so a route that
+	// merely misses them would stop anyway. Keep well clear, but always allow moving away from where the vehicle stands now.
+	TArray<FVector2D> People;
+	for (const FAgvObservedObstacle& Entry : SensorKit->GetObservedObstacles())
+	{
+		if (Entry.bPerson && Entry.WorldBounds.IsValid)
+		{
+			People.Add(FVector2D(Entry.WorldBounds.GetCenter()));
+		}
+	}
+	constexpr double PersonKeepOutCm = 300.0;
 	const auto HitsTarget = [&](const FTransform& Pose)
 	{
+		const FVector2D At(Pose.GetLocation());
+		for (const FVector2D& Person : People)
+		{
+			const double Distance = FVector2D::Distance(At, Person);
+			if (Distance < PersonKeepOutCm && Distance < FVector2D::Distance(StartXY, Person) - 5.0)
+			{
+				return true;
+			}
+		}
 		if (!bGuardTarget)
 		{
 			return false;
