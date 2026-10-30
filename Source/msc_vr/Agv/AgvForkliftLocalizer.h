@@ -334,12 +334,15 @@ public:
 	/** A map for this key, building it when no vehicle has built it yet. */
 	TSharedPtr<const FAgvDistanceMap> FindOrBuildMap(uint64 Key, TFunctionRef<TSharedPtr<const FAgvDistanceMap>()> Build);
 
-	/** The top-left view of what forklift 1 believes (map, scan, route, estimated and actual outline). */
+	/** The top-left view of what forklift 1 senses right now: its last scan and its route. */
 	void SetPanelVisible(bool bVisible) { bShowPanel = bVisible; }
 	/** 3D = forklift 1's first-person view of what it believes (default); off = the 2D top view. */
 	void SetPanel3D(bool b3D) { bPanel3D = b3D; }
 	bool IsPanel3D() const { return bPanel3D; }
 	bool IsPanelVisible() const { return bShowPanel; }
+	/** Off (default): sensor points only. On: also the prior map and the actual pose, for comparison. */
+	void SetPanelMap(bool bShow) { bPanelMap = bShow; }
+	bool IsPanelMap() const { return bPanelMap; }
 
 protected:
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
@@ -358,6 +361,7 @@ private:
 	bool bDriveOverride = false;
 	bool bShowPanel = true;
 	bool bPanel3D = true;
+	bool bPanelMap = false;
 	FDelegateHandle SpawnHandle;
 	FDelegateHandle DrawHandle;
 	TMap<uint64, TSharedPtr<const FAgvDistanceMap>> Maps;

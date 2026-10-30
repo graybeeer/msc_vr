@@ -204,6 +204,14 @@
   - 결론: 일관성 수정으로 유지하지만 지연의 주원인은 아니다(추정 오차가 1~2cm라 점이 거의 안 움직임).
   - 남은 차이: 켬에서만 `ROUTE MISALIGNED` 복구 2~3회(끔 0회). `MoveToLine`(WarehouseForklift.cpp)이 정확 위치로 옆 5cm를 넘으면 멈춘다. 추정 위치로 주행한 끝점이 실제로는 옆으로 어긋나는지 다음에 확인한다.
 
+### 9-5. 메인 병합 후 재개 지점 (2026-10-30)
+- **상태**: `origin/main`(8cc8a09b)을 브랜치에 병합했다(`004db260`, 미푸시, main 병합 없음). 구조물 색인은 팀원 `FindKnownCandidates`로 대체했다. 곡선 성긴 검사는 유지했다.
+- **미검증 코드**: 헌팅 수정(`b81fa7fa`, 중간 모서리 보정 1회 후 허용 범위 2배 안이면 통과)은 병합 후 측정값이 없다. 왼쪽 패널 변경(최신 스캔만, 지도 선·실제 위치 기본 숨김, `agv.loc map`으로 켜기)은 빌드하지 않았다.
+- **막힌 곳**: 병합 후 `scen_three` 켬(r5)이 첫 입고에서 `NO SAFE DETOUR`로 고장. 짐 (1300,-1790)의 접근 목표가 벽 속 (1077,-1860)으로 잡혔다. 약 18도 돌아간 팔레트 값일 때 나오는 위치이나, 실제로 밀렸는지 인식 오류인지 미확인이다. `WarehouseForkliftPerception.cpp:177` 부근을 먼저 본다. 끔 A/B는 배터리 때문에 중단해 결과가 없다.
+- **시험 조건**: 메인이 기본 자동 시동을 껐다(`msc_vrGameMode.cpp`). 시험만 명령줄 `-ini:Game:[/Script/msc_vr.WarehouseOperationsSettings]:bManualOperations=True`로 예전처럼 돌린다. 저장소 설정은 바꾸지 않는다.
+- **다음 순서**: ① 빌드해 패널 확인 ② `scen_three:off`로 고장 A/B ③ 고장 해결 후 헌팅·작업 시간 측정 ④ 회전 비용을 시간 기준으로(180도 368cm vs 실제 약 10.5s) ⑤ `ROUTE MISALIGNED` 재측정 ⑥ 다중 AGV·양보 회귀. 주행·포크 속도는 바꾸지 않는다(사용자 결정). 목표는 작업 1건 약 90초.
+- **도구**: `Saved/AgvHarness/tools_20261030/`의 `loc_suite2.sh`, `jobs2.py`(작업 시간), `hunt.py`(헌팅), `rows.py`(주행 분해), `timeline.py`.
+
 ## 10. 제안하는 첫 단계 (2026-10-27 이전 제안)
 1. 이 문서와 [FORKLIFT_NAVIGATION.md](FORKLIFT_NAVIGATION.md)를 읽고, 사용자와 단계 (2)부터 갈지 범위를 확인한다.
 2. `UAgvLocalizerComponent`를 운용 차량에 붙이고 주입 오차 모델로 `FollowRoute` 이동 구간만 추정 위치를 쓰게 한다(정렬·도킹은 정확한 위치 유지).

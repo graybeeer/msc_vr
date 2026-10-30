@@ -32,7 +32,7 @@ namespace AgvForkliftLoc
 		TEXT("agv.loc"),
 		TEXT("agv.loc: LiDAR localization in shadow mode on every main warehouse forklift (measures the estimate against "
 			"the exact pose; travel still uses the exact pose). Again = log the results. agv.loc reset = clear the statistics. "
-			"agv.loc view = show/hide the top-left panel of what forklift 1 believes. agv.loc mode = first-person 3D / top view. agv.loc drive [0] = route travel on the estimate (on/off)."),
+			"agv.loc view = show/hide the top-left panel of what forklift 1 believes. agv.loc mode = first-person 3D / top view. agv.loc map = also draw the prior map and the actual pose on the panel. agv.loc drive [0] = route travel on the estimate (on/off)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
 		{
 			UAgvLocalizationSubsystem* Subsystem = World ? World->GetSubsystem<UAgvLocalizationSubsystem>() : nullptr;
@@ -48,6 +48,11 @@ namespace AgvForkliftLoc
 			if (Args.Contains(TEXT("mode")))
 			{
 				Subsystem->SetPanel3D(!Subsystem->IsPanel3D());
+				return;
+			}
+			if (Args.Contains(TEXT("map")))
+			{
+				Subsystem->SetPanelMap(!Subsystem->IsPanelMap());
 				return;
 			}
 			if (Args.Contains(TEXT("view")))
@@ -1068,7 +1073,7 @@ void UAgvLocalizationSubsystem::DrawPanel(UCanvas* Canvas, APlayerController* Pl
 	// The map it localizes against.
 	const TSharedPtr<const FAgvDistanceMap> Map = Vehicle->GetMap();
 	UpdateMapTexture(Map);
-	if (Map && MapTexture && MapTexture->GetResource())
+	if (bPanelMap && Map && MapTexture && MapTexture->GetResource())
 	{
 		const double Width = Map->Width * Map->CellCm, Height = Map->Height * Map->CellCm;
 		const FVector2D Min = Centre - FVector2D(SpanCm * 0.5);
@@ -1103,7 +1108,10 @@ void UAgvLocalizationSubsystem::DrawPanel(UCanvas* Canvas, APlayerController* Pl
 	}
 
 	// Actual pose (white) under the estimate (yellow): the gap is the localization error.
-	Outline(Actual, FLinearColor(1.f, 1.f, 1.f, 0.6f), 1.f);
+	if (bPanelMap)
+	{
+		Outline(Actual, FLinearColor(1.f, 1.f, 1.f, 0.6f), 1.f);
+	}
 	if (bEstimate)
 	{
 		Outline(Estimated, FLinearColor(1.f, 0.85f, 0.1f, 1.f), 2.f);
@@ -1126,7 +1134,8 @@ void UAgvLocalizationSubsystem::DrawPanel(UCanvas* Canvas, APlayerController* Pl
 		Text(TEXT("FORKLIFT 1 - AI WORLD (24 m)"), Panel.Y + 4.0, FLinearColor::White);
 		Text(FString::Printf(TEXT("%s  err %.1f cm  match %.2f  pts %d"), *Vehicle->StatusText, Vehicle->ErrorCm, Vehicle->LastInlierRatio, Vehicle->LastMatchPoints),
 			PanelMax.Y + 4.0, FLinearColor::White);
-		Text(TEXT("map grey | scan on map green | unmapped orange | route blue | estimate yellow | actual white"), PanelMax.Y + 20.0, FLinearColor(0.75f, 0.78f, 0.8f, 1.f));
+		Text(bPanelMap ? TEXT("map grey | scan on map green | unmapped orange | route blue | estimate yellow | actual white")
+			: TEXT("current scan only: on map green | unmapped orange | route blue | estimate yellow"), PanelMax.Y + 20.0, FLinearColor(0.75f, 0.78f, 0.8f, 1.f));
 	}
 }
 
@@ -1188,7 +1197,7 @@ void UAgvLocalizationSubsystem::DrawFirstPersonPanel(UCanvas* Canvas, UAgvForkli
 	}
 
 	// The map it knows: building structure and fixed racks as oriented boxes (floor slabs and upper floors left out).
-	if (Kit)
+	if (Kit && bPanelMap)
 	{
 		const FLinearColor Structure(0.55f, 0.68f, 0.85f, 0.9f);
 		for (const FAgvObservedObstacle& Entry : Kit->GetKnownObstacles())
@@ -1265,6 +1274,7 @@ void UAgvLocalizationSubsystem::DrawFirstPersonPanel(UCanvas* Canvas, UAgvForkli
 		Text(TEXT("FORKLIFT 1 - AI VIEW (body side, on its LiDAR estimate)"), Panel.Y + 4.0, FLinearColor::White);
 		Text(FString::Printf(TEXT("%s  err %.1f cm  match %.2f  pts %d"), *Vehicle->StatusText, Vehicle->ErrorCm, Vehicle->LastInlierRatio, Vehicle->LastMatchPoints),
 			PanelMax.Y + 4.0, FLinearColor::White);
-		Text(TEXT("map structure blue | scan on map green | unmapped orange | route blue"), PanelMax.Y + 20.0, FLinearColor(0.75f, 0.78f, 0.8f, 1.f));
+		Text(bPanelMap ? TEXT("map structure blue | scan on map green | unmapped orange | route blue")
+			: TEXT("current scan only: on map green | unmapped orange | route blue"), PanelMax.Y + 20.0, FLinearColor(0.75f, 0.78f, 0.8f, 1.f));
 	}
 }
