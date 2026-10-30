@@ -11,6 +11,8 @@ import os
 import sys
 import time
 import traceback
+import json
+from pathlib import Path
 import unreal
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -63,6 +65,11 @@ if not DRIVE_ONLY:
     parcel.set_cargo_mesh(unreal.load_asset('/Game/Warehouse/Cargo/BoxesPalletsPack/Meshes/SM_Carton_Intact_1'))
     parcel.set_gross_mass_kg(12)
     fit(parcel, (30, 24, 20), (1850, 1440, 10.25))
+    low_ceiling=actors.spawn_actor_from_class(unreal.StaticMeshActor,unreal.Vector(6000,6000,150))
+    low_ceiling.set_actor_label('ResponseLowCeiling')
+    low_ceiling.static_mesh_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Cube'))
+    low_ceiling.static_mesh_component.set_mobility(unreal.ComponentMobility.MOVABLE)
+    low_ceiling.set_actor_scale3d(unreal.Vector(2,2,.2));low_ceiling.static_mesh_component.set_collision_profile_name('BlockAll')
 
 began = time.monotonic()
 phase = 'start'
@@ -79,13 +86,20 @@ jump_return_time = None
 captured=set()
 sample_air=False
 sample_landing=False
+postures=[]
+standing_head=standing_camera=None
+ceiling=None
 
 def finish():
+    unreal.unregister_slate_post_tick_callback(handle)
+    if SAMPLE_ONLY and postures:
+        path=Path(unreal.Paths.project_dir())/'Saved/Testing/Posture20261027'
+        path.mkdir(parents=True,exist_ok=True)
+        (path/'MotionSamples.json').write_text(json.dumps(postures,indent=2),encoding='utf-8')
     if rig and dummy:
         rig.end_remote_control(dummy)
-    unreal.unregister_slate_post_tick_callback(handle)
     level.editor_request_end_play()
-    unreal.SystemLibrary.quit_editor()
+    if '-keeptesteditoropen' not in unreal.SystemLibrary.get_command_line().lower():unreal.SystemLibrary.quit_editor()
 
 def enter(next_phase):
     global phase, at, origin, samples, feet, stop_time, reach_time
@@ -152,10 +166,24 @@ def begin_response_checks():
     else:
         enter('walk')
 
-def tick(dt):
+def tick_pose():
+    camera=person.get_components_by_class(unreal.CameraComponent)[0]
+    bones={b:source.get_socket_location(b) for b in ('pelvis','thigh_l','calf_l','foot_l','thigh_r','calf_r','foot_r','head')}
+    for suffix in ('l','r'):
+        assert 25<(bones['thigh_'+suffix]-bones['calf_'+suffix]).length()<65,('Thigh length',phase,suffix)
+        assert 25<(bones['calf_'+suffix]-bones['foot_'+suffix]).length()<65,('Lower-leg length',phase,suffix)
+    postures.append(dict(phase=phase,age=now-at,root_z=person.get_actor_location().z,half=capsule.get_unscaled_capsule_half_height(),
+                         in_air=bool(anim.get_editor_property('InAir')),landing=bool(anim.get_editor_property('Landing')),
+                         camera_z=camera.get_world_location().z,first_person_head_z=first_person.get_socket_location('head').z,
+                         camera_parent=camera.get_attach_parent().get_name() if camera.get_attach_parent() else None,
+                         camera_socket=str(camera.get_attach_socket_name()),camera_relative_z=camera.get_editor_property('relative_location').z,
+                         first_person_relative_z=first_person.get_editor_property('relative_location').z,bones={b:[p.x,p.y,p.z] for b,p in bones.items()}))
+
+def run_tick(dt):
     global now, phase, game, person, rig, dummy, box, source, first_person, anim, capsule, chassis
     global stop_time, reach_time, pivot_start, yaw_start
     global jump_samples, jump_return_time, sample_air, sample_landing
+    global standing_head,standing_camera,ceiling
     try:
         assert time.monotonic() - began < 210, ('Response PIE timeout', phase)
         if phase == 'start':
@@ -173,6 +201,7 @@ def tick(dt):
             unreal.GameplayStatics.get_player_controller(game, 0).set_control_rotation(unreal.Rotator(yaw=90))
             if not DRIVE_ONLY:
                 person, box = named['ResponseHuman'], named['ResponseParcel']
+                ceiling=named['ResponseLowCeiling']
                 parts = {mesh.get_name(): mesh for mesh in person.get_components_by_class(unreal.SkeletalMeshComponent)}
                 source, first_person = parts['CharacterMesh0'], parts['First Person Mesh']
                 anim = source.get_anim_instance()
@@ -180,20 +209,24 @@ def tick(dt):
             enter('settle')
             return
         age = now - at
+        if SAMPLE_ONLY and person and phase in ('jump','crouch','blocked_stand','stand'):tick_pose()
         if SAMPLE_ONLY and anim and phase=='jump':
             sample_air |= anim.get_editor_property('InAir')
             sample_landing |= anim.get_editor_property('Landing')
-        if SAMPLE_CAPTURE and person and phase in ('walk','carry_walk','sprint','crouch','jump'):
+        if SAMPLE_CAPTURE and person and phase in ('walk','carry_walk','sprint','crouch','jump','stand'):
             preview=next(a for a in unreal.GameplayStatics.get_all_actors_of_class(game,unreal.CameraActor) if a.get_actor_label()=='SampleAnimationCamera')
             target=person.get_actor_location()+unreal.Vector(0,0,-10)
             eye=target+unreal.Vector(280,-340,120)
             preview.set_actor_location(eye,False,True)
             preview.set_actor_rotation(unreal.MathLibrary.find_look_at_rotation(eye,target),True)
             unreal.GameplayStatics.get_player_controller(game,0).set_view_target_with_blend(preview,0)
-            if phase not in captured and age>(.2 if phase=='jump' else .7):
-                captured.add(phase)
-                path=os.path.join(unreal.Paths.project_dir(),'Saved/Testing/SampleAnimation_'+phase+'.png').replace('\\','/')
-                unreal.SystemLibrary.execute_console_command(game,'HighResShot 1600x900 filename='+path)
+            labels=([(name,t) for name,t in [('jump_takeoff',.08),('jump_apex',.34),('jump_fall',.57),('jump_landing',.86)]] if phase=='jump' else
+                    [('crouch_transition',.18),('crouch',.8)] if phase=='crouch' else [(phase,.7)])
+            for name,threshold in labels:
+                if name not in captured and age>=threshold:
+                    captured.add(name)
+                    path=os.path.join(unreal.Paths.project_dir(),'Saved/Testing/SampleAnimation_'+name+'.png').replace('\\','/')
+                    unreal.SystemLibrary.execute_console_command(game,'HighResShot 1600x900 filename='+path)
         if person:
             assert not person.is_physical_ragdoll(), ('Normal movement ragdolled', phase)
         if phase == 'settle':
@@ -331,10 +364,14 @@ def tick(dt):
             print('CHARACTER_JUMP_PASSED', 'apex_cm', apex[1], 'apex_seconds', apex[0],
                   'return_seconds', jump_return_time, 'air_acceleration_cm_s2', gravity,
                   'same-frame duplicate/airborne repeated inputs did not add thrust')
+            standing_head=source.get_socket_location('head').z
+            standing_camera=person.get_components_by_class(unreal.CameraComponent)[0].get_world_location().z
             person.set_locomotion_input(False, True)
             enter('crouch')
             return
         if phase == 'crouch':
+            if SAMPLE_ONLY and age>.06:
+                assert not anim.get_editor_property('InAir') and not anim.get_editor_property('Landing'),'Crouch was mistaken for a jump/fall/landing'
             if age < 1:
                 return
             assert capsule.get_unscaled_capsule_half_height() < 59 and person.get_actor_location().z < origin.z - 25
@@ -342,13 +379,30 @@ def tick(dt):
                 assert anim.get_editor_property('Crouching'), 'Crouch pose not selected'
                 for bone in ('foot_l','foot_r'):
                     assert source.get_socket_location(bone).z>-4, ('Crouch feet sank below the floor',bone,source.get_socket_location(bone))
+                assert source.get_socket_location('head').z<standing_head-30,'Crouch did not lower the head'
+                assert person.get_components_by_class(unreal.CameraComponent)[0].get_world_location().z<standing_camera-30,'Crouch did not lower the first-person camera'
+                ceiling.set_actor_location(person.get_actor_location()+unreal.Vector(0,0,91),False,True)
+                person.set_locomotion_input(False,False);enter('blocked_stand');return
             person.set_locomotion_input(False, False)
             enter('stand')
             return
+        if phase=='blocked_stand':
+            person.set_locomotion_input(False,False)
+            if age<.8:return
+            assert capsule.get_unscaled_capsule_half_height()<59 and anim.get_editor_property('Crouching'),'Stood through a low ceiling'
+            ceiling.set_actor_location(unreal.Vector(6000,6000,150),False,True)
+            person.set_locomotion_input(False,False);enter('stand');return
         if phase == 'stand':
             if capsule.get_unscaled_capsule_half_height() < 95:
                 assert age < 4, 'Cannot stand back up'
                 return
+            if age<1.1:return
+            if SAMPLE_ONLY:
+                assert abs(source.get_socket_location('head').z-standing_head)<15,'Standing head height did not recover'
+                assert abs(person.get_components_by_class(unreal.CameraComponent)[0].get_world_location().z-standing_camera)<15,'Standing camera did not recover'
+                path=Path(unreal.Paths.project_dir())/'Saved/Testing/Posture20261027'
+                path.mkdir(parents=True,exist_ok=True)
+                (path/'MotionSamples.json').write_text(json.dumps(postures,indent=2),encoding='utf-8')
             print('CHARACTER_PHYSICAL_LOCOMOTION_PASSED', 'walk/carry/run gait, stopping, jump, crouch; actual 80kg body')
             if SAMPLE_ONLY:
                 assert sample_air and sample_landing,'Airborne or landing animation was never selected'
@@ -434,4 +488,11 @@ def tick(dt):
         print('CHARACTER_DRIVE_RESPONSE_PIE_FAILED', 'phase', phase, traceback.format_exc())
         finish()
 
+busy=False
+def tick(dt):
+    global busy
+    if busy:return
+    busy=True
+    try:run_tick(dt)
+    finally:busy=False
 handle = unreal.register_slate_post_tick_callback(tick)

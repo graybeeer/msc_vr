@@ -92,6 +92,7 @@ void AWarehouseForklift::TransitionAI(EWarehouseAIState Next,const FString& Mess
 }
 void AWarehouseForklift::FaultAI(const FString& Reason)
 {
+ if (TryDeferCurrentWork(Reason)) return;
  if (AIState!=EWarehouseAIState::Fault)
  {
   if (AIState!=EWarehouseAIState::SelfCheck || !bResumeAfterCheck) ResumeAI=AIState;
@@ -105,6 +106,7 @@ void AWarehouseForklift::FaultAI(const FString& Reason)
 void AWarehouseForklift::ToggleAutonomy()
 {
  if (bMechanicalFailure) { SetMechanicalFailure(); return; }
+ if (!bPowered && !WorkStopCanResume()) return;
  if (bPowered)
  {
   if (AIState!=EWarehouseAIState::SelfCheck || !bResumeAfterCheck) ResumeAI=AIState;
@@ -123,6 +125,9 @@ void AWarehouseForklift::ToggleAutonomy()
 bool AWarehouseForklift::SubmitJob(const FWarehouseWorkOrder& Job)
 {
  if (!HasAuthority()) return false;
+ if (bWorkStopRequested) return false;
+ if (IsWorkDeferred(Job.Pallet))
+ { SetOperationError(TEXT("WORK_RETRY_WAIT"),TEXT("운반 불가 물류는 30초간 보류합니다. 다른 물류를 먼저 처리하세요."));return false; }
  if (const auto* Instance=GetWorld() ? GetWorld()->GetGameInstance() : nullptr)
   if (const auto* Experiment=Instance->GetSubsystem<UWarehouseExperimentSubsystem>();Experiment && Experiment->bBatchRunning && Job.SourceSystem!=TEXT("FMS-EXPERIMENT"))
   { SetOperationError(TEXT("EXPERIMENT_ACTIVE"),TEXT("반복 실험 중에는 저장된 공통 주문만 실행할 수 있습니다."));return false; }
@@ -157,6 +162,12 @@ bool AWarehouseForklift::SubmitJob(const FWarehouseWorkOrder& Job)
 }
 void AWarehouseForklift::RefreshAfterLayout(bool PublishTaskLocation)
 {
+ if (bClearingForksForWork)
+ {
+  bClearingForksForWork=false;ActiveJob=FWarehouseWorkOrder();NextForkClearanceCheck=-1;
+  ResumeAI=EWarehouseAIState::Ready;
+  if (bPowered) TransitionAI(EWarehouseAIState::Ready,TEXT("배치 변경 · 기존 짐 하역 위치 재확인"));
+ }
  if (FleetCoordinator) FleetCoordinator->Release(this);
  PlannedRoute.Reset();RouteIndex=0;bRouteStarted=false;
  LastObstacleCheckSeconds=-1;ObstacleCheckFrame=MAX_uint64;
@@ -176,6 +187,42 @@ void AWarehouseForklift::RefreshAfterLayout(bool PublishTaskLocation)
   if (bPowered && AIState!=EWarehouseAIState::Fault && !bFloorTransfer) TransitionAI(Next,TEXT("LAYOUT UPDATED / REPLAN"));
  }
  else if (bChargePending && bPowered && !bFloorTransfer) TransitionAI(EWarehouseAIState::PlanCharge,TEXT("LAYOUT UPDATED / CHARGER REPLAN"));
+}
+void AWarehouseForklift::SuspendForBuildingEdit(const TArray<AActor*>& Removed)
+{
+ auto UsesRemoved=[&](const FWarehouseWorkOrder& Job)
+ { return Removed.Contains(Job.Pallet.Get()) || Removed.Contains(Job.DestinationResource.Get()); };
+ const bool WasRunning=bPowered || IsRemoteControlled();
+ bool Cancelled=false;
+ auto Cancel=[&](const FWarehouseWorkOrder& Job)
+ {
+  const auto Previous=ActiveJob;ActiveJob=Job;
+  ReportJob(TEXT("CANCELLED"),TEXT("건물 편집으로 작업 대상/보관 랙이 제거되었습니다. 물류는 보류 목록을 확인하세요."));
+  ActiveJob=Previous;WorkOrderSourcePoses.Remove(Job.JobId);Cancelled=true;
+ };
+ const auto PreviousQueue=PendingJobs;PendingJobs.RemoveAll(UsesRemoved);
+ for (const auto& Job:PreviousQueue) if (UsesRemoved(Job)) Cancel(Job);
+ if (!ActiveJob.JobId.IsEmpty() && UsesRemoved(ActiveJob)) { Cancel(ActiveJob);ActiveJob=FWarehouseWorkOrder(); }
+ if (Removed.Contains(TargetPallet.Get())) { bSupportingPallet=false;TargetPallet=nullptr;CarriedCargo.Reset(); }
+ else CarriedCargo.RemoveAll([&](AActor* Cargo) { return Removed.Contains(Cargo); });
+ if (Removed.Contains(Elevator.Get())) { bFloorTransfer=false;Elevator=nullptr; }
+ // Editing is a paused administrative transaction, not a driving controller.
+ // Restore physical joints first, then discard the pre-edit motion on commit.
+ BrakeDrive();CurrentSpeedCm=0;
+ TArray<AActor*> Stopped{this};Stopped.Append(GetPhysicalLoads());
+ for (AActor* Actor:Stopped) if (IsValid(Actor))
+ {
+  TArray<UPrimitiveComponent*> Parts;Actor->GetComponents(Parts);
+  for (auto* Part:Parts) if (Part->IsSimulatingPhysics())
+  { Part->SetPhysicsLinearVelocity(FVector::ZeroVector);Part->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector); }
+ }
+ if (!WasRunning && !Cancelled) return;
+ if (IsRemoteControlled()) EndRemoteControl(RemoteOperator);
+ bPowered=false;BrakeDrive();
+ if (bMechanicalFailure || AIState==EWarehouseAIState::Fault) return;
+ ResumeAI=ActiveJob.JobId.IsEmpty() ? EWarehouseAIState::Ready : bSupportingPallet ? EWarehouseAIState::PlanDelivery : EWarehouseAIState::PlanPickup;
+ bResumeAfterCheck=true;
+ TransitionAI(EWarehouseAIState::Paused,TEXT("건물 변경으로 일시정지 · E로 재점검 후 작업 재개"));
 }
 FTransform AWarehouseForklift::PalletApproach(const FTransform& Pose,float Distance) const
 {
@@ -425,6 +472,9 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  ON_SCOPE_EXIT { CSV_CUSTOM_STAT(Warehouse,NavigationQueries,int32(WarehouseNavigationQueryCount-QueryStart),ECsvCustomStatOp::Accumulate); };
  if (!FleetCoordinator) FleetCoordinator=AWarehouseFleetCoordinator::Find(this);
  TGuardValue<bool> Planning(bPlanningRoute,true);
+ // No game-thread sensor/layout/time update can interleave this synchronous
+ // search. Restore the optional on every exit; never reuse it in another tick.
+ TGuardValue<TOptional<bool>> Readiness(PlanningSensorReadiness,TOptional<bool>(AutonomousSensorsReady()));
  auto Query=BuildNavigationQuery();
  ON_SCOPE_EXIT { CSV_CUSTOM_STAT(Warehouse,GeometryRejectedCandidates,int32(Query.GeometryRejectedCandidates),ECsvCustomStatOp::Accumulate); };
  // AGV localization: plan from the estimate (an insertion-retry escape keeps the exact pose it measures from).
@@ -1076,6 +1126,8 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
 {
  AITotalSeconds+=Dt;
  if (!bPowered || Dt<=0) return;
+ if (bWorkStopRequested && !bFloorTransfer)
+ { StopCurrentWork();return; }
  if (SensorMode!=EWarehouseSensorMode::Autonomous)
  {
   bExperimentSensorWaiting=true;
@@ -1103,7 +1155,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
  }
  if (AIState!=EWarehouseAIState::Charging) ConsumeEnergy(100.f*Dt/3600.f);
  if (BatteryPercent<=0 && AIState!=EWarehouseAIState::Charging) { FaultAI(TEXT("BATTERY EMPTY")); return; }
- if (!ActiveJob.JobId.IsEmpty())
+ if (!ActiveJob.JobId.IsEmpty() || bClearingForksForWork)
  {
   if (!IsValid(TargetPallet)) { SetOperationError(TEXT("NO_PALLET"),TEXT("운반할 수 없다: 대상 팔레트가 삭제되었습니다."));FaultAI(Status);return; }
   if (TargetPallet->ReceiptState==EWarehouseReceiptState::WrapTorn) { FaultAI(TEXT("PALLET WRAP TORN - REINSPECTION REQUIRED"));return; }
@@ -1166,6 +1218,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   }
   break;
  case EWarehouseAIState::Ready:
+  if (PrepareForksForNextWork()) break;
   if (bChargePending || BatteryPercent<=ChargeBelowPercent) Next(EWarehouseAIState::PlanCharge,TEXT("PLAN CHARGING"));
   else if (!PendingJobs.IsEmpty())
   {
@@ -1458,6 +1511,8 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   break;
  }
  case EWarehouseAIState::LowerLoad:
+  if (bClearingForksForWork && AIElapsed>MaxForkHeightCm/11.5f+15.f)
+  { RecoveryFault(TEXT("RETAINED LOAD LOWERING TIMEOUT"),TEXT("기존 짐을 안전하게 내리지 못해 새 작업을 대기합니다. G로 적재 상태를 확인하세요."));break; }
   if (!bPalletReleased)
   {
    if (!WaitForDestinationClear(Dt)) break;
@@ -1564,6 +1619,15 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   break;
  }
  case EWarehouseAIState::ReportComplete:
+  if (bClearingForksForWork)
+  {
+   ReportJob(TEXT("FORKS_CLEARED"),TEXT("기존 짐 하역·포크 철수 완료 · 새 운반 지시 시작"));
+   bClearingForksForWork=false;bWorkStopNeedsRecovery=false;NextForkClearanceCheck=-1;
+   WorkStopStatus.Reset();LastErrorCode=NAME_None;LastErrorMessage.Reset();
+   ActiveJob=FWarehouseWorkOrder();TargetPallet=nullptr;CarriedCargo.Reset();
+   Next(EWarehouseAIState::Ready,TEXT("기존 짐 하역 완료 · 새 작업 준비"));
+   break;
+  }
   CompletedJobIds.AddUnique(ActiveJob.JobId); ReportJob(TEXT("COMPLETED"),TEXT("PALLET PLACED AND FORKS CLEAR"));
   ActiveJob=FWarehouseWorkOrder(); TargetPallet=nullptr; CarriedCargo.Reset();
   Next(EWarehouseAIState::Ready,TEXT("READY - WAITING FOR WORK ORDER"));
@@ -1696,6 +1760,9 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   break;
  case EWarehouseAIState::ElevatorRide:
   if (Elevator->CanExit(this)) Next(EWarehouseAIState::ElevatorExit,TEXT("DESTINATION FLOOR / DOOR OPEN - EXIT"));
+  // A human-requested stop is a normal part of the shared trip, not failed
+  // vehicle motion. Keep the default brake and exclude its open-door dwell.
+  else if (Elevator->State==EWarehouseElevatorState::AwaitExit && Elevator->CurrentFloor!=TransferToFloor) AIElapsed-=Dt;
   else if (AIElapsed>180.f) FaultAI(TEXT("ELEVATOR TRANSFER TIMEOUT"));
   break;
  case EWarehouseAIState::ElevatorExit:

@@ -162,6 +162,7 @@ private:
  double Now() const;
  void AccountJob(int32 Index,double At);
  void CaptureVehicle(AWarehouseForklift* Vehicle,double At);
+ void RecordReport(const FWarehouseJobReport& Report,double At);
  void CompleteJob(int32 Index,double At,const FString& Result,const FString& Detail);
  void Unregister();
 };

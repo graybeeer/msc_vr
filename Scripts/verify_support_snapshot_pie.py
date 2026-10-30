@@ -23,8 +23,17 @@ for actor in list(actors.get_all_level_actors()):
     if not isinstance(actor, (unreal.WorldSettings, unreal.LevelScriptActor)):
         actors.destroy_actor(actor)
 world = editor.get_editor_world()
+previous_support_cvars = {
+    name: unreal.SystemLibrary.get_console_variable_int_value(name)
+    for name in ('Warehouse.SupportSnapshotSharing', 'Warehouse.SupportRelationCache')
+}
+for name in previous_support_cvars:
+    unreal.SystemLibrary.execute_console_command(world, name + ' 1')
 settings = unreal.GameplayStatics.get_all_actors_of_class(world, unreal.WorldSettings)[0]
 settings.set_editor_property('default_game_mode', unreal.GameModeBase)
+# Keep the automatically possessed pawn's real collision away from both
+# fixtures. It must not invalidate an otherwise unchanged support stack.
+actors.spawn_actor_from_class(unreal.PlayerStart, unreal.Vector(9000, -3000, 200)).set_actor_label('SupportTestPlayerStart')
 cube = unreal.load_asset('/Engine/BasicShapes/Cube')
 
 
@@ -50,6 +59,8 @@ fixture = {
     'TopA': block('SupportTopA', (-20, 0, 50), (20, 20, 20)),
     'TopB': block('SupportTopB', (20, 0, 50), (20, 20, 20)),
 }
+occluder = block('SupportUnprofiledOccluder', (0, 0, 40), (80, 60, .4))
+occluder.static_mesh_component.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION)
 # Interleave profile indices so ordering is genuinely breadth first, then by
 # child profile index; the shared Middle and its cartons must be returned once.
 order = [('Floor', 10000), ('TopB', 6), ('Right', 20), ('TopA', 4), ('Middle', 30), ('Left', 10)]
@@ -103,8 +114,12 @@ checked = False
 
 def finish():
     unreal.unregister_slate_post_tick_callback(handle)
+    context = editor.get_game_world() or editor.get_editor_world()
+    for name, value in previous_support_cvars.items():
+        unreal.SystemLibrary.execute_console_command(context, name + ' ' + str(value))
     level.editor_request_end_play()
-    unreal.SystemLibrary.quit_editor()
+    if '-keeptesteditoropen' not in unreal.SystemLibrary.get_command_line().lower():
+        unreal.SystemLibrary.quit_editor()
 
 
 def tick(dt):
@@ -168,6 +183,79 @@ def tick(dt):
         assert descendants('Floor') == expected_floor, 'Same-frame restoration did not refresh support'
         masses({'Floor': 70, 'Left': 20, 'Right': 20, 'Middle': 10})
         print('SUPPORT_SAME_FRAME_FRESHNESS_PASSED', 'moved top: 66 kg; restored top: 70 kg')
+
+        # Force periodic refresh calls within this one callback, without forcing
+        # the native ray path. Explicit fresh reads remain our full-query oracle.
+        unreal.SystemLibrary.execute_console_command(game, 'Warehouse.SupportSnapshotSharing 0')
+        full_traces = system.get_editor_property('last_support_trace_count')
+        system.ensure_support_snapshot()
+        assert descendants('Floor', False) == expected_floor
+        for actor in live.values():
+            if isinstance(actor, unreal.Brush):
+                # Leave the default brush untouched: its query flags/bounds
+                # alone must not make an empty native body a support blocker.
+                print('SUPPORT_EMPTY_BRUSH_PRESENT', actor.get_actor_label(), actor.get_actor_enable_collision(),
+                      [unreal.SystemLibrary.get_component_bounds(part)
+                       for part in actor.get_components_by_class(unreal.PrimitiveComponent)])
+        print('SUPPORT_RELATION_CACHE_DIAGNOSTICS',
+              'enabled', unreal.SystemLibrary.get_console_variable_int_value('Warehouse.SupportRelationCache'),
+              'sharing', unreal.SystemLibrary.get_console_variable_int_value('Warehouse.SupportSnapshotSharing'),
+              'full_traces', full_traces,
+              'periodic_traces', system.get_editor_property('last_support_trace_count'),
+              'reused', system.get_editor_property('last_support_relations_reused'),
+              'profiles', len(system.get_editor_property('objects')))
+        if system.get_editor_property('last_support_relations_reused') < len(order)-1:
+            # Conservative invalidation includes unprofiled query geometry.
+            # Identify nearby non-rigid components without changing the scene
+            # or relaxing the expected number of reused stack relations.
+            for actor in live.values():
+                if not actor.get_actor_enable_collision():
+                    continue
+                for part in actor.get_components_by_class(unreal.PrimitiveComponent):
+                    if part.get_collision_enabled() in (unreal.CollisionEnabled.NO_COLLISION, unreal.CollisionEnabled.PHYSICS_ONLY):
+                        continue
+                    if part.get_collision_response_to_channel(unreal.CollisionChannel.ECC_VISIBILITY) != unreal.CollisionResponseType.ECR_BLOCK:
+                        continue
+                    centre, half, _ = unreal.SystemLibrary.get_component_bounds(part)
+                    if abs(centre.x)-half.x > 1000 or abs(centre.y)-half.y > 1000 or centre.z-half.z > 60 or centre.z+half.z < -23:
+                        continue
+                    print('SUPPORT_RELATION_CACHE_NEARBY_QUERY', actor.get_actor_label(), part.get_name(),
+                          part.get_class().get_name(), 'centre', centre, 'half', half,
+                          'transform', part.get_world_transform())
+        assert system.get_editor_property('last_support_relations_reused') >= len(order)-1, 'Unchanged rigid stack was not reused'
+        assert system.get_editor_property('last_support_trace_count') < full_traces, 'Unchanged graph kept tracing the entire scene'
+
+        def periodic_matches_full(label):
+            system.ensure_support_snapshot()
+            cached = {name: (descendants(name, False), system.get_supported_mass(parts[name])) for name, _ in order}
+            descendants('Floor', True)
+            actual = {name: (descendants(name, False), system.get_supported_mass(parts[name])) for name, _ in order}
+            assert cached == actual, ('Cached bearing graph differs from fresh native rays', label, cached, actual)
+
+        move('TopA', unreal.Vector(500, 0, 50))
+        periodic_matches_full('child moved without a physics frame')
+        move('TopA', original_top)
+        periodic_matches_full('child restored')
+        right = parts['Right'].static_mesh_component
+        right.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION)
+        periodic_matches_full('support collision disabled while children stay still')
+        assert descendants('Right', False) == []
+        right.set_collision_enabled(unreal.CollisionEnabled.QUERY_AND_PHYSICS)
+        periodic_matches_full('support collision re-enabled')
+        obstruction = live['SupportUnprofiledOccluder']
+        obstruction.static_mesh_component.set_collision_enabled(unreal.CollisionEnabled.QUERY_ONLY)
+        periodic_matches_full('new query-only unprofiled occluder')
+        assert descendants('Middle', False) == [], 'Unprofiled blocker did not occlude the top cartons'
+        obstruction.static_mesh_component.set_collision_response_to_channel(unreal.CollisionChannel.ECC_VISIBILITY, unreal.CollisionResponseType.ECR_IGNORE)
+        periodic_matches_full('unprofiled visibility response changed')
+        assert descendants('Middle', False) == ['TopB', 'TopA']
+        obstruction.static_mesh_component.set_collision_response_to_channel(unreal.CollisionChannel.ECC_VISIBILITY, unreal.CollisionResponseType.ECR_BLOCK)
+        periodic_matches_full('unprofiled occluder restored')
+        obstruction.destroy_actor()
+        periodic_matches_full('unprofiled blocker destroyed')
+        assert descendants('Floor', False) == expected_floor
+        unreal.SystemLibrary.execute_console_command(game, 'Warehouse.SupportSnapshotSharing 1')
+        print('SUPPORT_RELATION_CACHE_PASSED unchanged reuse; exact same-frame movement/collision/visibility/destruction invalidation')
 
         move('Middle', unreal.Vector(500, 0, 30))
         assert descendants('Middle', False) == ['TopB', 'TopA'], 'Snapshot was silently invalidated before explicit refresh'

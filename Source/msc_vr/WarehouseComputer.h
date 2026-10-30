@@ -32,6 +32,7 @@ struct FWarehouseComputerTask
  UPROPERTY(BlueprintReadOnly) FString State;
  UPROPERTY(BlueprintReadOnly) bool bCompleted=false;
  UPROPERTY(BlueprintReadOnly) bool bCancelled=false;
+ UPROPERTY(BlueprintReadOnly) bool bDeferred=false;
  UPROPERTY(BlueprintReadOnly) bool bSubmissionTimeKnown=false;
  UPROPERTY(BlueprintReadOnly) double SubmittedSimulationSeconds=0;
  UPROPERTY(BlueprintReadOnly) double FinishedSimulationSeconds=-1;
@@ -55,6 +56,8 @@ public:
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Console") TArray<FWarehouseComputerTask> Tasks;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Console") TArray<TObjectPtr<AWarehouseForklift>> Fleet;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Console") FString LastMessage;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Console") FString LastWorkAlert;
+ double LastWorkAlertUntil=0;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Console") int32 RefreshCount=0;
  UFUNCTION(BlueprintCallable,Category="Console") void RefreshState();
  void RefreshLayoutDestinations();

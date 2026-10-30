@@ -21,6 +21,8 @@ CSV_DEFINE_CATEGORY(Warehouse,true);
 
 static TAutoConsoleVariable<int32> CVarWarehouseSupportSharing(TEXT("Warehouse.SupportSnapshotSharing"),1,
  TEXT("Share the current 10Hz support snapshot between periodic readers; 0 reproduces legacy refreshes."));
+static TAutoConsoleVariable<int32> CVarWarehouseSupportRelationCache(TEXT("Warehouse.SupportRelationCache"),1,
+ TEXT("Reuse unchanged rigid support queries; 0 retraces every periodic profile for verification."));
 
 namespace
 {
@@ -35,6 +37,14 @@ namespace
    if (const auto* Body=Part->GetBodyInstance(NAME_None,true); Body && Body->OwnerComponent.IsValid()) return Body->OwnerComponent.Get();
   }
   return Part;
+ }
+ bool HasNativeQueryBodies(UPrimitiveComponent* Part)
+ {
+  if (Part->HasValidPhysicsState()) return true;
+  // Welded shapes belong to the parent's body. ISM/HISM and other multi-body
+  // primitives may instead publish physics objects without a root body.
+  if (const auto* Body=Part->GetBodyInstance(NAME_None,true);Body && Body->IsValidBodyInstance()) return true;
+  return Part->GetAllPhysicsObjects().ContainsByPredicate([](const auto* Body){return Body!=nullptr;});
  }
  uint32 ContactBodyId(UPrimitiveComponent* Part,const AActor* Actor)
  {
@@ -163,7 +173,7 @@ void AWarehouseDamageSystem::RefreshLayoutBindings()
  for (int32 I=0;I<Objects.Num();++I)
   for (AActor* Actor:Objects[I].Members) if (IsValid(Actor)) Lookup.Add(Actor,I);
  Supports.SetNum(Objects.Num());Bounds.SetNum(Objects.Num());
- UpdateLoads();
+ UpdateLoads(true);
 }
 void AWarehouseDamageSystem::RemoveLayoutActors(const TArray<AActor*>& Actors)
 {
@@ -191,6 +201,7 @@ void AWarehouseDamageSystem::RegisterLayoutProfile(const FWarehouseStrength& Pro
 
 void AWarehouseDamageSystem::InitializeStrength()
 {
+ SupportGeometry.Reset();SupportMembers.Reset();BearingSupports.Reset();BearingBounds.Reset();
  Lookup.Reset();
  PrePhysicsMotion.Reset();
  Supports.SetNum(Objects.Num());
@@ -249,7 +260,7 @@ void AWarehouseDamageSystem::InitializeStrength()
   }
  }
  bInitialized=true;
- UpdateLoads();
+ UpdateLoads(true);
 }
 void AWarehouseDamageSystem::Tick(float Dt)
 {
@@ -258,11 +269,96 @@ void AWarehouseDamageSystem::Tick(float Dt)
  for (auto& Entry : PrePhysicsMotion) if (auto* Part=Entry.Key.Get()) Entry.Value=ReadMotion(Part);
  AdvanceStrength(Dt);
 }
-void AWarehouseDamageSystem::UpdateLoads()
+bool AWarehouseDamageSystem::RefreshSupportGeometry(TArray<FBox>& ChangedGeometry)
+{
+ CSV_SCOPED_TIMING_STAT(Warehouse,SupportGeometry);
+ bool BindingsChanged=SupportMembers.Num()!=Objects.Num();
+ SupportMembers.SetNum(Objects.Num());
+ Bounds.SetNum(Objects.Num());
+ TMap<AActor*,FBox> ActorBounds;
+ Lookup.Reset();
+ for (int32 I=0;I<Objects.Num();++I)
+ {
+  TArray<TWeakObjectPtr<AActor>> Members;
+  for (AActor* Actor:Objects[I].Members) if (IsValid(Actor)) { Members.Add(Actor);Lookup.Add(Actor,I); }
+  BindingsChanged|=SupportMembers[I]!=Members;
+  SupportMembers[I]=MoveTemp(Members);
+  Bounds[I]=FBox(ForceInit);
+ }
+ ++SupportGeometryGeneration;
+ for (TActorIterator<AActor> It(GetWorld());It;++It)
+ {
+  AActor* Actor=*It;
+  const int32 Profile=IndexOf(Actor);
+  FBox PhysicalBounds(ForceInit);
+  TInlineComponentArray<UPrimitiveComponent*> Parts(Actor);
+  for (UPrimitiveComponent* Part:Parts)
+  {
+   const FBox Box=Part->Bounds.GetBox();
+   if (Profile!=INDEX_NONE && WarehousePhysics::IsPhysicalContact(Part)) PhysicalBounds+=Box;
+   // Unprofiled geometry may occlude a support ray too. Its movement/removal
+   // must invalidate the old footprint even if the parcel itself is asleep.
+   if (!Actor->GetActorEnableCollision() || !Part->IsRegistered() || !Part->IsQueryCollisionEnabled() ||
+       Part->GetCollisionResponseToChannel(ECC_Visibility)!=ECR_Block) continue;
+   // Debug renderers and the empty editor builder brush can advertise query
+   // collision and enormous render bounds, but have no native trace shapes.
+   // Do not let them invalidate every bearing; creation/removal of real bodies
+   // is still observed on each ordinary scan, including sleeping supports.
+   if (!HasNativeQueryBodies(Part)) continue;
+   UBodySetup* Setup=Part->GetPhysicsBodySetup();
+   const auto* StaticMesh=Cast<UStaticMeshComponent>(Part);
+   UStaticMesh* Mesh=StaticMesh ? StaticMesh->GetStaticMesh() : nullptr;
+   const FGuid Guid=Setup ? Setup->BodySetupGuid : FGuid();
+   const uint8 TraceFlag=Setup ? uint8(Setup->CollisionTraceFlag) : 0;
+   auto* Previous=SupportGeometry.Find(Part);
+   // Skeletal, instanced, spline and procedural components can change internal
+   // collision without changing their component transform or aggregate box.
+   const bool RigidMesh=Part->GetClass()==UStaticMeshComponent::StaticClass();
+   const bool Changed=!Previous || !RigidMesh || Previous->Box!=Box ||
+    !Previous->Transform.Equals(Part->GetComponentTransform(),0.) || Previous->BodySetup.Get()!=Setup ||
+    Previous->Mesh.Get()!=Mesh || Previous->BodyGuid!=Guid || Previous->TraceFlag!=TraceFlag;
+   if (Changed)
+   {
+    if (Previous && Previous->Box.IsValid) ChangedGeometry.Add(Previous->Box);
+    if (Box.IsValid) ChangedGeometry.Add(Box);
+   }
+   FSupportGeometry& State=SupportGeometry.FindOrAdd(Part);
+   State.Transform=Part->GetComponentTransform();State.Box=Box;State.BodySetup=Setup;State.Mesh=Mesh;
+   State.BodyGuid=Guid;State.TraceFlag=TraceFlag;State.Seen=SupportGeometryGeneration;
+  }
+  if (PhysicalBounds.IsValid) ActorBounds.Add(Actor,PhysicalBounds);
+ }
+ for (auto It=SupportGeometry.CreateIterator();It;++It)
+  if (It.Value().Seen!=SupportGeometryGeneration)
+  {
+   if (It.Value().Box.IsValid) ChangedGeometry.Add(It.Value().Box);
+   It.RemoveCurrent();
+  }
+ for (int32 I=0;I<SupportMembers.Num();++I)
+  for (const auto& Member:SupportMembers[I]) if (const FBox* Box=ActorBounds.Find(Member.Get())) Bounds[I]+=*Box;
+ return BindingsChanged;
+}
+void AWarehouseDamageSystem::UpdateLoads(bool ForceFullTrace)
 {
  CSV_SCOPED_TIMING_STAT(Warehouse,LoadGraph);
  CSV_CUSTOM_STAT(Warehouse,LoadGraphBuilds,1,ECsvCustomStatOp::Accumulate);
  int32 TraceCount=0;
+ int32 ReusedRelations=0,TracedRelations=0;
+ const TArray<FBox> PreviousBounds=BearingBounds;
+ TArray<FBox> ChangedGeometry;
+ const bool BindingsChanged=RefreshSupportGeometry(ChangedGeometry);
+ const bool ReuseRelations=!ForceFullTrace && !BindingsChanged && CVarWarehouseSupportRelationCache.GetValueOnGameThread()!=0;
+ // A multi-member profile's aggregate bottom also participates in the parent
+ // eligibility test. Moving one distant member can change that qualification
+ // for an otherwise unchanged bearing, so invalidate its whole old/new box.
+ for (int32 I=0;I<Bounds.Num();++I)
+  if (!PreviousBounds.IsValidIndex(I) || PreviousBounds[I]!=Bounds[I])
+  {
+   if (PreviousBounds.IsValidIndex(I) && PreviousBounds[I].IsValid) ChangedGeometry.Add(PreviousBounds[I]);
+   if (Bounds[I].IsValid) ChangedGeometry.Add(Bounds[I]);
+  }
+ BearingSupports.SetNum(Objects.Num());BearingBounds=Bounds;
+ Supports.SetNum(Objects.Num());
  TArray<int32> Order;
  TArray<TArray<float>> Levels;
  Levels.SetNum(Objects.Num());
@@ -272,15 +368,11 @@ void AWarehouseDamageSystem::UpdateLoads()
   auto& Spec=Objects[I];
   Spec.SupportedKg=0; Spec.PeakLevelKg=0;
   Levels[I].SetNumZeroed(Spec.ShelfHeightsCm.Num());
-  Bounds[I]=FBox(ForceInit);
   Supports[I].Reset();
   SupportedChildren[I].Reset();
   for (AActor* Actor : Spec.Members) if (IsValid(Actor))
   {
    if (auto* Cargo=Cast<AWarehouseCargo>(Actor)) Spec.MassKg=Cargo->GrossMassKg;
-   TArray<UPrimitiveComponent*> Parts;
-   Actor->GetComponents(Parts);
-   for (auto* Part : Parts) if (WarehousePhysics::IsPhysicalContact(Part)) Bounds[I]+=Part->Bounds.GetBox();
    if (auto* Pallet=Cast<AWarehousePallet>(Actor))
    {
     Spec.MassKg=FMath::Max(1.f,Pallet->PalletMassKg);
@@ -292,6 +384,7 @@ void AWarehouseDamageSystem::UpdateLoads()
    }
   }
   if (Bounds[I].IsValid) Order.Add(I);
+  else BearingSupports[I].Reset();
  }
  // Higher objects propagate their full load once: box stack -> pallet -> rack level -> floor.
  Order.Sort([&](int32 A,int32 B){return Bounds[A].Min.Z>Bounds[B].Min.Z;});
@@ -299,27 +392,37 @@ void AWarehouseDamageSystem::UpdateLoads()
  {
   auto& Spec=Objects[I];
   const FBox& Box=Bounds[I];
-  FCollisionQueryParams Params(SCENE_QUERY_STAT(WarehouseSupport),true);
-  for (AActor* Actor : Spec.Members) if (IsValid(Actor)) Params.AddIgnoredActor(Actor);
-  // ponytail: sampled support at 10 Hz; use Chaos contact manifolds for arbitrary rolling/tilting stacks.
-  // Start inside the footprint; an open crate can support a box only along its narrow rim.
-  auto Sample=[&](float Inset)
+  const FBox QueryFootprint(FVector(Box.Min.X,Box.Min.Y,Box.Min.Z-3.),FVector(Box.Max.X,Box.Max.Y,Box.Min.Z+1.));
+  const bool MustTrace=!ReuseRelations || !PreviousBounds.IsValidIndex(I) || PreviousBounds[I]!=Box ||
+   ChangedGeometry.ContainsByPredicate([&](const FBox& Changed){return Changed.Intersect(QueryFootprint);});
+  if (MustTrace)
   {
-    TraceCount+=9;
-   for (float X : {Inset,.5f,1.f-Inset}) for (float Y : {Inset,.5f,1.f-Inset})
+   ++TracedRelations;
+   BearingSupports[I].Reset();
+   FCollisionQueryParams Params(SCENE_QUERY_STAT(WarehouseSupport),true);
+   for (AActor* Actor : Spec.Members) if (IsValid(Actor)) Params.AddIgnoredActor(Actor);
+   // ponytail: sampled support at 10 Hz; use Chaos contact manifolds for arbitrary rolling/tilting stacks.
+   // Start inside the footprint; an open crate can support a box only along its narrow rim.
+   auto Sample=[&](float Inset)
    {
-    FVector Point(FMath::Lerp(Box.Min.X,Box.Max.X,X),FMath::Lerp(Box.Min.Y,Box.Max.Y,Y),Box.Min.Z+1);
-    FHitResult Hit;
-    if (GetWorld()->LineTraceSingleByChannel(Hit,Point,Point-FVector(0,0,4),ECC_Visibility,Params))
+    TraceCount+=9;
+    for (float X : {Inset,.5f,1.f-Inset}) for (float Y : {Inset,.5f,1.f-Inset})
     {
-     const int32 Parent=IndexOf(Hit.GetActor());
-     if (Parent!=INDEX_NONE && Parent!=I && Bounds[Parent].IsValid && Bounds[Parent].Min.Z<Box.Min.Z-.05f)
-      Supports[I].AddUnique(Parent);
+     FVector Point(FMath::Lerp(Box.Min.X,Box.Max.X,X),FMath::Lerp(Box.Min.Y,Box.Max.Y,Y),Box.Min.Z+1);
+     FHitResult Hit;
+     if (GetWorld()->LineTraceSingleByChannel(Hit,Point,Point-FVector(0,0,4),ECC_Visibility,Params))
+     {
+      const int32 Parent=IndexOf(Hit.GetActor());
+      if (Parent!=INDEX_NONE && Parent!=I && Bounds[Parent].IsValid && Bounds[Parent].Min.Z<Box.Min.Z-.05f)
+       BearingSupports[I].AddUnique(Parent);
+     }
     }
-   }
-  };
-  Sample(.13f);
-  if (Supports[I].IsEmpty()) Sample(.015f);
+   };
+   Sample(.13f);
+   if (BearingSupports[I].IsEmpty()) Sample(.015f);
+  }
+  else ++ReusedRelations;
+  Supports[I]=BearingSupports[I];
   // Intact film is also a real load path when a carton momentarily loses
   // deck contact. Prefer actual bearings; never count both paths twice.
   if (Supports[I].IsEmpty()) for (AActor* Actor:Spec.Members)
@@ -347,7 +450,10 @@ void AWarehouseDamageSystem::UpdateLoads()
  // profile for each pallet/rack inventory read. Multi-supported loads appear once.
  for (int32 Child=0;Child<Supports.Num();++Child)
   for (int32 Parent:Supports[Child]) SupportedChildren[Parent].Add(Child);
+ LastSupportTraceCount=TraceCount;LastSupportRelationsReused=ReusedRelations;
  CSV_CUSTOM_STAT(Warehouse,SupportTraceCount,TraceCount,ECsvCustomStatOp::Accumulate);
+ CSV_CUSTOM_STAT(Warehouse,SupportRelationsReused,ReusedRelations,ECsvCustomStatOp::Accumulate);
+ CSV_CUSTOM_STAT(Warehouse,SupportRelationsTraced,TracedRelations,ECsvCustomStatOp::Accumulate);
  LastSupportScanSeconds=GetWorld()->GetTimeSeconds();LastSupportScanFrame=GFrameCounter;
  ++SupportSnapshotVersion;
 }
@@ -507,7 +613,7 @@ TArray<AActor*> AWarehouseDamageSystem::GetSupportedActors(AActor* Object,bool R
  CSV_SCOPED_TIMING_STAT(Warehouse,SupportedActors);
  CSV_CUSTOM_STAT(Warehouse,SupportedActorQueries,1,ECsvCustomStatOp::Accumulate);
  if (!bInitialized) InitializeStrength();
- if (Refresh) UpdateLoads();
+ if (Refresh) UpdateLoads(true);
  CSV_SCOPED_TIMING_STAT(Warehouse,SupportTraversal);
  TArray<AActor*> Result;
  TArray<int32> Stack;

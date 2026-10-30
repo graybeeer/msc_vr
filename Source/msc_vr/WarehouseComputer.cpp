@@ -111,11 +111,23 @@ double AWarehouseComputer::GetTaskElapsedSeconds(const FString& JobId) const
 void AWarehouseComputer::ReceiveJobReport(const FWarehouseJobReport& Report)
 {
  auto* Task=Tasks.FindByPredicate([&](const auto& T) { return T.JobId==Report.JobId; });
- if (!Task || Task->bCompleted || Task->bCancelled) return;
+ if (!Task || Task->bCompleted || Task->bCancelled || Task->bDeferred) return;
  if (Report.Result==TEXT("COMPLETED"))
  {
   Task->bCompleted=true;Task->State=TEXT("완료 · 재고 위치 갱신됨");
   Task->FinishedSimulationSeconds=Report.SimulationSeconds;
+ }
+ else if (Report.Result==TEXT("CANCELLED"))
+ {
+  Task->bCancelled=true;Task->State=TEXT("취소됨 · ")+Report.Detail;
+  Task->FinishedSimulationSeconds=Report.SimulationSeconds;
+ }
+ else if (Report.Result==TEXT("DEFERRED"))
+ {
+  Task->bDeferred=true;Task->State=TEXT("운반 보류 · ")+Report.Detail;
+  Task->FinishedSimulationSeconds=Report.SimulationSeconds;
+  LastWorkAlert=TEXT("운반할 수 없는 작업을 보류했습니다. 다른 작업을 먼저 처리합니다.\n")+Task->Source+TEXT(" · ")+Report.Detail;
+  LastWorkAlertUntil=GetWorld()->GetTimeSeconds()+20.;
  }
  else if (Report.Result==TEXT("STATE") || Report.Result==TEXT("FAULT")) Task->State=Report.Detail;
  Task->ElapsedSimulationSeconds=GetTaskElapsedSeconds(Task->JobId);
@@ -138,7 +150,7 @@ FString AWarehouseComputer::Locate(AActor* Object) const
   if (FMath::Abs(Local.X)<=Zone.HalfSize.X && FMath::Abs(Local.Y)<=Zone.HalfSize.Y && FMath::Abs(Local.Z)<20)
    return Zone.Name==TEXT("Outbound") ? TEXT("출고 대기 구역") : TEXT("입고 대기 구역");
  }
- for (AWarehouseForklift* Vehicle : Fleet) if (IsValid(Vehicle) && Vehicle->GetLoadMassKg()>0 && Vehicle->ActiveJob.Pallet==Object)
+ for (AWarehouseForklift* Vehicle : Fleet) if (IsValid(Vehicle) && Vehicle->ActiveJob.Pallet==Object && Vehicle->GetLoadMassKg()>0)
   return Vehicle->VehicleName+TEXT(" · 운반 중");
  for (TActorIterator<AWarehouseInboundZone> It(GetWorld());It;++It)
  {
@@ -204,12 +216,12 @@ void AWarehouseComputer::RefreshState()
   // Authored initial queues or a console spawned after dispatch have no known submission timestamp.
   RememberJob(Vehicle,Vehicle->ActiveJob,false);for (const auto& Job : Vehicle->PendingJobs) RememberJob(Vehicle,Job,false);
   // Recover an exact completion timestamp if the console missed a delegate during initialization.
-  for (const auto& Report : Vehicle->JobReports) if (Report.Result==TEXT("COMPLETED")) ReceiveJobReport(Report);
+  for (const auto& Report : Vehicle->JobReports) if (Report.Result==TEXT("COMPLETED") || Report.Result==TEXT("CANCELLED") || Report.Result==TEXT("DEFERRED")) ReceiveJobReport(Report);
  }
  for (auto& Task : Tasks)
  {
   Task.ElapsedSimulationSeconds=GetTaskElapsedSeconds(Task.JobId);
-  if (Task.bCompleted || Task.bCancelled) continue;
+  if (Task.bCompleted || Task.bCancelled || Task.bDeferred) continue;
   auto* V=Task.Vehicle.Get();if (!IsValid(V)) { Task.State=TEXT("차량 연결 끊김");continue; }
   if (V->ActiveJob.JobId==Task.JobId) Task.State=V->Status;
   else if (V->PendingJobs.ContainsByPredicate([&](const auto& Job) { return Job.JobId==Task.JobId; })) Task.State=TEXT("작업 대기");
@@ -220,9 +232,9 @@ void AWarehouseComputer::RefreshState()
   else Task.State=TEXT("작업 연결 끊김 · 확인 필요");
  }
  // ponytail: keep all unfinished orders and 200 finished session records; durable WMS storage is a later integration.
- int32 FinishedCount=0;for (const auto& Task : Tasks) if (Task.bCompleted || Task.bCancelled) ++FinishedCount;
+ int32 FinishedCount=0;for (const auto& Task : Tasks) if (Task.bCompleted || Task.bCancelled || Task.bDeferred) ++FinishedCount;
  for (int32 I=0;I<Tasks.Num() && FinishedCount>200;)
-  if (Tasks[I].bCompleted || Tasks[I].bCancelled) { Tasks.RemoveAt(I);--FinishedCount; } else ++I;
+  if (Tasks[I].bCompleted || Tasks[I].bCancelled || Tasks[I].bDeferred) { Tasks.RemoveAt(I);--FinishedCount; } else ++I;
 }
 void AWarehouseComputer::RefreshLayoutDestinations()
 {
@@ -247,6 +259,8 @@ bool AWarehouseComputer::IssueShipmentOutbound(AWarehouseCargo* Cargo,AWarehouse
  auto* Pallet=Item ? Item->Pallet.Get() : nullptr;
  auto* Strength=AWarehouseDamageSystem::Find(this);
  if (!Pallet || !Strength) return Fail(TEXT("이 상품을 팔레트 위에 올린 뒤 지시하세요."));
+ if (Pallet->ReceiptState!=EWarehouseReceiptState::Confirmed || Pallet->ReceivingState!=EWarehouseReceivingState::Accepted)
+  return Fail(TEXT("입고 검수·랩핑이 완료된 팔레트만 출고할 수 있습니다. 격리 물류는 재검수하세요. [QUALITY_HOLD]"));
  if (const auto* Shipping=AWarehouseShippingSystem::Find(this))
  {
   const FString Reservation=Shipping->GetPalletShipment(Pallet);
@@ -348,6 +362,8 @@ bool AWarehouseComputer::SetVehicleRunning(AWarehouseForklift* Vehicle,bool Runn
  { LastMessage=TEXT("차량을 선택하고 원격 조작을 해제하세요.");return false; }
  if (Running && !Vehicle->CheckSystems().IsEmpty()) { LastMessage=TEXT("고장 원인을 해결한 뒤 재개하세요.");return false; }
  if (Vehicle->bPowered!=Running) Vehicle->TogglePower();
+ if (Vehicle->bPowered!=Running)
+ {LastMessage=Vehicle->WorkStopStatus.IsEmpty() ? Vehicle->Status : Vehicle->WorkStopStatus;return false;}
  RefreshState();LastMessage=Running ? TEXT("자체 점검 후 운행을 재개합니다.") : TEXT("차량에 제동·일시정지를 요청했습니다.");return true;
 }
 bool AWarehouseComputer::CancelQueuedJob(const FString& JobId)

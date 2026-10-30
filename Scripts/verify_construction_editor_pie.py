@@ -1,7 +1,8 @@
 """Unsaved Entry PIE: tile gestures, atomic building edits and preserved stock.
 
 Uses the actual player controller/construction editor. After PIE starts the
-fixture's cargo, rack and player are never warped, attached or force-settled.
+fixture's stock is never attached or force-settled. Automatic vehicle relocation
+is exercised only by the real building-edit transaction.
 Rendered runs also project real resize handles through the public pointer API;
 NullRHI explicitly skips screen projection. This is not an OS-input test.
 """
@@ -18,6 +19,7 @@ command = unreal.SystemLibrary.get_command_line().lower()
 keep_open = '-keeptesteditoropen' in command
 rendered = '-nullrhi' not in command
 with_lifts = globals().get('BUILDING_SHAFT_LAYOUT_CHECKS', False) or '-buildingshaftlayoutchecks' in command
+auto_clear = globals().get('CONSTRUCTION_AUTO_CLEAR_CHECKS', False) or '-constructionautoclearchecks' in command
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
@@ -142,6 +144,142 @@ def reject(proposed, label, reason_fragment=None):
     check(label, reason=status)
 
 
+def run_auto_clear_checks():
+    """Authoritative edit transactions, with normal physical actors and no saved-map writes."""
+    store = allof(unreal.WarehouseLayoutInventory)[0]
+    rig = live['ConstructionAutoPauseAGV']
+    edge = live['ConstructionEdgeCargo']
+    identity = edge.get_editor_property('cargo_id')
+    edge_mass = edge.get_editor_property('gross_mass_kg')
+    edge_product = str(edge.get_editor_property('cargo_kind'))
+    edge_mesh = edge.get_component_by_class(unreal.StaticMeshComponent)
+    edge_asset = edge_mesh.static_mesh
+    edge_materials = [edge_mesh.get_material(i) for i in range(edge_mesh.get_num_materials())]
+    edge_size = edge.get_actor_bounds(False)[1]*2
+    edge_packing = edge.get_editor_property('packing')
+    strength = allof(unreal.WarehouseDamageSystem)[0]
+    edge_profile = next(row for row in strength.get_editor_property('objects') if edge in row.members)
+    assert store.create_held_cargo('FIFO-EXISTING', '기존 보류 물류', 8, unreal.Vector(20, 20, 20))
+    first_ids = [str(row.cargo_id) for row in store.get_editor_property('held_cargo')]
+    job = unreal.WarehouseWorkOrder(job_id='BUILDING-REMOVED-RACK', pallet=live['ConstructionWorkPallet'],
+        destination=unreal.Transform(location=unreal.Vector(2740, 600, 20)),
+        destination_resource=live['ConstructionClearRackA'], requires_destination_resource=True, rack_destination=True)
+    assert rig.submit_job(job), rig.get_editor_property('last_error_message')
+    rig.toggle_power()
+    body = rig.root_component
+    body.set_physics_linear_velocity(unreal.Vector(30, 0, 0))
+    rig_start = rig.get_actor_location()
+    assert rig.get_editor_property('powered') and rig.get_velocity().length() > 5
+    expanded = current_settings()
+    expanded.roof_height_cm += 100
+    assert building.apply_settings(expanded), building.get_editor_property('status')
+    assert not rig.get_editor_property('powered')
+    assert (rig.get_actor_location()-rig_start).length() < .1
+    assert rig.get_editor_property('pending_jobs')[0].job_id == job.job_id
+    assert_stock_unchanged()
+    check('active_vehicle_does_not_block_expansion_and_unaffected_job_is_retained')
+    rig.toggle_power()
+    body.set_physics_linear_velocity(unreal.Vector(30, 0, 0))
+    assert rig.get_editor_property('powered') and rig.get_velocity().length() > 5
+    proposed = current_settings()
+    proposed.width_cm = 4600
+    for field in ('floor2', 'floor3'):
+        floor = proposed.get_editor_property(field)
+        floor.stair_offset_cm = unreal.Vector2D(floor.stair_offset_cm.x+100, floor.stair_offset_cm.y)
+        proposed.set_editor_property(field, floor)
+    assert building.apply_settings(proposed), building.get_editor_property('status')
+    assert not rig.get_editor_property('powered') and rig.get_editor_property('ai_state') == unreal.WarehouseAIState.PAUSED
+    assert (rig.get_actor_location()-rig_start).length() > 20, 'Boundary vehicle was not relocated'
+    assert body.is_simulating_physics() and body.is_gravity_enabled()
+    assert body.get_physics_linear_velocity().length() < .01
+    assert not rig.get_editor_property('pending_jobs')
+    assert any(r.job_id == job.job_id and r.result == 'CANCELLED' for r in rig.get_editor_property('job_reports'))
+    console = live['ConstructionWallMountedComputer']
+    terminal = next(row for row in console.get_editor_property('tasks') if row.job_id == job.job_id)
+    assert terminal.cancelled and not terminal.completed and terminal.finished_simulation_seconds >= 0
+    end_time, elapsed = terminal.finished_simulation_seconds, terminal.elapsed_simulation_seconds
+    rig.get_editor_property('on_job_report').broadcast(unreal.WarehouseJobReport(job_id=job.job_id, result='COMPLETED',
+        simulation_seconds=end_time+100, detail='late duplicate'))
+    console.refresh_state()
+    terminal = next(row for row in console.get_editor_property('tasks') if row.job_id == job.job_id)
+    assert terminal.cancelled and not terminal.completed
+    assert terminal.finished_simulation_seconds == end_time and terminal.elapsed_simulation_seconds == elapsed
+    check('computer_records_cancellation_and_freezes_end_time_against_late_reports', end=end_time, elapsed=elapsed)
+    assert not unreal.SystemLibrary.is_valid(edge)
+    assert not unreal.SystemLibrary.is_valid(live['ConstructionClearRackA']) and not unreal.SystemLibrary.is_valid(live['ConstructionClearRackB'])
+    held = list(store.get_editor_property('held_cargo'))
+    assert [str(row.cargo_id) for row in held[:len(first_ids)]] == first_ids
+    archived = next(row for row in held if row.cargo_id == identity)
+    assert abs(archived.mass_kg-edge_mass) < .001 and str(archived.product) == edge_product
+    assert (archived.size_cm-edge_size).length() < .1
+    stock_snapshot.pop('ConstructionEdgeCargo')
+    check('running_vehicle_auto_paused_and_safely_relocated_complete_rack_removed_and_parcel_archived',
+          held_ids=[str(row.cargo_id) for row in held], cancelled_job=job.job_id)
+    # A duplicate FIFO identity must roll back earlier archived parcels and all hidden actors.
+    duplicate = live['ConstructionArchiveDuplicate']
+    before = physical_snapshot(duplicate)
+    ids_before = [str(row.cargo_id) for row in held]
+    proposed = current_settings()
+    for field in ('floor2', 'floor3'):
+        floor = proposed.get_editor_property(field);floor.enabled = False;proposed.set_editor_property(field, floor)
+    revision = building.get_editor_property('revision');geometry = geometry_snapshot()
+    assert not building.apply_settings(proposed), 'Duplicate held ID was accepted'
+    assert building.get_editor_property('revision') == revision and geometry_snapshot() == geometry
+    assert [str(row.cargo_id) for row in store.get_editor_property('held_cargo')] == ids_before
+    assert physical_snapshot(duplicate) == before
+    assert_stock_unchanged()
+    check('duplicate_archive_id_rolls_back_geometry_visibility_collision_and_fifo', reason=building.get_editor_property('status'))
+    duplicate.destroy_actor()
+    upper = live['ConstructionUpperCargo'];upper_id = upper.get_editor_property('cargo_id')
+    assert building.apply_settings(proposed), building.get_editor_property('status')
+    assert not unreal.SystemLibrary.is_valid(upper) and not current_settings().floor2.enabled and not current_settings().floor3.enabled
+    held = list(store.get_editor_property('held_cargo'))
+    assert any(row.cargo_id == upper_id and abs(row.mass_kg-23) < .001 for row in held)
+    stock_snapshot.pop('ConstructionUpperCargo')
+    assert_stock_unchanged()
+    check('removed_mezzanines_archive_unsupported_stock_while_other_stock_stays_unchanged')
+    protected = current_settings();protected.width_cm = 1600;protected.depth_cm = 1600
+    before = geometry_snapshot();ids_before = [str(row.cargo_id) for row in held]
+    assert not building.apply_settings(protected), 'Player was silently removed or left outside'
+    assert geometry_snapshot() == before and [str(row.cargo_id) for row in store.get_editor_property('held_cargo')] == ids_before
+    check('player_is_protected_from_silent_deletion', reason=building.get_editor_property('status'))
+
+    # Exercise the real FIFO/add transaction to observe protected persistence data.
+    # Internal save rows deliberately do not expose mesh/material/strength properties to Python.
+    pc.set_construction_editing(False)
+    layout.set_editing(True, 0)
+    layout.set_category(unreal.WarehouseLayoutCategory.CARGO)
+    layout.set_action(unreal.WarehouseLayoutAction.ADD)
+    restored = None
+    for index in range(len(store.get_editor_property('held_cargo'))):
+        next_id = store.get_editor_property('held_cargo')[0].cargo_id
+        count = len(store.get_editor_property('held_cargo'))
+        point = unreal.Vector(-1400+index*200, -1200, 0)
+        assert layout.begin_add(point), layout.get_editor_property('status')
+        layout.update_surface_drag(point, None, point)
+        assert layout.end_drag(), layout.get_editor_property('status')
+        assert len(store.get_editor_property('held_cargo')) == count-1
+        placed = next(actor for actor in allof(unreal.WarehouseCargo) if actor.get_editor_property('cargo_id') == next_id)
+        if next_id == identity:
+            restored = placed
+            break
+    assert restored, 'Archived parcel was not available through FIFO add'
+    body = restored.get_component_by_class(unreal.StaticMeshComponent)
+    packing = restored.get_editor_property('packing')
+    profile = next(row for row in strength.get_editor_property('objects') if restored in row.members)
+    assert body.is_simulating_physics() and body.is_gravity_enabled()
+    assert abs(restored.get_editor_property('gross_mass_kg')-edge_mass) < .001
+    assert str(restored.get_editor_property('cargo_kind')) == edge_product
+    assert body.static_mesh == edge_asset
+    assert [body.get_material(i) for i in range(body.get_num_materials())] == edge_materials
+    assert (restored.get_actor_bounds(False)[1]*2-edge_size).length() < .1
+    assert packing.delivery_seed == edge_packing.delivery_seed and packing.item_index == edge_packing.item_index
+    assert packing.fragile == edge_packing.fragile
+    assert abs(profile.damage-edge_profile.damage) < .0001 and profile.rated_load_kg == edge_profile.rated_load_kg
+    assert_stock_unchanged()
+    check('fifo_roundtrip_restores_model_materials_packing_damage_mass_size_and_native_physics', cargo_id=str(identity))
+
+
 def finish(passed, detail):
     global completed
     if completed:
@@ -189,6 +327,7 @@ def fixture():
 
     def spawn(cls, name, point):
         actor = actors.spawn_actor_from_class(cls, unreal.Vector(*point))
+        assert actor and (actor.get_actor_location()-unreal.Vector(*point)).length() < .01, ('Fixture spawn location mismatch', name, point, actor.get_actor_location() if actor else None)
         actor.set_actor_label(name)
         return actor
 
@@ -265,9 +404,15 @@ def fixture():
                                     ('ConstructionUpperCargo', (-1200, 1200, 420), (40, 30, 40), 23),
                                     ('WH_LightStock_1_0', (1900, 0, 120), (40, 30, 40), 12)]:
         parcel = spawn(unreal.WarehouseCargo, name, point)
+        parcel.set_editor_property('cargo_id', name)
         parcel.set_cargo_mesh(cube)
         parcel.set_actor_scale3d(unreal.Vector(*[value/100 for value in size]))
         parcel.set_gross_mass_kg(mass)
+        recipe = unreal.WarehouseCargoRecipe(valid=True, rule_version=2, delivery_seed=20261027,
+            item_index=mass, size_cm=unreal.Vector(*size), size_limit_cm=unreal.Vector(*size),
+            product_kind='보류 보존 검사 물류', net_mass_kg=mass-.3, packaging_mass_kg=.3,
+            gross_mass_kg=mass, fragile=True)
+        assert parcel.apply_cargo_recipe(recipe), name
     barrel_mesh = unreal.load_asset('/Game/Warehouse/Physics/SM_Ind_War_Storage_Barrel_Plastic_Blue_01')
     assert barrel_mesh, 'The production barrel physics mesh is required for the resting-contact regression'
     barrel = spawn(unreal.StaticMeshActor, 'ConstructionRestingBarrel', (-1700, 1770, 0))
@@ -279,9 +424,24 @@ def fixture():
     strength = spawn(unreal.WarehouseDamageSystem, 'ConstructionStrength', (0, 0, 0))
     strength.set_editor_property('objects', [unreal.WarehouseStrength(name='ConstructionRestingBarrel',
         members=[barrel], physics_meshes=[barrel_mesh], mass_kg=55, rated_load_kg=150,
-        impact_yield_j=1000, impact_failure_j=5000)])
+        impact_yield_j=1000, impact_failure_j=5000),
+        unreal.WarehouseStrength(name='ConstructionEdgeCargo',
+            members=[next(a for a in actors.get_all_level_actors() if a.get_actor_label() == 'ConstructionEdgeCargo')],
+            mass_kg=12, rated_load_kg=160, impact_yield_j=1000, impact_failure_j=5000, damage=.2)])
     buried = block('ConstructionBuriedBody', (1900, 900, 6), (40, 40, 20), ['LayoutFixed'])
     buried.set_actor_enable_collision(False)
+    if auto_clear:
+        rig = spawn(unreal.WarehouseForklift, 'ConstructionAutoPauseAGV', (2600, -1000, 0))
+        rig.set_editor_property('auto_start', False)
+        block('ConstructionClearRackA', (2740, 600, 100), (80, 80, 200), ['LayoutType:Rack', 'LayoutGroup:AutoClearRack'])
+        block('ConstructionClearRackB', (2580, 600, 100), (80, 80, 200), ['LayoutType:Rack', 'LayoutGroup:AutoClearRack'])
+        spawn(unreal.WarehousePallet, 'ConstructionWorkPallet', (600, -1000, 0))
+        # Deliberate invalid-data fixture: the duplicate is kept in the world while
+        # the edge parcel is archived, then both are targeted by the floor removal.
+        duplicate = spawn(unreal.WarehouseCargo, 'ConstructionArchiveDuplicate', (-1200, -1200, 420))
+        duplicate.set_editor_property('cargo_id', 'ConstructionEdgeCargo')
+        duplicate.set_cargo_mesh(cube)
+        duplicate.set_actor_scale3d(unreal.Vector(.4, .3, .4))
     spawn(unreal.PlayerStart, 'ConstructionSafePlayerStart', (1700, 1500, 100))
     spawn(unreal.load_class(None, '/Script/msc_vr.WarehouseSimulationClock'), 'ConstructionClock', (0, 0, 0))
 
@@ -363,6 +523,10 @@ def _tick_impl(delta_seconds):
             for name, previous in source_snapshot.items():
                 assert physical_snapshot(live[name]) == previous
             check('drag_preview_cancel_preserves_real_geometry_collision_and_stock')
+            if auto_clear:
+                run_auto_clear_checks()
+                finish(True, 'Active vehicle pause/safe relocation, grouped facility cleanup, cargo FIFO preservation and atomic rollback; player protection')
+                return
             phase = 'pointer'
             phase_at = time.monotonic()
             return
@@ -385,24 +549,9 @@ def _tick_impl(delta_seconds):
                 proposed = current_settings()
                 proposed.set_editor_property(property_name, value)
                 reject(proposed, 'fixed_limit_reject_' + property_name + '_' + str(value), '범위')
-            buried = live['ConstructionBuriedBody']
-            buried.set_actor_enable_collision(True)
-            assert unreal.WarehouseDamageSystem.get_physical_bounds(buried).min.z < -3
-            proposed = current_settings()
-            proposed.roof_height_cm += 100
-            reject(proposed, 'object_buried_more_than_three_cm_is_not_resting_contact', 'ConstructionBuriedBody')
-            buried.set_actor_enable_collision(False)
             proposed = current_settings()
             proposed.width_cm = 4600
             reject(proposed, 'shrink_rejects_outside_stair_landings', '계단')
-            # Keep the stairs legal for the separate stock-boundary case; the
-            # outer stair landing is the first guard for this narrower shell.
-            for floor_name in ('floor2', 'floor3'):
-                floor = proposed.get_editor_property(floor_name)
-                old_stair = floor.stair_offset_cm
-                floor.stair_offset_cm = unreal.Vector2D(old_stair.x+100, old_stair.y)
-                proposed.set_editor_property(floor_name, floor)
-            reject(proposed, 'shrink_rejects_existing_edge_stock_with_exact_reason', 'ConstructionEdgeCargo')
             # UI clamps both large and small previews, without touching geometry.
             for point, expected in [(unreal.Vector(20000, 20000, 3), (9600, 8000)),
                                     (unreal.Vector(401, 1, 3), (1600, 1600))]:
@@ -412,14 +561,6 @@ def _tick_impl(delta_seconds):
                 assert (draft.width_cm, draft.depth_cm) == expected
                 assert not construction.end_gesture(False)
             check('tile_preview_clamps_to_fixed_16_to_96_by_16_to_80_metre_limits')
-            proposed = current_settings()
-            proposed.width_cm = 5000
-            proposed.roof_height_cm += 100
-            reject(proposed, 'new_wall_collision_with_independent_exterior_object_remains_blocked', 'ConstructionExteriorPier')
-            proposed = current_settings()
-            proposed.depth_cm = 4600
-            proposed.roof_height_cm += 100
-            reject(proposed, 'moving_entrance_architecture_into_an_external_body_rejected_without_mutation', 'ConstructionDockMoveBlocker')
             proposed = current_settings()
             proposed.roof_height_cm += 100
             assert building.apply_settings(proposed), building.get_editor_property('status')
@@ -469,12 +610,15 @@ def _tick_impl(delta_seconds):
             construction.set_target(unreal.WarehouseConstructionTarget.FLOOR3)
             assert construction.toggle_selected_floor(), construction.get_editor_property('status')
             construction.set_target(unreal.WarehouseConstructionTarget.FLOOR2)
-            before = geometry_snapshot()
-            revision = building.get_editor_property('revision')
-            assert not construction.toggle_selected_floor(), 'Removed the occupied second floor'
-            assert '지지' in construction.get_editor_property('status') and geometry_snapshot() == before
-            assert building.get_editor_property('revision') == revision and current_settings().floor2.enabled
-            check('occupied_mezzanine_removal_is_atomic_and_reports_lost_support', reason=construction.get_editor_property('status'))
+            upper = live['ConstructionUpperCargo']
+            identity = upper.get_editor_property('cargo_id')
+            assert construction.toggle_selected_floor(), construction.get_editor_property('status')
+            assert not current_settings().floor2.enabled and not unreal.SystemLibrary.is_valid(upper)
+            store = allof(unreal.WarehouseLayoutInventory)[0]
+            assert any(row.cargo_id == identity for row in store.get_editor_property('held_cargo'))
+            stock_snapshot.pop('ConstructionUpperCargo')
+            check('occupied_mezzanine_removal_archives_stock_and_keeps_remaining_objects')
+            assert construction.toggle_selected_floor(), construction.get_editor_property('status')
             construction.set_target(unreal.WarehouseConstructionTarget.FLOOR3)
             assert construction.toggle_selected_floor(), construction.get_editor_property('status')
             construction.set_target(unreal.WarehouseConstructionTarget.FLOOR4)
@@ -602,11 +746,13 @@ def _tick_impl(delta_seconds):
                 return
             for name, expected_height in [('ConstructionEdgeCargo', 20), ('ConstructionUpperCargo', 420)]:
                 actor = live[name]
+                if not unreal.SystemLibrary.is_valid(actor):
+                    continue
                 body = actor.get_component_by_class(unreal.StaticMeshComponent)
                 assert body.is_simulating_physics() and body.is_gravity_enabled() and not actor.get_attach_parent_actor()
                 assert abs(actor.get_actor_location().z-expected_height) < 2, ('Cargo lost its real floor after editing', name, actor.get_actor_location())
             check('independent_native_stock_remains_supported_after_simulation_resume')
-            finish(True, 'Tile preview/cancel and native transactions; fixed limits, unsafe shrink/lost-floor rejection, stock/rack preservation, automatic architecture/services, four floors and stairs; no saved map changes')
+            finish(True, 'Tile preview/cancel and native transactions; fixed limits, occupied-floor stock archiving, unchanged stock/rack preservation, automatic architecture/services, four floors and stairs; no saved map changes')
     except Exception:
         finish(False, traceback.format_exc())
 

@@ -4,8 +4,11 @@
 #include "WarehouseElevator.generated.h"
 
 class AWarehouseForklift;
+class ACharacter;
 class UStaticMesh;
 class UStaticMeshComponent;
+class USceneComponent;
+class UMaterialInterface;
 class UTextRenderComponent;
 class UPhysicsConstraintComponent;
 
@@ -47,6 +50,9 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Elevator") TObjectPtr<AWarehouseForklift> ReservedVehicle;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Elevator") int32 CurrentFloor=0;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Elevator") int32 DestinationFloor=0;
+ // The next platform stop is independent of the reserved vehicle's exit floor.
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Elevator") int32 VehicleDestinationFloor=INDEX_NONE;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Elevator") TArray<int32> PendingStops;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Elevator") int32 CompletedTransfers=0;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Elevator") FString Status=TEXT("READY / 2000 KG MAX");
  UFUNCTION(BlueprintPure, Category="Elevator") int32 FloorAtHeight(float WorldZ) const;
@@ -63,7 +69,22 @@ public:
  UFUNCTION(BlueprintCallable, Category="Elevator") bool RequestTransfer(AWarehouseForklift* Vehicle,int32 FromFloor,int32 ToFloor);
  UFUNCTION(BlueprintCallable, Category="Elevator") bool ConfirmBoarded(AWarehouseForklift* Vehicle);
  UFUNCTION(BlueprintCallable, Category="Elevator") bool ConfirmExited(AWarehouseForklift* Vehicle);
+ UFUNCTION(BlueprintCallable, Category="Elevator") bool CancelTransfer(AWarehouseForklift* Vehicle);
  UFUNCTION(BlueprintCallable, Category="Elevator") void AdvanceElevator(float Seconds);
+ UFUNCTION(BlueprintCallable, Category="Elevator|Human") bool RequestHumanCall(ACharacter* Person,int32 Floor);
+ UFUNCTION(BlueprintCallable, Category="Elevator|Human") bool RequestHumanDestination(ACharacter* Person,int32 Floor);
+ UFUNCTION(BlueprintPure, Category="Elevator|Human") int32 HumanLandingFloor(const ACharacter* Person) const;
+ UFUNCTION(BlueprintPure, Category="Elevator|Human") bool IsHumanInside(const ACharacter* Person) const;
+ UFUNCTION(BlueprintPure, Category="Elevator|Human") bool CanUseHumanPanel(const ACharacter* Person) const;
+ UFUNCTION(BlueprintPure, Category="Elevator|Human") int32 HumanButtonAtSight(const ACharacter* Person) const;
+ UFUNCTION(BlueprintPure, Category="Elevator|Human") bool IsDestinationButtonLit(int32 Floor) const;
+ UFUNCTION(BlueprintPure, Category="Elevator|Human") bool IsCallButtonLit(int32 Floor) const;
+ UFUNCTION(BlueprintPure, Category="Elevator|Human") FString GetPositionIndicatorText() const;
+ UFUNCTION(BlueprintPure, Category="Elevator|Human") FString GetHumanInteractionText(const ACharacter* Person) const;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Elevator|Human") bool bHumanService=false;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Elevator|Human") FString HumanStatus;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Elevator|Human") float HumanPayloadMassKg=0;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Elevator|Human") int32 CompletedHumanTransfers=0;
 private:
  UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> Platform;
  UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UStaticMeshComponent>> Gates;
@@ -75,6 +96,20 @@ private:
  UPROPERTY(Transient) TObjectPtr<UPhysicsConstraintComponent> PlatformJoint;
  UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> GuideAnchor;
  UPROPERTY(Transient) TArray<TObjectPtr<UPhysicsConstraintComponent>> DoorJoints;
+ UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UStaticMeshComponent>> HumanCallPanels;
+ UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> HumanCabinPanel;
+ UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> HumanPanelAnchor;
+ UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UStaticMeshComponent>> HumanFloorButtons;
+ UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UTextRenderComponent>> HumanFloorLabels;
+ UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UStaticMeshComponent>> HumanCallLamps;
+ UPROPERTY() TObjectPtr<UMaterialInterface> IndicatorOnMaterial;
+ UPROPERTY() TObjectPtr<UMaterialInterface> IndicatorOffMaterial;
+ UPROPERTY(Transient) TArray<int32> HumanDestinationRequests;
+ UPROPERTY(Transient) TArray<int32> HumanCallRequests;
+ UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UTextRenderComponent>> HumanPanelLabels;
+ TArray<TWeakObjectPtr<AActor>> HumanPayload;
+ float HumanDoorIdleSeconds=0;
+ int32 TravelDirection=0;
  float PlatformTarget=0;
  float PlatformHeight=0;
  float DoorOpening=0;
@@ -82,10 +117,20 @@ private:
  bool bBoarded=false;
  bool bCargoModelApplied=false;
  void UpdateCargoModelFloors();
+ void UpdateHumanIndicators();
+ void QueueStop(int32 Floor);
+ void StartNextStop();
+ void ServeCurrentFloor();
+ void ReleaseVehicleReservation();
+ int32 NextStop() const;
+ float CabinPayloadMassKg() const;
  void ConfigureFloors();
  float StrokeHalfHeight() const { return (FloorCount-1)*200.f; }
  bool PortalClear() const;
- bool CabinClear() const;
+ bool CabinClear(bool IgnoreHumanPayload=true) const;
+ bool CaptureHumanPayload();
+ bool HumanPayloadFits(AActor* Actor) const;
+ FVector HumanCabinPanelPosition() const;
  bool FitsInside(AWarehouseForklift* Vehicle) const;
  bool SetDoors(bool Open,float Dt);
  float ActualDoorOpening() const;

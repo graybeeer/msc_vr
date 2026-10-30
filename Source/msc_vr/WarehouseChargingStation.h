@@ -13,6 +13,8 @@ class MSC_VR_API AWarehouseChargingStation : public AActor
  GENERATED_BODY()
 public:
  AWarehouseChargingStation();
+ virtual void BeginPlay() override;
+ virtual void EndPlay(const EEndPlayReason::Type Reason) override;
  UFUNCTION(BlueprintCallable, Category="Charging") void RequestManualCharge();
  UFUNCTION(BlueprintPure, Category="Charging") bool IsDocked(const AWarehouseForklift* Vehicle) const;
  UFUNCTION(BlueprintPure, Category="Layout") TArray<AWarehouseForklift*> GetLinkedVehicles() const;
@@ -27,6 +29,10 @@ public:
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Charging", meta=(ClampMin="0.1")) float PowerKw = 2.4f;
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Charging", meta=(ClampMin="0.01", ClampMax="1")) float Efficiency = .9f;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Charging") TObjectPtr<AWarehouseForklift> Occupant;
+ // Derived installation presentation; charging availability retains its explicit bMainsPower setting.
+ UPROPERTY(Transient,VisibleAnywhere,BlueprintReadOnly,Category="Charging|Wiring") TObjectPtr<AActor> SupplyCabinet;
+ UPROPERTY(Transient,VisibleAnywhere,BlueprintReadOnly,Category="Charging|Wiring") TArray<FVector> SupplyCableRoute;
+ UPROPERTY(Transient,VisibleAnywhere,BlueprintReadOnly,Category="Charging|Wiring") FString SupplyCableStatus;
 private:
  UPROPERTY(VisibleAnywhere) TObjectPtr<UTextRenderComponent> Display;
 };

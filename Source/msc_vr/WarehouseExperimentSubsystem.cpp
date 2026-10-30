@@ -1,4 +1,5 @@
 #include "WarehouseExperimentSubsystem.h"
+#include "WarehouseLoading.h"
 #include "WarehousePlayMode.h"
 #include "WarehouseComputer.h"
 #include "WarehouseCargo.h"
@@ -307,6 +308,7 @@ void UWarehouseExperimentSubsystem::WorldInitialized(const UWorld::FActorsInitia
 {
  UWorld* World=Params.World;if (!World || World->GetGameInstance()!=GetGameInstance() || !World->IsGameWorld()) return;
  if (!PendingSnapshot.IsValid()) return;
+ WarehouseLoading::FScopedTask Loading(World,TEXT("저장한 배치와 물류를 불러오고 있습니다."));
  AppliedWorld=World;
  PreviousTicks.Reset();
  RestoreAutoStart.Reset();
@@ -449,6 +451,7 @@ void UWarehouseExperimentSubsystem::Tick(float)
  {
   if (++PrepareFrames==1)
   {
+   WarehouseLoading::FScopedTask Loading(World,TEXT("물류와 설비의 초기 상태를 준비하고 있습니다."));
    if (!WarehouseExperimentStorage::FinalizeAfterBeginPlay(World,PendingSnapshot,RestoreError)) { bNeedRollback=true;return; }
    // BeginPlay has passed, so restoring the setting cannot schedule its startup timer.
    for (const auto& Pair:RestoreAutoStart) if (Pair.Key.IsValid()) Pair.Key->bAutoStart=Pair.Value;

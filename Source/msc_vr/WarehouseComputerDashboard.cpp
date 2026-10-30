@@ -1,5 +1,8 @@
 #include "WarehouseComputerDashboard.h"
+#include "WarehouseFocusDirector.h"
+#include "WarehouseFocusUI.h"
 #include "WarehouseExperimentUI.h"
+#include "WarehouseOperationsUI.h"
 #include "WarehousePlayMode.h"
 #include "WarehouseComputer.h"
 #include "WarehouseCargo.h"
@@ -81,13 +84,13 @@ public:
   AutomaticVehicle=MakeShared<FDashboardVehicle>();SelectedVehicle=AutomaticVehicle;
   Refresh();RefreshHeld();
   auto Tabs=SNew(SHorizontalBox);
-  const TCHAR* Titles[]={TEXT("운반 지시"),TEXT("배송편"),TEXT("작업 · 차량"),TEXT("보류 물류"),TEXT("실험 · 성과")};
+  const TCHAR* Titles[]={TEXT("운반 지시"),TEXT("배송편"),TEXT("작업 · 차량"),TEXT("보류 물류"),TEXT("실험 · 성과"),TEXT("창고 공정")};
   for (int32 Index=0;Index<UE_ARRAY_COUNT(Titles);++Index)
   {
    TSharedPtr<SButton> Tab;
    Tabs->AddSlot().FillWidth(1).Padding(Index ? 4 : 0,0,0,0)
    [SAssignNew(Tab,SButton).ContentPadding(FMargin(14,12)).IsFocusable(false)
-    .Visibility(AWarehousePlayStage::IsPlay(Computer.Get()) && Index>=3 ? EVisibility::Collapsed : EVisibility::Visible)
+    .Visibility(AWarehousePlayStage::IsPlay(Computer.Get()) && (Index==3 || Index==4) ? EVisibility::Collapsed : EVisibility::Visible)
     .ButtonColorAndOpacity_Lambda([this,Index]() { return Page==Index ? Primary : Surface; })
     .OnClicked_Lambda([this,Index]() { Page=Index;bConfirmDeleteHeld=false;return FReply::Handled(); })
     [SNew(STextBlock).Text(FText::FromString(Titles[Index])).Font(WarehouseUIStyle::Font(18,true))
@@ -125,7 +128,8 @@ public:
        +SWidgetSwitcher::Slot()[BuildShipping()]
        +SWidgetSwitcher::Slot()[BuildOperations()]
        +SWidgetSwitcher::Slot()[BuildHeld()]
-       +SWidgetSwitcher::Slot()[MakeWarehouseExperimentPanel(Controller.Get())]]]
+       +SWidgetSwitcher::Slot()[MakeWarehouseExperimentPanel(Controller.Get())]
+       +SWidgetSwitcher::Slot()[MakeWarehouseOperationsPanel(Computer.Get(),Controller.Get())]]]
     +SVerticalBox::Slot().AutoHeight().Padding(0,12,0,0)[SNew(SBorder).Padding(FMargin(12,8))
      .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(Surface)
      [SNew(SHorizontalBox)
@@ -562,7 +566,7 @@ private:
   for (int32 I=Computer->Tasks.Num()-1;I>=0;--I)
   {
    const auto& Task=Computer->Tasks[I];auto& Item=TaskCache.FindOrAdd(Task.JobId);if (!Item) Item=MakeShared<FWarehouseComputerTask>();*Item=Task;TaskItems.Add(Item);CurrentTasks.Add(Task.JobId);
-   if (Task.bCompleted) ++CompletedTaskCount;else if (!Task.bCancelled) ++ActiveTaskCount;
+   if (Task.bCompleted) ++CompletedTaskCount;else if (!Task.bCancelled && !Task.bDeferred) ++ActiveTaskCount;
   }
   for (auto It=TaskCache.CreateIterator();It;++It) if (!CurrentTasks.Contains(It.Key())) It.RemoveCurrent();
   if (!CurrentTasks.Contains(SelectedTaskId)) SelectedTaskId.Reset();
@@ -687,6 +691,7 @@ FAutoConsoleCommand DashboardTestCommand(TEXT("Warehouse.Computer.Test"),TEXT("E
 
 TSharedRef<SWidget> MakeWarehouseComputerDashboard(AWarehouseComputer* Computer,Amsc_vrPlayerController* Controller)
 {
+ if(AWarehouseFocusDirector::IsActive(Computer)) return MakeWarehouseFocusScreen(Computer,Controller);
  auto Dashboard=SNew(WarehouseDashboard::SWarehouseDashboard).Computer(Computer).Controller(Controller);
 #if WITH_EDITOR && !UE_BUILD_SHIPPING
  WarehouseDashboard::TestDashboard=Dashboard;

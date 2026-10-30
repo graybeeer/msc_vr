@@ -11,6 +11,8 @@ import time
 import traceback
 import unreal
 
+unreal.EditorPythonScripting.set_keep_python_script_alive(True)
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from apply_real_world_scale import fit
 from configure_inbound_area import RACK_CENTRES
@@ -101,6 +103,11 @@ in_zone = spawn(unreal.WarehouseInboundZone, 'ShippingInboundZone', (500, 1010, 
 in_zone.set_editor_property('half_size_cm', unreal.Vector(200, 280, 80))
 in_zone.set_editor_property('rack_slots', [unreal.WarehouseRackSlot(name='ShippingRackLower', rack=rack[0],
     pose=unreal.Transform(location=unreal.Vector(1200, 900, 20)), clear_height_cm=110, capacity_kg=2000)])
+# These floor-staged outbound fixtures are accepted through the real receiving
+# worker/film flow, not by assigning read-only business states in the test.
+out_inspection = spawn(unreal.WarehouseInboundZone, 'ShippingOutboundInspection', (850, 220, 0))
+out_inspection.set_editor_property('half_size_cm', unreal.Vector(500, 350, 80))
+out_inspection.set_editor_property('inspection_workers', 3)
 # The only receiving slot is occupied until the test removes this ordinary scenery actor.
 cube('ShippingInboundBlocker', (500, 900, 35), (100, 100, 70))
 
@@ -160,7 +167,10 @@ last_load_at = -1
 last_unloaded = 0
 last_unload_at = -1
 handover_seen = set()
+preparation_seen_at = {}
 identities = {}
+archived_poses = {}
+outbound_visit = ''
 
 
 def check(name):
@@ -235,7 +245,7 @@ def verify_queue_cancellation_mutations(game, system, v, damage, console, foreig
 
 
 def tick(dt):
-    global live, phase, at, last_log, shipment_id, inbound_id, last_loaded, last_load_at, last_unloaded, last_unload_at
+    global live, phase, at, last_log, shipment_id, inbound_id, last_loaded, last_load_at, last_unloaded, last_unload_at, outbound_visit
     try:
         assert time.monotonic() - started < 1800, ('Shipping workflow wall timeout', phase)
         if phase == 'start':
@@ -270,6 +280,27 @@ def tick(dt):
         if phase == 'settle' and now > 4:
             assert incoming.is_ready() and outgoing.is_ready()
             assert all(body(p).is_simulating_physics() for p in (p0, p1, foreign, i0, i1))
+            assert not incoming.transfer_unit(i0, 0, True, unreal.Transform()), 'Handling started before dock preparation'
+            assert not incoming.depart(), 'Departure started before dock clearance'
+            for truck in (incoming, live['ShippingMutationTruck']):
+                assert truck.prepare_dock(), truck.get_editor_property('status')
+                assert not truck.is_dock_prepared(), 'Timed preparation completed instantly'
+            at, phase = now, 'dock_prepare'
+            check('dock restraint/door/leveller service blocks early cargo transfer and departure')
+        elif phase == 'dock_prepare':
+            preparation_seconds = incoming.get_editor_property('dock_preparation_seconds')
+            if now - at < preparation_seconds:
+                return
+            if not incoming.is_dock_prepared() or not live['ShippingMutationTruck'].is_dock_prepared():
+                assert now - at < preparation_seconds + 3, 'Dock preparation failed to complete in simulation time'
+                return
+            assert all(incoming.get_editor_property(name) for name in ('vehicle_restrained', 'dock_door_open', 'leveller_ready'))
+            if not all(p.get_editor_property('receipt_state') == unreal.WarehouseReceiptState.CONFIRMED and
+                       p.get_editor_property('receiving_state') == unreal.WarehouseReceivingState.ACCEPTED for p in (p0, p1, foreign)):
+                assert now - at < 30, 'Outbound fixtures did not finish native receiving inspection/wrapping'
+                return
+            check('dock preparation completes through simulated-time service and enables handling')
+            check('outbound fixtures are accepted and wrapped through native NPC inspection before order creation')
             console = verify_queue_cancellation_mutations(game, system, v, damage, console, foreign)
             assert not system.create_outbound('Duplicate entries', [p0, p0], 'OUT-TEST', outgoing)
             assert system.create_outbound('Native dispatch', [p0, p1], 'OUT-TEST', outgoing), system.get_editor_property('last_message')
@@ -323,12 +354,19 @@ def tick(dt):
             assert len(shipment.lines) == 2 and all(line.pallet != foreign for line in shipment.lines)
             assert not shipment.truck_ready and not any(line.loaded for line in shipment.lines)
             for line in shipment.lines:
+                if line.arrived and not line.prepared:
+                    preparation_seen_at.setdefault(line.pallet, now)
+                    assert not shipment.cargo_ready, 'Unprepared shipment allowed loading'
+                if line.prepared and line.pallet in preparation_seen_at:
+                    assert now - preparation_seen_at[line.pallet] >= system.get_editor_property('outbound_preparation_seconds') - .4, 'Inspection/label timer skipped'
                 if line.job_id and line.job_id not in v.get_editor_property('completed_job_ids'):
                     assert not line.arrived, 'Unfinished AGV delivery registered as arrival'
                     if v.get_supported_pallet() == line.pallet and line.pallet.get_actor_location().x > 1000:
                         handover_seen.add(line.pallet)
-            if all(line.arrived for line in shipment.lines):
+            if all(line.arrived and line.prepared for line in shipment.lines):
                 assert shipment.cargo_ready and not shipment.truck_ready
+                assert len(preparation_seen_at) == 2, 'Both real handovers must enter timed inspection/label preparation'
+                check('physical handover precedes timed inspection/label preparation and cargo readiness')
                 assert len(handover_seen) == 2, 'No in-zone loaded approach was observed'
                 assert all(line.job_id in v.get_editor_property('completed_job_ids') for line in shipment.lines)
                 assert all(v.get_supported_pallet() != line.pallet for line in shipment.lines)
@@ -338,7 +376,7 @@ def tick(dt):
                 at, phase = now, 'space_guard'
                 check('two native insertion/lift/navigation/lower/withdraw completions, cargo ready waits for assigned truck')
             assert now - at < 650, 'Native outbound delivery timeout'
-        elif phase == 'space_guard' and now - at > 2:
+        elif phase == 'space_guard' and now - at > outgoing.get_editor_property('dock_preparation_seconds') + 2:
             shipment = get_shipment(system, shipment_id)
             assert shipment.truck_ready and not any(line.loaded for line in shipment.lines)
             assert shipment.wait_reason, 'Missing truck-space rejection reason'
@@ -367,6 +405,15 @@ def tick(dt):
                 assert set(outgoing.get_editor_property('manifest_pallets')) == {p0, p1}
                 assert shipment.finished_at >= shipment.started_at and shipment.elapsed_seconds > 0
                 assert all(p.get_editor_property('hidden') for p in (p0, p1))
+                assert outgoing.get_editor_property('dock_service_state') == unreal.WarehouseDockServiceState.RELEASED
+                assert not any(outgoing.get_editor_property(name) for name in ('vehicle_restrained', 'dock_door_open', 'leveller_ready'))
+                outbound_visit = outgoing.get_visit_id()
+                for label in ('ExportAPallet', 'ExportABox', 'ExportBPallet', 'ExportBBox'):
+                    archived_poses[label] = live[label].get_actor_location()
+                assert outgoing.return_for_next_visit(), outgoing.get_editor_property('status')
+                assert outgoing.get_editor_property('state') == unreal.WarehouseTruckState.RETURNING
+                assert outgoing.get_visit_id() != outbound_visit and not outgoing.get_editor_property('manifest_pallets')
+                check('departure requires dock clearance and next visit reuses an empty vehicle without recycling delivered cargo')
                 assert system.start_inbound(incoming, 'IN-TEST'), system.get_editor_property('last_message')
                 inbound_id = system.get_editor_property('shipments')[-1].shipment_id
                 assert not system.start_inbound(incoming, 'IN-TEST'), 'Same inbound visit started twice'
@@ -409,6 +456,14 @@ def tick(dt):
                 console.refresh_state()
                 rows = [r for r in console.get_editor_property('inventory') if r.pallet in (i0, i1)]
                 assert len(rows) == 2 and all('입고 확정' in r.receipt_status for r in rows)
+                assert outgoing.is_ready() and outgoing.get_editor_property('visit_number') == 2
+                assert outgoing.get_editor_property('dock_service_state') == unreal.WarehouseDockServiceState.AWAITING
+                assert not outgoing.get_editor_property('manifest_pallets') and outgoing.payload_mass_kg() == 0
+                assert all(live[label].get_editor_property('hidden') and
+                           (live[label].get_actor_location() - pose).length() < .1 for label, pose in archived_poses.items())
+                assert live['ExportABox'] in outgoing.get_unit_cargo(p0) and live['ExportBBox'] in outgoing.get_unit_cargo(p1)
+                assert live['ShippingExportTruckFloor'].get_actor_enable_collision(), 'Returned truck lost warehouse collision'
+                check('returned vehicle docks with collision restored, unique visit, empty manifest and unchanged archived cargo')
                 check('one-by-one inbound unload, native physics restore, NPC wrapping and actual AGV rack storage')
                 finish(True, 'Outbound manifests/physical AGV handovers/truck readiness/space/weight/sequential loading/departure; inbound occupancy/sequential unloading/NPC wrap/native rack delivery passed')
             assert now - at < 600, 'Inbound unload / native rack delivery timeout'

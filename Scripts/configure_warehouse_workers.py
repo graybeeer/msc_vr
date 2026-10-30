@@ -1,4 +1,4 @@
-"""Place seven stationary workers using the player mannequin; preserves existing worker positions."""
+"""Place seven role presenters using the player mannequin, outside the test building."""
 import unreal
 
 LEVEL='/Game/FirstPerson/Lvl_FirstPerson'
@@ -38,9 +38,11 @@ def configure_workers():
             half=worker.get_component_by_class(unreal.CapsuleComponent).get_unscaled_capsule_half_height()
             worker.set_actor_location(unreal.Vector(feet[0],feet[1],feet[2]+half+.5),False,True)
             worker.set_actor_rotation(unreal.Rotator(yaw=yaw),True)
-        assert worker.has_standing_clearance(),'Worker overlaps a prop: '+label
         result.append(worker)
-        print('WORKER_PLACED',role,worker.get_actor_location())
+    unreal.WarehouseWorker.relocate_indoor_workers(unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world())
+    for worker in result:
+        assert worker.has_standing_clearance(),'Worker overlaps a prop: '+worker.get_actor_label()
+        print('WORKER_PLACED',worker.get_editor_property('role_name'),worker.get_actor_location())
     return result
 
 if __name__=='__main__':

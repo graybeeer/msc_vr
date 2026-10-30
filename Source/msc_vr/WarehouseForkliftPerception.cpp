@@ -2,6 +2,7 @@
 #include "Agv/AgvShadowSensors.h"
 #include "WarehouseLayoutEditor.h"
 #include "WarehousePhysics.h"
+#include "WarehousePerformance.h"
 #include "WarehousePallet.h"
 #include "WarehouseFleetCoordinator.h"
 #include "WarehouseElevator.h"
@@ -22,66 +23,6 @@ namespace
 FTransform AtPublishedPose(const FTransform& Query,const FAgvObservedObstacle& Obstacle)
 {
  return Query*Obstacle.ObservedTransform.Inverse()*Obstacle.Component->GetComponentTransform();
-}
-
-// Known-map broad phase. Route planning tests ~200k poses per plan and each test scanned all ~300 published parts
-// (99% of a 10-20s planning frame). A 2D grid over the saved bounds (+5cm for the floor probe) returns the parts that
-// can touch an area, in their original list order, so every caller still applies its exact test in the same order.
-struct FKnownObstacleGrid
-{
- const void* Data=nullptr;int32 Num=-1,Revision=-1;
- FVector2D Origin=FVector2D::ZeroVector;int32 Width=0,Height=0;
- TArray<TArray<int32>> Cells;
- TArray<int32> Everywhere; // invalid bounds: kept in every query, as the full scan did
- TArray<uint32> Seen;uint32 Stamp=0;
-};
-constexpr float KnownGridCellCm=200.f;
-
-const TArray<int32>& KnownObstaclesNear(const UAgvShadowSensorsComponent* Kit,const FBox& Area,TArray<int32>& Out)
-{
- static TMap<const UAgvShadowSensorsComponent*,FKnownObstacleGrid> Grids;
- const TArray<FAgvObservedObstacle>& Known=Kit->GetKnownObstacles();
- FKnownObstacleGrid& Grid=Grids.FindOrAdd(Kit);
- if (Grid.Data!=Known.GetData() || Grid.Num!=Known.Num() || Grid.Revision!=Kit->MapRevision)
- {
-  Grid=FKnownObstacleGrid();Grid.Data=Known.GetData();Grid.Num=Known.Num();Grid.Revision=Kit->MapRevision;
-  FBox All(ForceInit);
-  for (const auto& Obstacle : Known) if (Obstacle.WorldBounds.IsValid) All+=Obstacle.WorldBounds.ExpandBy(5.);
-  if (All.IsValid)
-  {
-   Grid.Origin=FVector2D(All.Min.X,All.Min.Y);
-   Grid.Width=FMath::Max(1,FMath::CeilToInt((All.Max.X-All.Min.X)/KnownGridCellCm));
-   Grid.Height=FMath::Max(1,FMath::CeilToInt((All.Max.Y-All.Min.Y)/KnownGridCellCm));
-   Grid.Cells.SetNum(Grid.Width*Grid.Height);
-  }
-  for (int32 Index=0;Index<Known.Num();++Index)
-  {
-   if (!Known[Index].WorldBounds.IsValid) { Grid.Everywhere.Add(Index);continue; }
-   const FBox B=Known[Index].WorldBounds.ExpandBy(5.);
-   const int32 X0=FMath::Clamp(FMath::FloorToInt((B.Min.X-Grid.Origin.X)/KnownGridCellCm),0,Grid.Width-1);
-   const int32 X1=FMath::Clamp(FMath::FloorToInt((B.Max.X-Grid.Origin.X)/KnownGridCellCm),0,Grid.Width-1);
-   const int32 Y0=FMath::Clamp(FMath::FloorToInt((B.Min.Y-Grid.Origin.Y)/KnownGridCellCm),0,Grid.Height-1);
-   const int32 Y1=FMath::Clamp(FMath::FloorToInt((B.Max.Y-Grid.Origin.Y)/KnownGridCellCm),0,Grid.Height-1);
-   for (int32 Y=Y0;Y<=Y1;++Y) for (int32 X=X0;X<=X1;++X) Grid.Cells[Y*Grid.Width+X].Add(Index);
-  }
-  Grid.Seen.Init(0,Known.Num());
- }
- Out.Reset();
- Out.Append(Grid.Everywhere);
- if (Grid.Cells.Num() && Area.IsValid)
- {
-  // Areas past the grid edge still clamp to the border cells, which hold every part reaching that edge.
-  const int32 X0=FMath::Clamp(FMath::FloorToInt((Area.Min.X-Grid.Origin.X)/KnownGridCellCm),0,Grid.Width-1);
-  const int32 X1=FMath::Clamp(FMath::FloorToInt((Area.Max.X-Grid.Origin.X)/KnownGridCellCm),0,Grid.Width-1);
-  const int32 Y0=FMath::Clamp(FMath::FloorToInt((Area.Min.Y-Grid.Origin.Y)/KnownGridCellCm),0,Grid.Height-1);
-  const int32 Y1=FMath::Clamp(FMath::FloorToInt((Area.Max.Y-Grid.Origin.Y)/KnownGridCellCm),0,Grid.Height-1);
-  if (++Grid.Stamp==0) { Grid.Seen.Init(0,Known.Num());Grid.Stamp=1; }
-  for (int32 Y=Y0;Y<=Y1;++Y) for (int32 X=X0;X<=X1;++X)
-   for (int32 Index : Grid.Cells[Y*Grid.Width+X])
-    if (Grid.Seen[Index]!=Grid.Stamp) { Grid.Seen[Index]=Grid.Stamp;Out.Add(Index); }
- }
- Out.Sort();
- return Out;
 }
 
 bool PointCloudOverlaps(const FAgvObservedObstacle& Obstacle,const FTransform& Pose,const FBox& LocalBox,FVector* BlockingPoint=nullptr)
@@ -169,6 +110,8 @@ void AWarehouseForklift::InvalidateSensorSnapshot(const FString& Reason)
 
 bool AWarehouseForklift::AutonomousSensorsReady() const
 {
+ if (bPlanningRoute && PlanningSensorReadiness.IsSet()) return PlanningSensorReadiness.GetValue();
+ if (bPlanningRoute) { CSV_CUSTOM_STAT(Warehouse,PlanningReadinessChecks,1,ECsvCustomStatOp::Accumulate); }
  return SensorMode!=EWarehouseSensorMode::Autonomous ||
   (SensorKit && !IsSensorSamplingSuppressed() && SensorKit->IsSnapshotFresh(GetWorld()->GetTimeSeconds()));
 }
@@ -294,10 +237,11 @@ bool AWarehouseForklift::PerceivedBoxClear(const FTransform& Pose,const FBox& Lo
   }
  }
  const FBox Broad=LocalBox.TransformBy(Pose.ToMatrixWithScale());
- TArray<int32> Near;
- if (!PeopleOnly) for (int32 Index : KnownObstaclesNear(SensorKit,Broad,Near))
+ FAgvObstacleIndices Candidates;
+ if (!PeopleOnly) SensorKit->FindKnownCandidates(Broad,Candidates);
+ for (int32 Index : Candidates)
  {
-  const FAgvObservedObstacle& Obstacle=SensorKit->GetKnownObstacles()[Index];
+  const auto& Obstacle=SensorKit->GetKnownObstacles()[Index];
   if (Ignore(Obstacle) || !Obstacle.WorldBounds.Intersect(Broad)) continue;
   if (Obstacle.Component.IsValid())
   {
@@ -310,8 +254,10 @@ bool AWarehouseForklift::PerceivedBoxClear(const FTransform& Pose,const FBox& Lo
   }
   else return false; // Published geometry stays conservative until the next revision.
  }
- for (const auto& Obstacle : SensorKit->GetObservedObstacles())
+ SensorKit->FindObservedCandidates(Broad,Candidates);
+ for (int32 Index : Candidates)
  {
+  const auto& Obstacle=SensorKit->GetObservedObstacles()[Index];
   FVector Point;
   if (!Ignore(Obstacle) && PointCloudOverlaps(Obstacle,Pose,LocalBox,&Point))
   {
@@ -339,18 +285,23 @@ bool AWarehouseForklift::PerceivedPartClear(UStaticMeshComponent* Part,const FTr
  FBox Broad=Local.TransformBy(Pose.ToMatrixWithScale());
  if (!Part->BodyInstance.WeldParent && Part->BodyInstance.IsValidBodyInstance())
   Broad=Part->BodyInstance.GetBodyBounds().TransformBy(Part->GetComponentTransform().ToInverseMatrixWithScale()*Pose.ToMatrixWithScale());
- TArray<int32> Near;
- if (!Part->BodyInstance.WeldParent) for (int32 Index : KnownObstaclesNear(SensorKit,Broad,Near))
+ FAgvObstacleIndices Candidates;
+ if (!Part->BodyInstance.WeldParent) SensorKit->FindKnownCandidates(Broad,Candidates);
+ for (int32 Index : Candidates)
  {
-  const FAgvObservedObstacle& Obstacle=SensorKit->GetKnownObstacles()[Index];
+  const auto& Obstacle=SensorKit->GetKnownObstacles()[Index];
   if (Obstacle.Component.Get()==Bearing || Obstacle.Actor.Get()==this || Ignored.Contains(Obstacle.Actor.Get()) || !Obstacle.WorldBounds.Intersect(Broad)) continue;
   if (!Obstacle.Component.IsValid()) return Reject(Obstacle,TEXT("published-building-missing"),FVector::ZeroVector);
   const FTransform Test=AtPublishedPose(Pose,Obstacle);
   if (Obstacle.Component->ComponentOverlapComponent(Part,Test.GetLocation(),Test.GetRotation(),FCollisionQueryParams::DefaultQueryParam))
    return Reject(Obstacle,TEXT("published-building"),FVector::ZeroVector);
  }
- for (const auto& Obstacle : SensorKit->GetObservedObstacles())
+ // PointCloudOverlapsPart uses AggGeom's bounds, which may differ from the
+ // current native body's transformed bounds used for fixed-shape overlap.
+ SensorKit->FindObservedCandidates(Setup ? Setup->AggGeom.CalcAABB(Pose) : Local.TransformBy(Pose.ToMatrixWithScale()),Candidates);
+ for (int32 Index : Candidates)
  {
+  const auto& Obstacle=SensorKit->GetObservedObstacles()[Index];
   FVector Point=FVector::ZeroVector;
   if (Obstacle.Component.Get()!=Bearing && Obstacle.Actor.Get()!=this && !Ignored.Contains(Obstacle.Actor.Get()) && PointCloudOverlapsPart(Obstacle,Part,Pose,&Point))
    return Reject(Obstacle,TEXT("observed-point"),Point);
@@ -377,8 +328,11 @@ bool AWarehouseForklift::PerceivedMotionClear(UStaticMeshComponent* Part,FVector
    *Start.ToString(),*End.ToString(),*Candidate.ToString(),InitialDistance,Distance,Reason,SensorKit->SnapshotCount);
   return false;
  };
- for (const auto& Obstacle : SensorKit->GetObservedObstacles())
+ FAgvObstacleIndices Candidates;
+ SensorKit->FindObservedCandidates(Swept,Candidates);
+ for (int32 Index : Candidates)
  {
+  const auto& Obstacle=SensorKit->GetObservedObstacles()[Index];
   if (Obstacle.Actor.Get()==this || Ignored.Contains(Obstacle.Actor.Get()) || !Obstacle.WorldBounds.Intersect(Swept)) continue;
   for (const FVector& Point : Obstacle.WorldPoints) if (Swept.IsInsideOrOn(Point))
   {
@@ -416,10 +370,11 @@ bool AWarehouseForklift::PerceivedFloorSupport(FVector Point,FHitResult* Surface
  if (!SensorKit || !AutonomousSensorsReady()) return false;
  const FVector Start=Point+FVector(0,0,3),End=Point-FVector(0,0,5);
  FCollisionQueryParams Params(SCENE_QUERY_STAT(PublishedFloorSupport),false,this);
- TArray<int32> Near;
- for (int32 Index : KnownObstaclesNear(SensorKit,FBox(Point,Point),Near))
+ FAgvObstacleIndices Candidates;
+ SensorKit->FindKnownCandidates(FBox(Point-FVector(5),Point+FVector(5)),Candidates);
+ for (int32 Index : Candidates)
  {
-  const FAgvObservedObstacle& Obstacle=SensorKit->GetKnownObstacles()[Index];
+  const auto& Obstacle=SensorKit->GetKnownObstacles()[Index];
   if (!Obstacle.Component.IsValid() || !Obstacle.WorldBounds.ExpandBy(5.).IsInsideOrOn(Point)) continue;
   const FTransform Live=Obstacle.Component->GetComponentTransform();
   const auto Remap=[&](FVector P) { return Live.TransformPosition(Obstacle.ObservedTransform.InverseTransformPosition(P)); };

@@ -76,6 +76,7 @@ protected:
 	void UpdateRemoteControl();
 	bool InitializeCarryPresentation();
 	void SetRemoteCharacterFade(bool Enabled);
+	void SetRemotePhoneVisible(bool Visible);
 
 	UPROPERTY(EditDefaultsOnly, Category="Carry", meta=(ClampMin="0.05", ClampMax="1.0"))
 	float CarryOpacity = .3f;
@@ -83,22 +84,40 @@ protected:
 	TObjectPtr<UMaterialInterface> CarryTransparentMaterial;
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UMaterialInterface>> HeldOriginalMaterials;
-	bool HeldDisallowedNanite = false;
+	struct FHeldBodyState
+	{
+		TWeakObjectPtr<AActor> Actor;
+		TWeakObjectPtr<UStaticMeshComponent> Body;
+		FTransform RelativePose;
+		ECollisionEnabled::Type Collision = ECollisionEnabled::QueryAndPhysics;
+		float MassKg = 0.f;
+		int32 MaterialStart = 0, MaterialCount = 0;
+		bool bSimulated = false, bGravity = true, bMassOverride = false, bNanite = false;
+		bool bTickEnabled = false, bIgnoredByPlayer = false, bHadHeldTag = false;
+	};
+	struct FHeldJointState
+	{
+		TWeakObjectPtr<UPhysicsConstraintComponent> Joint;
+		FTransform Frame1, Frame2;
+	};
+	TArray<FHeldBodyState> HeldBodies;
+	TArray<FHeldJointState> HeldJoints;
+	float HeldMovementMass = -1.f;
+	bool MoveHeldGroup(const FTransform& Target,bool Instant=false);
+	bool CanPlaceHeldGroup(const FTransform& Target) const;
+	bool FindCarryTarget(FTransform& Target) const;
+	bool bInstantCarryPickup=false;
 
 	UPROPERTY(VisibleAnywhere, Category="Carry")
 	TObjectPtr<USkeletalMeshComponent> CarryMesh;
 	float CarryBlend = 0.f;
-	float CarryPhase = 0.f;
-	float NormalWalkSpeed = 0.f;
 	float NormalFirstPersonFOV = 70.f;
 	FVector CarryHands[2] = {FVector::ZeroVector,FVector::ZeroVector};
 	FVector CarryElbows[2] = {FVector::ZeroVector,FVector::ZeroVector};
 	FQuat CarryFacing = FQuat::Identity;
-	float CarryTargetYaw=0.f;
 	FTransform PickupTransform;
 	FTransform CarryProgressPose;
 	float CarryStallTime = 0.f;
-	float PlacementContactTime = 0.f;
 	bool bPickupPending = false;
 	void CancelCarryAction(const TCHAR* Reason);
 	bool TryPickupObject(AActor* Object);
@@ -106,26 +125,20 @@ protected:
 	bool InitializeCarryMesh();
 	UPROPERTY(Transient) TObjectPtr<AWarehousePallet> PlacementPallet;
 	FTransform PlacementStart, PlacementTarget, PlacementPalletPose;
-	float PlacementRotateTime=-1.f, PlacementLowerTime=-1.f, PlacementLowerStartZ=0.f;
 	float PlacementTime = -1.f;
-	float BaseWalkSpeed = 0.f;
 	UPROPERTY(VisibleAnywhere, Category="Carry") TObjectPtr<UPhysicsConstraintComponent> CarryGrip;
 	UPROPERTY(EditAnywhere, Category="Human Physics") float HumanMassKg=80.f;
-	bool bPhysicalRagdoll=false, bPhysicalSprint=false, bPhysicalGround=false, bPhysicalCrouchRequested=false;
-	float JumpSupportDelay=0.f, GripSlipTime=0.f;
-	FVector GripBodyOffset=FVector::ZeroVector;
-	void UpdatePhysicalMovement(float DeltaSeconds);
-	void UpdateGripTarget(const FTransform& Pose);
+	void UpdatePlayerMovement();
 	void UpdateLocomotion();
 	bool FindPlacement(AWarehousePallet* Pallet, const FVector& Aim, FTransform& Target) const;
 	
 public:
-	Amsc_vrCharacter();
+	Amsc_vrCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 	virtual void Tick(float DeltaSeconds) override;
-	virtual FVector GetVelocity() const override;
 	UFUNCTION(BlueprintPure, Category="Carry") AActor* GetHeldCargo() const { return HeldCargo; }
+	UFUNCTION(BlueprintPure, Category="Carry") TArray<AActor*> GetHeldCargoGroup() const;
 	UFUNCTION(BlueprintPure, Category="Carry") bool IsPlacingCargo() const { return PlacementTime>=0.f; }
-	UFUNCTION(BlueprintPure, Category="Human Physics") bool IsPhysicalRagdoll() const { return bPhysicalRagdoll; }
+	UFUNCTION(BlueprintPure, Category="Human Physics") bool IsPhysicalRagdoll() const { return false; }
 	FQuat GetCarryTorsoLean() const;
 	virtual void OnStartCrouch(float HeightAdjust, float ScaledHeightAdjust) override;
 	virtual void OnEndCrouch(float HeightAdjust, float ScaledHeightAdjust) override;
@@ -142,6 +155,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Carry")
 	bool TryPickupCargo(AWarehouseCargo* Cargo);
 	UFUNCTION(BlueprintCallable, Category="Carry") bool TryPickupPallet(AWarehousePallet* Pallet);
+	UFUNCTION(BlueprintCallable, Category="Carry") bool TryPlaceOnSurface(FVector Aim);
 	UFUNCTION(BlueprintCallable, Category="Carry")
 	void DropCargo();
 	UFUNCTION(BlueprintCallable, Category="Carry")

@@ -61,6 +61,14 @@ def aim(point):
     pc.set_control_rotation(unreal.MathLibrary.find_look_at_rotation(camera.get_world_location(),point))
     return camera
 
+def check_phone_visibility(using):
+    names={'RemotePhone','RemotePhoneScreen','RemoteWorldPhone','RemoteWorldPhoneScreen'}
+    parts=[c for c in pawn.get_components_by_class(unreal.StaticMeshComponent) if c.get_name() in names]
+    assert len(parts)==4,('Missing phone body/screen',len(parts))
+    for c in parts:
+        assert c.is_visible()==using and c.get_editor_property('hidden_in_game')!=using,('Phone visibility',c.get_name(),using)
+    print('REMOTE_PHONE_VISIBILITY_PASSED','remote' if using else 'unused',phase)
+
 def tick(dt):
     global live,pawn,pc,rig,wall,now,frames,stop_at,operator_start,drive_start,control_start,camera_before
     try:
@@ -84,6 +92,7 @@ def tick(dt):
         assert not pawn.is_physical_ragdoll(),'Human lost balance'
         if phase=='settle':
             if now<2:return
+            check_phone_visibility(False)
             enter('gap');return
         if phase=='gap':
             aim(rig.get_actor_location()+unreal.Vector(20,0,160))
@@ -92,7 +101,9 @@ def tick(dt):
             pawn.toggle_carry();assert rig.get_editor_property('powered'),'E handler did not power on'
             pawn.toggle_carry();assert not rig.get_editor_property('powered'),'E handler did not pause'
             pawn.toggle_remote_control();assert pawn.get_remote_forklift()==rig,'G handler did not connect'
+            check_phone_visibility(True)
             pawn.toggle_remote_control();assert not pawn.get_remote_forklift(),'G handler did not disconnect'
+            check_phone_visibility(False)
             print('FORKLIFT_GAP_E_G_PASSED')
             if REMOTE_CAMERA:
                 pawn.toggle_remote_control();assert pawn.get_remote_forklift()==rig
@@ -111,6 +122,7 @@ def tick(dt):
             assert pc.get_controlled_pawn()==pawn,'TPS changed possession'
             if phase=='tps_settle':
                 if age<1.2:return
+                check_phone_visibility(True)
                 assert pc.get_view_target()==rig,'View target is still the operator'
                 assert rear<-350 and delta.z>200,('Camera not behind/above forklift',delta)
                 # Native input fixture: polling unpressed OS keys would overwrite
@@ -150,6 +162,7 @@ def tick(dt):
                 pawn.toggle_remote_control();pawn.set_actor_tick_enabled(True);enter('tps_return');return
             if phase=='tps_return':
                 if age<.4:return
+                check_phone_visibility(False)
                 assert not pawn.get_remote_forklift() and pc.get_view_target()==pawn,'G did not restore first-person view'
                 camera=pawn.get_components_by_class(unreal.CameraComponent)[0]
                 assert (eye-camera.get_world_location()).length()<5,'First-person camera location not restored'
@@ -163,6 +176,9 @@ def tick(dt):
                 pc.toggle_warehouse_menu();enter('tps_menu_return');return
             if phase=='tps_menu_return':
                 if age<.3:return
+                check_phone_visibility(False)
+                pc.toggle_observer_view();assert pc.is_observer_view();check_phone_visibility(False)
+                pc.toggle_observer_view();assert not pc.is_observer_view();check_phone_visibility(False)
                 assert pc.get_view_target()==pawn,'Menu did not restore player view'
                 print('REMOTE_TPS_PIE_PASSED','Native vehicle follow, mouse orbit, wall avoidance, G/menu first-person return; capture' if CAPTURE else 'Native vehicle follow, mouse orbit, wall avoidance, G/menu first-person return; no rendered claim')
                 finish(True,'Remote TPS camera checks');return

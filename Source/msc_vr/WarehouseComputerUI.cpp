@@ -2,6 +2,7 @@
 #include "msc_vrCharacter.h"
 #include "WarehouseComputer.h"
 #include "WarehouseComputerDashboard.h"
+#include "WarehouseFocusDirector.h"
 #include "Engine/GameViewportClient.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/IConsoleManager.h"
@@ -20,7 +21,7 @@ bool Amsc_vrPlayerController::OpenWarehouseComputer(AWarehouseComputer* Computer
      IsWarehouseMenuOpen() || bObserverView || IsMoveInputIgnored() || OperatorCharacter->GetHeldCargo() || OperatorCharacter->GetRemoteForklift() ||
      OperatorCharacter->GetInteractionTarget()!=Computer) return false;
  Computer->RefreshState();ActiveComputer=Computer;
- ComputerWidget=CVarWarehouseComputerLegacyUI.GetValueOnGameThread()!=0 ? MakeWarehouseLegacyComputerScreen(Computer,this) : MakeWarehouseComputerDashboard(Computer,this);
+ ComputerWidget=CVarWarehouseComputerLegacyUI.GetValueOnGameThread()!=0 && !AWarehouseFocusDirector::IsActive(this) ? MakeWarehouseLegacyComputerScreen(Computer,this) : MakeWarehouseComputerDashboard(Computer,this);
  GetWorld()->GetGameViewport()->AddViewportWidgetContent(ComputerWidget.ToSharedRef(),250);
  UpdateInputMode();FSlateApplication::Get().SetKeyboardFocus(ComputerWidget);return true;
 }

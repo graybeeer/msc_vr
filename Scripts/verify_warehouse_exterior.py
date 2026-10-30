@@ -1,4 +1,9 @@
-"""Verify dock continuity and clearances for a future 12 x 3 x 4 m truck."""
+"""Legacy initial one-truck/Fab-foliage fixture, before the three-dock map.
+
+Current simplified exterior: verify_simple_exterior_pie.py.
+Current three-bay logistics geometry: verify_multi_truck_docks.py.
+Do not apply these historical one-truck/cargo-count assertions to the current map.
+"""
 import unreal
 level=unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 assert level.load_level('/Game/FirstPerson/Lvl_FirstPerson')

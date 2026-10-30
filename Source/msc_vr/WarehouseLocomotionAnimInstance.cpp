@@ -36,7 +36,7 @@ void UWarehouseLocomotionAnimInstance::NativeInitializeAnimation()
  LandingMotion=LoadObject<UAnimSequence>(nullptr,TEXT("/Game/Warehouse/AnimationSample/Sequences/M_Neutral_Jump_F_Land_Stand_Light_Lfoot.M_Neutral_Jump_F_Land_Stand_Light_Lfoot"));
  RootMotionMode=ERootMotionMode::IgnoreRootMotion;
  ensureMsgf(StandingMotion && CrouchingMotion && JumpStartMotion && FallMotion && LandingMotion,
-  TEXT("Run configure_game_animation_sample.py after importing the Game Animation Sample motion assets."));
+  TEXT("Missing runtime motion assets; sync Git/LFS files first (TEAM_ASSETS.md). Reconfigure only when intentionally regenerating assets."));
 }
 
 struct FWarehouseLocomotionProxy : FAnimInstanceProxy
@@ -75,7 +75,7 @@ struct FWarehouseLocomotionProxy : FAnimInstanceProxy
   Anim->Crouching=Character->bIsCrouched;
   const bool TakingOff=HasSample && !WasAirborne && Anim->InAir;
   const bool JustLanded=HasSample && WasAirborne && !Anim->InAir;
-  if (TakingOff) { AirSeconds=0;JumpStart.SetAccumulatedTime(0); }
+  if (TakingOff) { AirSeconds=0;JumpStart.SetAccumulatedTime(0);AirPose.Alpha=0.f; }
   if (JustLanded) { LandingSeconds=0;Land.SetAccumulatedTime(0); }
   AirSeconds=Anim->InAir ? AirSeconds+Dt : 0.f;
   LandingSeconds+=Dt;
@@ -86,7 +86,9 @@ struct FWarehouseLocomotionProxy : FAnimInstanceProxy
   const float LandingWeight=!Anim->InAir && LandingSeconds<.35f ? FMath::Min(LandingSeconds/.06f,(.35f-LandingSeconds)/.18f) : 0.f;
   LandingPose.Alpha=FMath::Clamp(LandingWeight,0.f,1.f);
   Anim->Landing=LandingPose.Alpha>.01f;
-  const float FallWeight=Velocity.Z<0.f || AirSeconds>.22f ? 1.f : 0.f;
+  // Use the actual ballistic apex; a fixed .22s switched to folded falling legs
+  // while the 360cm/s take-off was still rising, and grounded jitter primed it.
+  const float FallWeight=Anim->InAir && Velocity.Z<-5.f ? 1.f : 0.f;
   AirPose.Alpha=FMath::FInterpConstantTo(AirPose.Alpha,FallWeight,Dt,8.f);
   Output.Alpha=FMath::FInterpConstantTo(Output.Alpha,Anim->InAir ? 1.f : 0.f,Dt,12.f);
   WasAirborne=Anim->InAir;HasSample=true;

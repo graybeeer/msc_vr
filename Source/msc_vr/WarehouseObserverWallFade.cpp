@@ -1,4 +1,5 @@
 #include "WarehouseObserverWallFade.h"
+#include "WarehousePerformance.h"
 
 #include "Camera/CameraComponent.h"
 #include "Components/MeshComponent.h"
@@ -85,6 +86,7 @@ UMaterialInterface* UWarehouseObserverWallFade::GetOriginalMaterial(const UMeshC
 
 void UWarehouseObserverWallFade::Update(APlayerController* PC, bool Enabled)
 {
+ CSV_SCOPED_TIMING_STAT(Warehouse,ObserverWallFade);
  if (!Enabled || !IsValid(PC) || !PC->GetWorld()) { Restore();return; }
  const double Now=FPlatformTime::Seconds();
  const float Dt=LastUpdate>0. ? static_cast<float>(FMath::Max(0.,Now-LastUpdate)) : 0.f;

@@ -23,15 +23,22 @@ if not backup.exists():
     shutil.copy2(ROOT / 'Content/FirstPerson/Blueprints/BP_FirstPersonCharacter.uasset', backup)
 
 clips = {}
+unused_transitions = {'M_Relaxed_Transition_Stand_to_Crouch', 'M_Relaxed_Transition_Crouch_to_Stand'}
 for path in assets.list_assets(DIRECTORY + '/Sequences', recursive=True, include_folder=False):
     clip = unreal.load_asset(path)
     assert isinstance(clip, unreal.AnimSequence), path
+    if clip.get_name() in unused_transitions:
+        continue
     assert unreal.WarehouseLocomotionAnimInstance.prepare_motion_asset(clip, skeleton), path
+    clip.set_preview_skeletal_mesh(mesh.skeletal_mesh_asset)
+    # Keep the baked retarget reference pose; the sample-only source mesh is not
+    # a runtime dependency. Do not call update_retarget_source_asset_data here.
+    clip.clear_retarget_source_asset()
     clip.set_editor_property('enable_root_motion', False)
     clip.set_editor_property('force_root_lock', True)
     assert assets.save_loaded_asset(clip)
     clips[clip.get_name()] = clip
-assert len(clips) == 32, len(clips)
+assert len(clips) == 30, len(clips)
 
 directions = [(-180,'B'),(-135,'BL'),(-90,'LL'),(-45,'FL'),(0,'F'),(45,'FR'),(90,'RR'),(135,'BR'),(180,'B')]
 
@@ -62,6 +69,7 @@ def create_space(name, crouching):
                 clip = clips['M_Relaxed_Sprint_Loop_F'];rate=1
             samples.append(editor_struct(unreal.BlendSample,animation=clip,sample_value=unreal.Vector(direction,speed,0),rate_scale=rate))
     space.set_editor_property('sample_data', samples)
+    space.set_preview_skeletal_mesh(mesh.skeletal_mesh_asset)
     assert unreal.WarehouseLocomotionAnimInstance.prepare_motion_asset(space,skeleton)
     assert assets.save_loaded_asset(space)
     return len(samples)

@@ -23,7 +23,10 @@
 #include "WarehouseCargo.h"
 #include "WarehouseForklift.h"
 #include "WarehousePalletLift.h"
+#include "WarehouseElevator.h"
 #include "WarehouseComputer.h"
+#include "WarehouseComputerDashboard.h"
+#include "WarehouseFocusDirector.h"
 #include "WarehouseExperimentUI.h"
 #include "WarehouseExperimentSubsystem.h"
 #include "WarehousePlayMode.h"
@@ -38,6 +41,7 @@
 #include "WarehouseSimulationClock.h"
 #include "WarehouseTransportVisualizer.h"
 #include "WarehouseObserverWallFade.h"
+#include "WarehousePerformance.h"
 #include "Misc/App.h"
 #include "HAL/PlatformTime.h"
 #include "Widgets/SBoxPanel.h"
@@ -47,6 +51,7 @@
 #include "Widgets/Layout/SScrollBox.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SSlider.h"
 #include "Widgets/Input/SNumericEntryBox.h"
 #include "Widgets/Text/STextBlock.h"
@@ -148,8 +153,26 @@ public:
    for (double Y=FMath::CeilToDouble((Bounds.Min.Y-Origin.Y)/100.)*100.+Origin.Y;Y<=Bounds.Max.Y;Y+=100.)
     Line(FVector(Bounds.Min.X,Y,Bounds.Min.Z),FVector(Bounds.Max.X,Y,Bounds.Min.Z),FLinearColor(.25f,.65f,.8f,.16f));
    Rectangle(Bounds,FLinearColor(.3f,.65f,.75f,.65f),1.5f);
-   Rectangle(Building->GetTargetBounds(),WarehouseUIStyle::Accent,3.f);
-   Rectangle(Building->GetAtriumBounds(),WarehouseUIStyle::Warning,2.f);
+   if (Building->IsFloorTarget())
+   {
+    const double Z=Building->GetPlaneHeight();
+    for (const auto& Edge:Building->GetPreviewEdges())
+     Line(FVector(Origin.X+Edge.Key.X,Origin.Y+Edge.Key.Y,Z),FVector(Origin.X+Edge.Value.X,Origin.Y+Edge.Value.Y,Z),WarehouseUIStyle::Accent,3.f);
+    auto ChangedTile=[&](FIntPoint Cell,bool Added)
+    {
+     const FVector A(Origin.X+Cell.X*100.+4,Origin.Y+Cell.Y*100.+4,Z),B=A+FVector(92,92,0);
+     const FLinearColor Color=Added ? FLinearColor(.25f,1.f,.45f,.95f) : FLinearColor(1.f,.3f,.2f,.95f);
+     Rectangle(FBox(A,B),Color,2.f);Line(A,B,Color,2.f);
+     if (!Added) Line(FVector(B.X,A.Y,Z),FVector(A.X,B.Y,Z),Color,2.f);
+    };
+    for (FIntPoint Cell:Building->GetAddedTiles()) ChangedTile(Cell,true);
+    for (FIntPoint Cell:Building->GetRemovedTiles()) ChangedTile(Cell,false);
+   }
+   if (!Building->IsTileBrush())
+   {
+    Rectangle(Building->GetTargetBounds(),WarehouseUIStyle::Accent,2.f);
+    Rectangle(Building->GetAtriumBounds(),WarehouseUIStyle::Warning,2.f);
+   }
    for (FVector World:Building->GetResizeHandles())
    {
     FVector2D Point;if (Controller->ProjectWorldLocationToScreen(World,Point))
@@ -229,7 +252,7 @@ void Amsc_vrPlayerController::BeginPlay()
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(EmergencyAlertWidget.ToSharedRef(),200);
 		auto Tools=SNew(SVerticalBox);
 		LayoutCanvas=SNew(SWarehouseLayoutCanvas).Layout(LayoutEditor).Controller(this)
-			.OnEnded_Lambda([this]() { SetObserverRoofVisibility(false);SetObserverRoofVisibility(true); })
+			.OnEnded_Lambda([this]() { if (!(ConstructionEditor && ConstructionEditor->bActive && ConstructionEditor->IsTileBrush())) { SetObserverRoofVisibility(false);SetObserverRoofVisibility(true); } })
 			.Visibility_Lambda([this]() { return bObserverView && LayoutEditor && LayoutEditor->bEditing && !IsWarehouseMenuOpen() ? EVisibility::Visible:EVisibility::Collapsed; });
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(LayoutCanvas.ToSharedRef(),10);
 		auto Floors=SNew(SWrapBox).UseAllottedSize(true);
@@ -260,6 +283,24 @@ void Amsc_vrPlayerController::BeginPlay()
 				.OnClicked_Lambda([this,I]() { if (I<4) SetObserverFloor(I);ConstructionEditor->SetTarget(EWarehouseConstructionTarget(I));return FReply::Handled(); })
 				[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity_Lambda([this,I]() { return ConstructionEditor && int32(ConstructionEditor->Target)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(BuildingNames[I]))]];
 		BuildingTools->AddSlot().AutoHeight()[BuildingTargets];
+		auto TileTools=SNew(SWrapBox).UseAllottedSize(true)
+			.Visibility_Lambda([this]() { return ConstructionEditor && ConstructionEditor->IsFloorTarget() ? EVisibility::Visible : EVisibility::Collapsed; });
+		const TCHAR* TileBrushNames[]={TEXT("크기 · 위치"),TEXT("타일 추가"),TEXT("타일 제거")};
+		for (int32 I=0;I<UE_ARRAY_COUNT(TileBrushNames);++I)
+			TileTools->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+				.OnClicked_Lambda([this,I]() { ConstructionEditor->SetBrushMode(EWarehouseConstructionBrush(I));return FReply::Handled(); })
+				[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity_Lambda([this,I]() { return ConstructionEditor && int32(ConstructionEditor->BrushMode)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; })
+				.Text(FText::FromString(TileBrushNames[I]))]];
+		TileTools->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			.IsEnabled_Lambda([this]() { return ConstructionEditor && ConstructionEditor->bHasPendingTiles; })
+			.ToolTipText(FText::FromString(TEXT("모든 미확정 타일을 한 번에 적용하고 난간·장식·지지대를 재배치합니다.")))
+			.OnClicked_Lambda([this]() { if (ConstructionEditor->ApplyPendingTiles()) { SetObserverRoofVisibility(false);SetObserverRoofVisibility(true); }return FReply::Handled(); })
+			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("편집 적용")))]];
+		TileTools->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			.IsEnabled_Lambda([this]() { return ConstructionEditor && (ConstructionEditor->bHasPendingTiles || ConstructionEditor->bDragging); })
+			.OnClicked_Lambda([this]() { ConstructionEditor->CancelPendingTiles();return FReply::Handled(); })
+			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text(FText::FromString(TEXT("취소")))]];
+		BuildingTools->AddSlot().AutoHeight()[TileTools];
 		auto BuildingActions=SNew(SWrapBox).UseAllottedSize(true);
 		for (int32 Direction:{-1,1})
 			BuildingActions->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
@@ -400,13 +441,26 @@ void Amsc_vrPlayerController::BeginPlay()
 			 +SHorizontalBox::Slot().AutoWidth().Padding(0,0,10,0)[MakeWarehouseLayoutIcon([this](){return LayoutEditor ? LayoutEditor->Category : EWarehouseLayoutCategory::All;},[this](){return LayoutEditor ? LayoutEditor->GetAddChoiceLabel() : FString();},72)]
 			 +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).AutoWrapText(true).Text_Lambda([this]() { return FText::FromString(LayoutEditor ? TEXT("추가 대상: ")+LayoutEditor->GetAddChoiceLabel()+TEXT(" · 클릭하면 다음 종류") : FString()); })]]];
 		OrdinaryTools->AddSlot().AutoHeight().Padding(3)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
-			.Text_Lambda([this]() { if(AWarehousePlayStage::IsPlay(this)) return FText::FromString(TEXT("고정 창고 · 설비 추가는 예산에서 결제 · 취소 무료 · 철거 환불 없음"));auto* Store=AWarehouseLayoutInventory::Find(this);return FText::FromString(FString::Printf(TEXT("보류된 물류 %d개 · 상자 데이터 생성·영구 삭제는 중앙 컴퓨터에서"),Store ? Store->HeldCargo.Num() : 0)); })];
+			.Text_Lambda([this]()
+			{
+				if(AWarehousePlayStage::IsPlay(this)) return FText::FromString(TEXT("고정 창고 · 설비 추가는 예산에서 결제 · 취소 무료 · 철거 환불 없음"));
+				const auto* Store=AWarehouseLayoutInventory::Find(this);const int32 Count=Store ? Store->HeldCargo.Num() : 0;
+				return FText::FromString(AWarehouseFocusDirector::IsActive(this)
+					? FString::Printf(TEXT("보류된 물류 %d개 · 추가에서 다시 배치할 수 있습니다. 새 입고 물류는 자동으로 준비됩니다."),Count)
+					: FString::Printf(TEXT("보류된 물류 %d개 · 상자 데이터 생성·영구 삭제는 중앙 컴퓨터에서"),Count));
+			})];
 		Tools->AddSlot().AutoHeight().Padding(3,8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(740)
 			.Text_Lambda([this]() { return FText::FromString(ConstructionEditor && ConstructionEditor->bActive ? ConstructionEditor->Status : LayoutEditor ? LayoutEditor->Status : FString()); })];
 		auto ObserverTools=SNew(SVerticalBox)
 			+SVerticalBox::Slot().AutoHeight()
 			[SNew(SBorder).Padding(WarehouseUIStyle::PanelPadding).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(WarehouseUIStyle::Panel)
 				.Visibility_Lambda([this]() { return IsLayoutEditing() ? EVisibility::Visible : EVisibility::Collapsed; })[Tools]]
+			+SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right).Padding(0,6,0,0)
+			[SNew(SButton).IsFocusable(false).ContentPadding(FMargin(16,8))
+				.Visibility_Lambda([this]() {return AWarehouseFocusDirector::Find(this) ? EVisibility::Visible : EVisibility::Collapsed;})
+				.ToolTipText(FText::FromString(TEXT("재배치를 마치고 시뮬레이션을 재개한 뒤 지게차 명령 화면을 엽니다.")))
+				.OnClicked_Lambda([this]() {OpenForkliftCommands();return FReply::Handled();})
+				[SNew(STextBlock).Font(WarehouseUIStyle::Font(18)).ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("지게차 명령")))]]
 			+SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right).Padding(0,6,0,0)
 			[SNew(SButton).IsFocusable(false).ContentPadding(FMargin(10,5))
 				.ToolTipText_Lambda([this]() { return FText::FromString(IsLayoutEditing() ? TEXT("편집 도구를 숨기고 시뮬레이션을 재개합니다.") : TEXT("마지막 편집층의 배치 도구를 열고 시뮬레이션을 일시정지합니다.")); })
@@ -449,6 +503,21 @@ void Amsc_vrPlayerController::BeginPlay()
 }
 
 bool Amsc_vrPlayerController::IsMainMenu() const { return AWarehousePlayStage::IsMenu(this); }
+bool Amsc_vrPlayerController::OpenForkliftCommands()
+{
+ if(IsMainMenu() || !IsLocalController() || !GetWorld()->GetGameViewport() || !AWarehouseFocusDirector::Find(this)) return false;
+ if(ComputerWidget.IsValid()) return true;
+ AWarehouseComputer* Computer=nullptr;
+ for(TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) if(It->CanUse()) {Computer=*It;break;}
+ if(!Computer) return false;
+ if(ExperimentWidget.IsValid()) CloseWarehouseExperiments();
+ if(auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn())) OperatorCharacter->EndRemoteControl();
+ SetLayoutEditing(false);CloseWarehouseMenu();
+ Computer->RefreshState();ActiveComputer=Computer;
+ ComputerWidget=MakeWarehouseComputerDashboard(Computer,this);
+ GetWorld()->GetGameViewport()->AddViewportWidgetContent(ComputerWidget.ToSharedRef(),250);
+ UpdateInputMode();FSlateApplication::Get().SetKeyboardFocus(ComputerWidget);return true;
+}
 bool Amsc_vrPlayerController::OpenPlayMode(int32 StageIndex)
 {
  if (StageIndex < -1 || StageIndex>3) return false;
@@ -536,9 +605,10 @@ void Amsc_vrPlayerController::UpdateInputMode()
 
 void Amsc_vrPlayerController::CloseWarehouseMenu()
 {
+	const bool bHadMenu=MenuWidget.IsValid();
 	if (MenuWidget.IsValid() && GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(MenuWidget.ToSharedRef());
 	MenuWidget.Reset();
-	SaveConfig();
+	if (bHadMenu) SaveConfig();
 	UpdateInputMode();
 }
 
@@ -569,6 +639,18 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 		.ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("물류창고 · 설정 / 관찰")))];
 	Text(TEXT("F1: 메뉴  |  Shift: 달리기  |  Ctrl: 앉기  |  E: 집기 / 적재\nG: 바라보는 지게차의 후방 3인칭 원격 조작 / 종료\n원격: W/S 전후진 · A/D 조향·자리 회전 · 좌클릭 포크 올림 · 우클릭 내림 · Space 제동\n마우스 이동: 지게차 주변 보기 · 종료하면 플레이어 1인칭 복귀\n관찰 진입 시 재배치 모드가 켜지며 시뮬레이션이 일시정지됩니다. 하단 버튼으로 재배치를 끄면 시뮬레이션이 재개됩니다."));
 	Button(bObserverView ? TEXT("1인칭 캐릭터로 돌아가기") : TEXT("전지적 관찰 시점으로 전환"),[this]() { ToggleObserverView(); CloseWarehouseMenu(); });
+	if(auto* Director=AWarehouseFocusDirector::Find(this))
+	{
+		Button(TEXT("지게차 명령"),[this]() {OpenForkliftCommands();});
+		const TWeakObjectPtr<AWarehouseFocusDirector> Operations=Director;
+		Panel->AddSlot().AutoHeight().Padding(8)[SNew(SCheckBox)
+			.IsChecked_Lambda([Operations]() {return Operations.IsValid() && Operations->IsManualOperations() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;})
+			.OnCheckStateChanged_Lambda([this,Operations](ECheckBoxState State)
+			{
+				if(Operations.IsValid()) {CloseWarehouseComputer();Operations->SetManualOperations(State==ECheckBoxState::Checked);}
+			})[SNew(STextBlock).Font(WarehouseUIStyle::Font(18)).ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(TEXT("모든 작업 수동으로 처리")))]];
+		Text(TEXT("기본은 자동 운영입니다. 켜면 입고 검수·배송편·트럭 등 전체 업무 화면을 직접 사용하며, 이미 진행 중인 작업은 이어서 완료됩니다."));
+	}
 	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Accent)
 		.Text_Lambda([this]() { return FText::FromString(FString::Printf(TEXT("시뮬레이션 배속: %d배 · 실제 처리 %.2f배 · 같은 물리 정확도"),SimulationClock ? SimulationClock->RequestedSpeed : 1,SimulationClock ? SimulationClock->AchievedSpeed : 1.f)); }).AutoWrapText(true)];
 	for (int32 Speed:{1,2,4}) Button(FString::Printf(TEXT("시뮬레이션 %d배"),Speed),[this,Speed]() { SetSimulationSpeed(Speed); });
@@ -682,7 +764,16 @@ void Amsc_vrPlayerController::SetObserverFloor(int32 Floor)
 {
  if (Floor < -1 || Floor > 3) return;
  if (FSlateApplication::IsInitialized()) FSlateApplication::Get().DismissAllMenus();
- if (ConstructionEditor) { ConstructionEditor->EndGesture(false);if (Floor<0) ConstructionEditor->SetActive(false); }
+ if (ConstructionEditor)
+ {
+  if (Floor!=ObserverFloor && (ConstructionEditor->bHasPendingTiles || ConstructionEditor->bDragging)) ConstructionEditor->CancelPendingTiles();
+  else ConstructionEditor->EndGesture(false);
+  if (Floor<0) ConstructionEditor->SetActive(false);
+  else if (ConstructionEditor->bActive && ConstructionEditor->IsFloorTarget())
+   ConstructionEditor->SetTarget(EWarehouseConstructionTarget(Floor));
+  else if (ConstructionEditor->bActive && ConstructionEditor->Target==EWarehouseConstructionTarget::Stairs && Floor>0)
+   ConstructionEditor->SetStairFloor(Floor);
+ }
  if (!bObserverView) ToggleObserverView();
  SetObserverRoofVisibility(false);
  ObserverFloor=Floor;
@@ -814,8 +905,14 @@ bool Amsc_vrPlayerController::ConfigureLayoutConveyor(int32 Field,float Value)
 
 void Amsc_vrPlayerController::SetObserverRoofVisibility(bool Hide)
 {
+	CSV_SCOPED_TIMING_STAT(Warehouse,ObserverVisibility);
+	TSet<TWeakObjectPtr<AActor>> Owned;
+	for (const auto& Actor:ObserverHiddenRoofs) Owned.Add(Actor);
 	if (Hide)
 	{
+		TSet<TWeakObjectPtr<AActor>> Wanted;
+		TSet<AActor*> AlreadyHidden;
+		for (AActor* Actor:HiddenActors) AlreadyHidden.Add(Actor);
         for (TActorIterator<AActor> It(GetWorld()); It; ++It)
         {
             const bool Dynamic=It->IsA<AWarehouseForklift>() || It->IsA<AWarehousePallet>() || It->IsA<AWarehouseCargo>();
@@ -830,16 +927,29 @@ void Amsc_vrPlayerController::SetObserverRoofVisibility(bool Hide)
                 // floor remain visible as the real obstacles they still are.
                 if (Extent.Z>50.f && Center.Z-Extent.Z<=ObserverFloor*400.f+10.f) Above=false;
             }
-            if ((Above || It->ActorHasTag(TEXT("ObserverRoof"))) && !HiddenActors.Contains(*It))
+            if (Above || It->ActorHasTag(TEXT("ObserverRoof")))
             {
-                HiddenActors.Add(*It);
-                ObserverHiddenRoofs.Add(*It);
+                Wanted.Add(TWeakObjectPtr<AActor>(*It));
+                if (!AlreadyHidden.Contains(*It))
+                {
+                    HiddenActors.Add(*It);
+                    AlreadyHidden.Add(*It);
+                    ObserverHiddenRoofs.Add(*It);
+                }
             }
         }
+		// A floor refresh changes only membership. Keep other systems' hidden
+		// actors and avoid remove/re-add searches for every roof on every scan.
+		HiddenActors.RemoveAll([&](const AActor* Actor)
+		{
+			const TWeakObjectPtr<AActor> Key(const_cast<AActor*>(Actor));
+			return Owned.Contains(Key) && !Wanted.Contains(Key);
+		});
+		ObserverHiddenRoofs.RemoveAll([&](const TWeakObjectPtr<AActor>& Actor){return !Actor.IsValid() || !Wanted.Contains(Actor);});
 	}
 	else
 	{
-		for (const auto& Roof : ObserverHiddenRoofs) if (Roof.IsValid()) HiddenActors.Remove(Roof.Get());
+		HiddenActors.RemoveAll([&](const AActor* Actor){return Owned.Contains(TWeakObjectPtr<AActor>(const_cast<AActor*>(Actor)));});
 		ObserverHiddenRoofs.Reset();
 	}
 }
@@ -874,7 +984,7 @@ void Amsc_vrPlayerController::PlayerTick(float Dt)
         if (ObserverVisibilityElapsed>=.25f)
         {
             ObserverVisibilityElapsed=0;
-            SetObserverRoofVisibility(false); SetObserverRoofVisibility(true);
+            SetObserverRoofVisibility(true);
         }
     }
 	ObserverCamera->GetCameraComponent()->SetFieldOfView(ViewFOV);
@@ -906,6 +1016,10 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
    return FText::FromString(TEXT("W/S 전후진 · A/D 조향·제자리 회전 · 좌클릭 포크 올림 · 우클릭 내림\n마우스 둘러보기 · Space 제동 · G 원격 조작 종료"));
  if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn()))
  {
+  // E prioritizes the elevator panel even while carrying cargo.
+  if (!bObserverView)
+   if (auto* Elevator=Cast<AWarehouseElevator>(OperatorCharacter->GetInteractionTarget()))
+    return FText::FromString(Elevator->GetHumanInteractionText(OperatorCharacter));
   if (auto* Cargo=Cast<AWarehouseCargo>(OperatorCharacter->GetHeldCargo()))
    return OperatorCharacter->IsPlacingCargo() ? FText::FromString(Cargo->GetCargoDescription().ToString()+TEXT("\n내려놓는 중 · E : 취소")) : Cargo->GetCargoDescription();
   if (auto* Pallet=Cast<AWarehousePallet>(OperatorCharacter->GetHeldCargo()))
@@ -913,14 +1027,14 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
      OperatorCharacter->IsPlacingCargo() ? TEXT("팔레트 위에 내려놓는 중 · E : 취소") : TEXT("E : 가까운 팔레트 위에 쌓기 / 안전한 곳에 내려놓기")));
   if (!bObserverView)
    if (Cast<AWarehouseComputer>(OperatorCharacter->GetInteractionTarget()))
-    return FText::FromString(TEXT("E : 관제 컴퓨터 접속\n실시간 재고 · 운반 작업 · 지게차 관리"));
+    return FText::FromString(AWarehouseFocusDirector::IsActive(this) ? TEXT("E : 지게차 명령\n운행 관리 · 팔레트 입고 / 출고 운반") : TEXT("E : 관제 컴퓨터 접속\n실시간 재고 · 운반 작업 · 지게차 관리"));
   if (!bObserverView)
    if (auto* Lift=Cast<AWarehousePalletLift>(OperatorCharacter->GetInteractionTarget()))
     return Lift->GetInteractionText(FMath::Clamp(FMath::FloorToInt((OperatorCharacter->GetActorLocation().Z-Lift->GetActorLocation().Z)/400.f),0,Lift->FloorCount-1));
   if (!bObserverView)
    if (auto* Vehicle=Cast<AWarehouseForklift>(OperatorCharacter->GetInteractionTarget()))
     return FText::FromString(FString::Printf(TEXT("E : %s  |  G : 스마트폰 원격 조작\n%s\n속도 %.2f m/s · 배터리 %.0f%% · 적재 %.0f / %.0f kg"),
-     Vehicle->bPowered ? TEXT("자율 운행 정지") : TEXT("자율 운행 시작 / 재개"),
+     Vehicle->bPowered ? TEXT("자율 운행 일시정지") : TEXT("자율 운행 시작 / 재개"),
      *Vehicle->Status,FMath::Abs(Vehicle->CurrentSpeedCm)*.01f,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
  }
  const FVector Eye=PlayerCameraManager->GetCameraLocation();
@@ -932,7 +1046,7 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
   if (auto* Cargo=Cast<AWarehouseCargo>(Hit.GetActor())) return Cargo->GetCargoDescription();
   if (!bObserverView && Hit.Distance<=250.f)
    if (auto* Pallet=Cast<AWarehousePallet>(Hit.GetActor()))
-    return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\n%s\nE : 빈 팔레트 들기"),Pallet->PalletMassKg,*Pallet->GetReceiptDescription().ToString()));
+    return FText::FromString(FString::Printf(TEXT("팔레트 · %.0f kg\n%s\nE : 팔레트와 적재물 함께 들기"),Pallet->PalletMassKg,*Pallet->GetReceiptDescription().ToString()));
  }
  return FText::GetEmpty();
 }
@@ -986,6 +1100,8 @@ void Amsc_vrPlayerController::UpdateEmergencyAlerts(float Dt)
   TArray<FString> Resources;
   for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
    if (!It->LastErrorMessage.IsEmpty()) Resources.Add(It->VehicleName+TEXT(": ")+It->LastErrorMessage);
+  for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It)
+   if (It->LastWorkAlertUntil>=GetWorld()->GetTimeSeconds() && !It->LastWorkAlert.IsEmpty()) Resources.Add(It->LastWorkAlert);
   ResourceAlertText=FString::Join(Resources,TEXT("\n"));
   if (Notices.IsEmpty())
   {

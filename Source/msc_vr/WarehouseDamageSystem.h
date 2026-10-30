@@ -6,6 +6,7 @@
 class UStaticMesh;
 class UPrimitiveComponent;
 class UTextRenderComponent;
+class UBodySetup;
 
 UENUM(BlueprintType)
 enum class EWarehouseFailure : uint8 { Machine, Rack, Crush, Rigid, Structure };
@@ -64,6 +65,8 @@ public:
  // Periodic readers share the 10Hz snapshot. Explicit Refresh=true remains unconditional.
  UFUNCTION(BlueprintCallable, Category="Strength") void EnsureSupportSnapshot();
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Performance") int32 SupportSnapshotVersion=0;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Performance") int32 LastSupportTraceCount=0;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Performance") int32 LastSupportRelationsReused=0;
  static AWarehouseDamageSystem* Find(const AActor* Context);
 private:
  struct FBodyMotion
@@ -80,6 +83,24 @@ private:
  // Parent -> children in profile index order, rebuilt with each exact support snapshot.
  TArray<TArray<int32>> SupportedChildren;
  TArray<FBox> Bounds;
+ // Only rigid, unchanged query geometry may retain a sampled bearing relation.
+ // Old/new bounds of every visibility blocker (including unregistered cargo)
+ // invalidate nearby query footprints; explicit fresh reads still trace fully.
+ struct FSupportGeometry
+ {
+  FTransform Transform;
+  FBox Box=FBox(ForceInit);
+  TWeakObjectPtr<UBodySetup> BodySetup;
+  TWeakObjectPtr<UStaticMesh> Mesh;
+  FGuid BodyGuid;
+  uint64 Seen=0;
+  uint8 TraceFlag=0;
+ };
+ TMap<TWeakObjectPtr<UPrimitiveComponent>,FSupportGeometry> SupportGeometry;
+ TArray<TArray<TWeakObjectPtr<AActor>>> SupportMembers;
+ TArray<TArray<int32>> BearingSupports;
+ TArray<FBox> BearingBounds;
+ uint64 SupportGeometryGeneration=0;
  UPROPERTY(Transient) TArray<TObjectPtr<UTextRenderComponent>> Labels;
  bool bInitialized = false;
  float SinceScan = 0;
@@ -89,7 +110,8 @@ private:
  float PhysicalMass(int32 Index) const;
  static FBodyMotion ReadMotion(UPrimitiveComponent* Part);
  void RegisterContact(UPrimitiveComponent* Part);
- void UpdateLoads();
+ bool RefreshSupportGeometry(TArray<FBox>& ChangedGeometry);
+ void UpdateLoads(bool ForceFullTrace=false);
  void Fail(int32 Index);
  void Release(int32 Index);
  void ShowDamage(int32 Index);

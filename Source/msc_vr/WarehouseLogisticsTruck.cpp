@@ -8,6 +8,12 @@
 #include "Components/SceneComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/PoseableMeshComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
+#include "GameFramework/GameModeBase.h"
+#include "GameFramework/WorldSettings.h"
+#include "TwoBoneIK.h"
 #include "EngineUtils.h"
 #include "Engine/World.h"
 #include "Engine/StaticMesh.h"
@@ -50,11 +56,79 @@ AWarehouseLogisticsTruck::AWarehouseLogisticsTruck()
 {
  PrimaryActorTick.bCanEverTick=true;
  RootComponent=CreateDefaultSubobject<USceneComponent>(TEXT("TruckFrame"));
+ DriverMesh=CreateDefaultSubobject<UPoseableMeshComponent>(TEXT("TruckDriverVisual"));
+ DriverMesh->SetupAttachment(RootComponent);DriverMesh->SetMobility(EComponentMobility::Movable);
+ DriverMesh->SetCollisionProfileName(TEXT("NoCollision"));DriverMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
+ DriverMesh->SetGenerateOverlapEvents(false);DriverMesh->SetCanEverAffectNavigation(false);
+ DriverMesh->SetComponentTickEnabled(false);DriverMesh->ComponentTags.Add(TEXT("WarehouseCinematicVisual"));
+}
+void AWarehouseLogisticsTruck::OnConstruction(const FTransform& Transform)
+{
+ Super::OnConstruction(Transform);UpdateDriverPresentation();
+}
+void AWarehouseLogisticsTruck::UpdateDriverPresentation()
+{
+ bDriverPoseReady=false;
+ DriverMesh->SetVisibility(false);DriverMesh->SetHiddenInGame(true);
+ if (!bShowDriver || DriverSeatPose.ContainsNaN() || DriverSteeringWheelCentreCm.ContainsNaN()) return;
+ UClass* Appearance=DriverCharacterClass.Get();
+ if (!Appearance && GetWorld())
+ {
+  const AGameModeBase* Mode=GetWorld()->GetAuthGameMode();
+  if (!Mode && GetWorld()->GetWorldSettings()->DefaultGameMode) Mode=GetWorld()->GetWorldSettings()->DefaultGameMode->GetDefaultObject<AGameModeBase>();
+  if (Mode) Appearance=Mode->DefaultPawnClass.Get();
+ }
+ if (!Appearance || !Appearance->IsChildOf(ACharacter::StaticClass()))
+  Appearance=LoadClass<ACharacter>(nullptr,TEXT("/Game/FirstPerson/Blueprints/BP_FirstPersonCharacter.BP_FirstPersonCharacter_C"));
+ const auto* Character=Appearance ? Appearance->GetDefaultObject<ACharacter>() : nullptr;
+ const auto* Source=Character ? Character->GetMesh() : nullptr;
+ auto* Mesh=Source ? Source->GetSkeletalMeshAsset() : nullptr;
+ if (!Mesh) return;
+ DriverMesh->SetSkinnedAssetAndUpdate(Mesh);
+ DriverMesh->EmptyOverrideMaterials();
+ for (int32 I=0;I<Source->GetNumMaterials();++I) DriverMesh->SetMaterial(I,Source->GetMaterial(I));
+ const FTransform Alignment(Source->GetRelativeRotation(),FVector::ZeroVector,Source->GetRelativeScale3D());
+ DriverMesh->SetRelativeTransform(Alignment*DriverSeatPose);
+ const FReferenceSkeleton& Ref=Mesh->GetRefSkeleton();
+ TArray<FTransform> Local=Ref.GetRefBonePose(),Component;
+ const int32 Pelvis=Ref.FindBoneIndex(TEXT("pelvis"));
+ if (Pelvis==INDEX_NONE) return;
+ Local[Pelvis].SetTranslation(FVector::ZeroVector);
+ auto Rebuild=[&]()
+ {
+  Component=Local;
+  for (int32 I=1;I<Component.Num();++I) Component[I]=Local[I]*Component[Ref.GetParentIndex(I)];
+ };
+ Rebuild();
+ auto Limb=[&](const TCHAR* UpperName,const TCHAR* LowerName,const TCHAR* EndName,FVector Goal,FVector Pole)
+ {
+  const int32 Upper=Ref.FindBoneIndex(UpperName),Lower=Ref.FindBoneIndex(LowerName),End=Ref.FindBoneIndex(EndName);
+  if (Upper==INDEX_NONE || Lower==INDEX_NONE || End==INDEX_NONE || Ref.GetParentIndex(Lower)!=Upper || Ref.GetParentIndex(End)!=Lower) return false;
+  FTransform A=Component[Upper],B=Component[Lower],C=Component[End];
+  AnimationCore::SolveTwoBoneIK(A,B,C,Alignment.InverseTransformPosition(Pole),Alignment.InverseTransformPosition(Goal),false,1.,1.);
+  Local[Upper]=A.GetRelativeTransform(Component[Ref.GetParentIndex(Upper)]);
+  Local[Lower]=B.GetRelativeTransform(A);Local[End]=C.GetRelativeTransform(B);Rebuild();return true;
+ };
+ // Fixed seat/steering pose, preserving the mannequin's actual limb lengths.
+ // It has no capsule, AI, physical mass or world collision of its own.
+ for (const TCHAR* Suffix:{TEXT("_l"),TEXT("_r")})
+ {
+  const FName Thigh(*(FString(TEXT("thigh"))+Suffix));
+  const int32 Index=Ref.FindBoneIndex(Thigh);
+  if (Index==INDEX_NONE) return;
+  const float Side=Alignment.TransformPosition(Component[Index].GetLocation()).Y<0 ? -1.f : 1.f;
+  const FString S(Suffix);
+  if (!Limb(*(TEXT("thigh")+S),*(TEXT("calf")+S),*(TEXT("foot")+S),FVector(45,Side*14,-40),FVector(75,Side*18,0)) ||
+      !Limb(*(TEXT("upperarm")+S),*(TEXT("lowerarm")+S),*(TEXT("hand")+S),DriverSteeringWheelCentreCm+FVector(0,Side*17,0),FVector(12,Side*55,25))) return;
+ }
+ DriverMesh->BoneSpaceTransforms=MoveTemp(Local);
+ DriverMesh->MarkRefreshTransformDirty();DriverMesh->RefreshBoneTransforms();DriverMesh->UpdateBounds();DriverMesh->MarkRenderTransformDirty();
+ bDriverPoseReady=true;DriverMesh->SetVisibility(true);DriverMesh->SetHiddenInGame(State==EWarehouseTruckState::Departed);
 }
 
 void AWarehouseLogisticsTruck::BeginPlay()
 {
- Super::BeginPlay();LastPose=GetActorTransform();
+ Super::BeginPlay();LastPose=GetActorTransform();UpdateDriverPresentation();ResetDockService();
  for (AWarehousePallet* Pallet:InitialPallets) InitialManifest.Add(Pallet);
  ManifestPallets.Reset();
  for (AActor* Part:TruckParts) if (IsValid(Part)) DockParts.Add({Part,Part->GetActorTransform().GetRelativeTransform(GetActorTransform())});
@@ -81,6 +155,82 @@ bool AWarehouseLogisticsTruck::IsReady() const
 
 bool AWarehouseLogisticsTruck::Fail(const FString& Message)
 { Status=Message;return false; }
+
+FString AWarehouseLogisticsTruck::GetVisitId() const
+{ return FString::Printf(TEXT("%s-V%04d"),*TruckId,VisitNumber); }
+
+void AWarehouseLogisticsTruck::ResetDockService()
+{
+ DockServiceState=EWarehouseDockServiceState::Awaiting;
+ DockServiceElapsed=0;DockServiceDuration=0;DockServiceRemainingSeconds=0;
+ bVehicleRestrained=false;bDockDoorOpen=false;bLevellerReady=false;
+ DockServiceStatus=TEXT("도크 준비 대기");
+}
+
+bool AWarehouseLogisticsTruck::PrepareDock()
+{
+ if (!HasAuthority() || !IsReady() || !IsManifestReady()) return Fail(TEXT("정차와 도착 화물 등록 후 도크를 준비할 수 있습니다."));
+ if (DockServiceState==EWarehouseDockServiceState::Ready || DockServiceState==EWarehouseDockServiceState::Securing) return true;
+ if (DockServiceState!=EWarehouseDockServiceState::Awaiting) return Fail(TEXT("출차 정리가 시작된 도크에서는 상하차를 재개할 수 없습니다."));
+ if (!FMath::IsFinite(DockPreparationSeconds) || DockPreparationSeconds<0) return Fail(TEXT("도크 준비 시간이 유효하지 않습니다."));
+ DockServiceState=EWarehouseDockServiceState::Securing;
+ DockServiceElapsed=0;DockServiceDuration=DockPreparationSeconds;
+ DockServiceRemainingSeconds=DockServiceDuration;DockServiceStatus=TEXT("차량 고정 확인 중");
+ AdvanceDockService(0);return true;
+}
+
+bool AWarehouseLogisticsTruck::IsDockPrepared() const
+{
+ return IsReady() && DockServiceState==EWarehouseDockServiceState::Ready &&
+  bVehicleRestrained && bDockDoorOpen && bLevellerReady;
+}
+
+bool AWarehouseLogisticsTruck::PrepareDeparture()
+{
+ if (!HasAuthority() || !IsReady() || !IsManifestReady()) return Fail(TEXT("상하차와 화물 확인을 끝낸 후 출차를 준비할 수 있습니다."));
+ if (DockServiceState==EWarehouseDockServiceState::Clearing || DockServiceState==EWarehouseDockServiceState::Released) return true;
+ if (DockServiceState==EWarehouseDockServiceState::Securing) return Fail(TEXT("진행 중인 도크 준비가 끝날 때까지 기다리세요."));
+ if (!FMath::IsFinite(DockClearanceSeconds) || DockClearanceSeconds<0) return Fail(TEXT("출차 정리 시간이 유효하지 않습니다."));
+ DockServiceState=EWarehouseDockServiceState::Clearing;
+ DockServiceElapsed=0;DockServiceDuration=DockClearanceSeconds;DockServiceRemainingSeconds=DockServiceDuration;
+ bLevellerReady=false;DockServiceStatus=TEXT("연결판 회수 · 도크 문 닫힘 확인 중");
+ AdvanceDockService(0);return true;
+}
+
+bool AWarehouseLogisticsTruck::IsDeparturePrepared() const
+{
+ return IsReady() && DockServiceState==EWarehouseDockServiceState::Released &&
+  !bVehicleRestrained && !bDockDoorOpen && !bLevellerReady;
+}
+
+void AWarehouseLogisticsTruck::AdvanceDockService(float DeltaSeconds)
+{
+ if (DockServiceState==EWarehouseDockServiceState::Awaiting || DockServiceState==EWarehouseDockServiceState::Released) return;
+ // A displaced truck cannot retain a green dock signal. Loading itself is a
+ // timed cinematic operation at the same dock and does not invalidate readiness.
+ if (State==EWarehouseTruckState::AtDock && !IsReady()) { ResetDockService();return; }
+ if (State!=EWarehouseTruckState::AtDock) return;
+ if (DockServiceState==EWarehouseDockServiceState::Ready) return;
+ DockServiceElapsed+=FMath::IsFinite(DeltaSeconds) ? FMath::Max(0.f,DeltaSeconds):0.f;
+ DockServiceRemainingSeconds=FMath::Max(0.f,DockServiceDuration-DockServiceElapsed);
+ const float Progress=DockServiceDuration>UE_SMALL_NUMBER ? FMath::Clamp(DockServiceElapsed/DockServiceDuration,0.f,1.f):1.f;
+ if (DockServiceState==EWarehouseDockServiceState::Securing)
+ {
+  bVehicleRestrained=Progress>=1.f/3.f;bDockDoorOpen=Progress>=2.f/3.f;bLevellerReady=Progress>=1.f;
+  DockServiceStatus=!bVehicleRestrained ? TEXT("차량 고정 확인 중"):
+   !bDockDoorOpen ? TEXT("도크 문 열림 확인 중"):!bLevellerReady ? TEXT("연결판 준비 중"):TEXT("상하차 허용");
+  if (bLevellerReady) DockServiceState=EWarehouseDockServiceState::Ready;
+ }
+ else if (DockServiceState==EWarehouseDockServiceState::Clearing)
+ {
+  if (Progress>=.5f) { bDockDoorOpen=false;DockServiceStatus=TEXT("차량 고정 해제 확인 중"); }
+  if (Progress>=1.f)
+  {
+   bVehicleRestrained=false;DockServiceState=EWarehouseDockServiceState::Released;
+   DockServiceStatus=TEXT("도크 정리 완료 · 출차 허용");
+  }
+ }
+}
 
 FBox AWarehouseLogisticsTruck::UnitBounds(const FUnit& Unit,const FTransform& PalletPose,const FTransform& Reference)
 {
@@ -170,7 +320,10 @@ void AWarehouseLogisticsTruck::RestoreUnit(FUnit& Unit)
 }
 
 bool AWarehouseLogisticsTruck::TransferUnit(AWarehousePallet* Pallet,int32 SlotIndex,bool IntoTruck,FTransform WorldDestination)
-{ return Transfer(Pallet,SlotIndex,IntoTruck,WorldDestination); }
+{
+ if (!IsDockPrepared()) return Fail(TEXT("차량 고정·도크 문·연결판 준비 완료 후 상하차할 수 있습니다."));
+ return Transfer(Pallet,SlotIndex,IntoTruck,WorldDestination);
+}
 
 bool AWarehouseLogisticsTruck::Transfer(AWarehousePallet* Pallet,int32 SlotIndex,bool IntoTruck,FTransform WorldDestination,const TArray<AActor*>* InitialCargo)
 {
@@ -266,6 +419,7 @@ TArray<AActor*> AWarehouseLogisticsTruck::GetUnitCargo(AWarehousePallet* Pallet)
 {
  TArray<AActor*> Result;
  const FUnit* Unit=Units.FindByPredicate([&](const FUnit& Entry){return Entry.Pallet.Get()==Pallet;});
+ if (!Unit) Unit=ArchivedUnits.FindByPredicate([&](const FUnit& Entry){return Entry.Pallet.Get()==Pallet;});
  if (Unit) for (const auto& Member:Unit->Members) if (auto* Cargo=Cast<AWarehouseCargo>(Member.Actor.Get())) Result.Add(Cargo);
  return Result;
 }
@@ -273,6 +427,7 @@ TArray<AActor*> AWarehouseLogisticsTruck::GetUnitCargo(AWarehousePallet* Pallet)
 bool AWarehouseLogisticsTruck::Depart()
 {
  if (!IsManifestReady()) return Fail(TEXT("초기 입고 화물 명세 등록이 끝나지 않았습니다."));
+ if (!IsDeparturePrepared()) return Fail(TEXT("연결판 회수·도크 문 닫힘·차량 고정 해제 후 출차할 수 있습니다."));
  if (!HasAuthority() || !IsReady() || DepartureRoute.IsEmpty()) return Fail(TEXT("출차 경로와 정차 상태를 확인하세요."));
  for (const FVector& Point:DepartureRoute) if (Point.ContainsNaN()) return Fail(TEXT("유효 출차 경로가 없습니다."));
  if (ManifestPallets.Num()!=Units.Num()) return Fail(TEXT("트럭 화물 명세가 일치하지 않습니다."));
@@ -280,13 +435,65 @@ bool AWarehouseLogisticsTruck::Depart()
  DepartureParts.Reset();
  for (AActor* Part:TruckParts)
  {
-  DepartureParts.Add({Part,Part->GetActorTransform().GetRelativeTransform(GetActorTransform())});
+  DepartureParts.Add({Part,Part->GetActorTransform().GetRelativeTransform(GetActorTransform()),Part->IsHidden(),Part->GetActorEnableCollision()});
   TArray<USceneComponent*> Components;Part->GetComponents(Components);
   for (auto* Component:Components) Component->SetMobility(EComponentMobility::Movable);
   TArray<UPrimitiveComponent*> Bodies;Part->GetComponents(Bodies);
   for (auto* Body:Bodies) if (Body->IsSimulatingPhysics()) Body->SetSimulatePhysics(false);
  }
  RouteIndex=0;State=EWarehouseTruckState::Departing;Status=TEXT("출차 중");return true;
+}
+
+bool AWarehouseLogisticsTruck::ReturnForNextVisit()
+{
+ if (!HasAuthority() || State!=EWarehouseTruckState::Departed || !PartsValid() || DepartureParts.IsEmpty())
+  return Fail(TEXT("출차를 완료한 유효 차량만 다음 방문에 재사용할 수 있습니다."));
+ if (DepartureRoute.IsEmpty() || !FinitePose(DockAnchor->GetActorTransform())) return Fail(TEXT("복귀 도크와 진입 경로가 유효하지 않습니다."));
+ for (const FVector& Point:DepartureRoute) if (Point.ContainsNaN()) return Fail(TEXT("유효 진입 경로가 없습니다."));
+ for (TActorIterator<AWarehouseLogisticsTruck> It(GetWorld());It;++It)
+  if (*It!=this && It->DockId==DockId && It->State!=EWarehouseTruckState::Departed)
+   return Fail(TEXT("지정 도크가 사용 중이므로 다음 방문을 대기합니다."));
+ // Keep the exact delivered actors hidden at the old road endpoint. Neither
+ // their identities nor their cargo is recycled with the vehicle presentation.
+ for (FUnit& Unit:Units)
+ {
+  for (const FUnitMember& Member:Unit.Members) if (AActor* Actor=Member.Actor.Get())
+   Actor->Tags.RemoveAll([](const FName& Tag) { return Tag.ToString().StartsWith(TEXT("LayoutGroup:TruckDock")); });
+  ArchivedUnits.Add(MoveTemp(Unit));
+ }
+ Units.Reset();ManifestPallets.Reset();InitialManifest.Reset();InitialPallets.Reset();
+ bInitialManifestError=false;bConfigurationUnavailable=false;TransferRemaining=0;
+ ReturnDockPose=DockAnchor->GetActorTransform();ReturnRoute.Reset();
+ for (int32 I=DepartureRoute.Num()-1;I>=0;--I) ReturnRoute.Add(DepartureRoute[I]);
+ ReturnRoute.Add(ReturnDockPose.GetLocation());RouteIndex=0;
+ for (const auto& Part:DepartureParts) if (auto* Actor=Part.Actor.Get())
+ {
+  Actor->SetActorHiddenInGame(Part.bHidden);
+  // This road-only animation ends at the dock. Physical warehouse bodies are
+  // restored before the next visit can accept or unload any cargo.
+  Actor->SetActorEnableCollision(false);
+ }
+ ++VisitNumber;ResetDockService();State=EWarehouseTruckState::Returning;Status=TEXT("다음 차량 진입 중");
+ UE_LOG(LogTemp,Log,TEXT("LOGISTICS_TRUCK_RETURNING visit=%s archived=%d"),*GetVisitId(),ArchivedUnits.Num());
+ return true;
+}
+
+bool AWarehouseLogisticsTruck::QueueArrivalManifest(const TArray<AWarehousePallet*>& Pallets)
+{
+ if (!HasAuthority() || !IsReady() || !IsManifestReady() || !ManifestPallets.IsEmpty() || !Units.IsEmpty() ||
+  DockServiceState!=EWarehouseDockServiceState::Awaiting)
+  return Fail(TEXT("새 방문의 빈 차량에만 도착 화물을 등록할 수 있습니다."));
+ if (Pallets.IsEmpty() || Pallets.Num()>LoadSlots.Num()) return Fail(TEXT("도착 화물 수와 트럭 적재 자리를 확인하세요."));
+ TSet<AWarehousePallet*> Unique;
+ for (AWarehousePallet* Pallet:Pallets)
+ {
+  if (!IsValid(Pallet) || Pallet->GetWorld()!=GetWorld() || Pallet->ActorHasTag(TransitTag) || Unique.Contains(Pallet))
+   return Fail(TEXT("도착 팔레트가 없거나 중복·운송 중입니다."));
+  Unique.Add(Pallet);
+ }
+ InitialPallets.Reset();InitialManifest.Reset();
+ for (AWarehousePallet* Pallet:Pallets) { InitialPallets.Add(Pallet);InitialManifest.Add(Pallet); }
+ Status=TEXT("새 방문의 도착 화물 등록 중");return true;
 }
 
 bool AWarehouseLogisticsTruck::RetryInitialManifest()
@@ -299,13 +506,19 @@ bool AWarehouseLogisticsTruck::RetryInitialManifest()
 void AWarehouseLogisticsTruck::Tick(float DeltaSeconds)
 {
  Super::Tick(DeltaSeconds);
+ if (DriverMesh) DriverMesh->SetHiddenInGame(!bShowDriver || !bDriverPoseReady || State==EWarehouseTruckState::Departed);
  MeasuredSpeedCm=DeltaSeconds>0 ? FVector::Dist(LastPose.GetLocation(),GetActorLocation())/DeltaSeconds:0;
  LastPose=GetActorTransform();
  if (!HasAuthority() || State==EWarehouseTruckState::Departed) return;
- if (!PartsValid()) { bConfigurationUnavailable=true;State=EWarehouseTruckState::Unavailable;Status=TEXT("트럭 부품 또는 도크가 삭제되었습니다.");return; }
+ if (!PartsValid())
+ {
+  if (!bConfigurationUnavailable) StateBeforeConfigurationFailure=State;
+  bConfigurationUnavailable=true;State=EWarehouseTruckState::Unavailable;ResetDockService();
+  Status=TEXT("트럭 부품 또는 도크가 삭제되었습니다.");return;
+ }
  if (DockParts.IsEmpty()) for (AActor* Part:TruckParts) DockParts.Add({Part,Part->GetActorTransform().GetRelativeTransform(GetActorTransform())});
  if (bConfigurationUnavailable)
- { bConfigurationUnavailable=false;if (!bInitialManifestError) State=EWarehouseTruckState::AtDock; }
+ { bConfigurationUnavailable=false;if (!bInitialManifestError) State=StateBeforeConfigurationFailure; }
  if (!bInitialManifestError && !InitialManifest.IsEmpty() && IsReady())
  {
   // An arriving truck already owns its secured stock. Snapshot every authored
@@ -331,26 +544,44 @@ void AWarehouseLogisticsTruck::Tick(float DeltaSeconds)
   }
   Status=TEXT("도크 대기");
  }
+ AdvanceDockService(DeltaSeconds);
  if (State==EWarehouseTruckState::Loading)
  {
   TransferRemaining-=DeltaSeconds;
   if (TransferRemaining<=0) { State=EWarehouseTruckState::AtDock;Status=TEXT("도크 대기"); }
   return;
  }
- if (State!=EWarehouseTruckState::Departing) return;
- for (const FUnit& Unit:Units) if (!IsUnitOnTruck(Unit.Pallet.Get()))
+ const bool bReturning=State==EWarehouseTruckState::Returning;
+ if (State!=EWarehouseTruckState::Departing && !bReturning) return;
+ if (!bReturning) for (const FUnit& Unit:Units) if (!IsUnitOnTruck(Unit.Pallet.Get()))
  { State=EWarehouseTruckState::Unavailable;Status=TEXT("출차 중 화물 이탈 또는 삭제가 발생했습니다.");return; }
- float Remaining=FMath::Max(0.f,DeltaSeconds)*FMath::Max(1.f,DepartureSpeedCm);
- while (Remaining>0 && DepartureRoute.IsValidIndex(RouteIndex))
+ if (!FMath::IsFinite(DepartureSpeedCm) || DepartureSpeedCm<=0 || !FMath::IsFinite(DeltaSeconds))
+ { State=EWarehouseTruckState::Unavailable;Status=TEXT("차량 진출입 속도가 유효하지 않습니다.");return; }
+ const TArray<FVector>& Route=bReturning ? ReturnRoute:DepartureRoute;
+ float Remaining=FMath::Max(0.f,DeltaSeconds)*DepartureSpeedCm;
+ while (Remaining>0 && Route.IsValidIndex(RouteIndex))
  {
-  const FVector Target=DepartureRoute[RouteIndex],Delta=Target-GetActorLocation();const float Distance=Delta.Size();
+  const FVector Target=Route[RouteIndex],Delta=Target-GetActorLocation();const float Distance=Delta.Size();
   if (Distance<=Remaining) { SetActorLocation(Target,false,nullptr,ETeleportType::TeleportPhysics);Remaining-=Distance;++RouteIndex; }
   else { SetActorLocation(GetActorLocation()+Delta/Distance*Remaining,false,nullptr,ETeleportType::TeleportPhysics);Remaining=0; }
  }
  for (const auto& Part:DepartureParts) if (auto* Actor=Part.Actor.Get()) Actor->SetActorTransform(Part.RelativePose*GetActorTransform(),false,nullptr,ETeleportType::TeleportPhysics);
  for (auto& Unit:Units) MoveUnit(Unit,Unit.LocalPalletPose*GetActorTransform());
- if (RouteIndex<DepartureRoute.Num()) return;
+ if (RouteIndex<Route.Num()) return;
+ if (bReturning)
+ {
+  SetActorTransform(ReturnDockPose,false,nullptr,ETeleportType::TeleportPhysics);
+  for (const auto& Part:DepartureParts) if (auto* Actor=Part.Actor.Get())
+  {
+   Actor->SetActorTransform(Part.RelativePose*GetActorTransform(),false,nullptr,ETeleportType::TeleportPhysics);
+   Actor->SetActorHiddenInGame(Part.bHidden);Actor->SetActorEnableCollision(Part.bCollisionEnabled);
+  }
+  LastPose=GetActorTransform();MeasuredSpeedCm=0;State=EWarehouseTruckState::AtDock;Status=TEXT("새 방문 도착 · 도크 준비 대기");
+  UE_LOG(LogTemp,Log,TEXT("LOGISTICS_TRUCK_ARRIVED visit=%s"),*GetVisitId());
+  return;
+ }
  State=EWarehouseTruckState::Departed;Status=TEXT("출차 완료 · 운송 기록 보존");
+ DriverMesh->SetHiddenInGame(true);
  for (const auto& Part:DepartureParts) if (auto* Actor=Part.Actor.Get()) { Actor->SetActorHiddenInGame(true);Actor->SetActorEnableCollision(false); }
  for (const auto& Unit:Units) for (const auto& Member:Unit.Members) if (auto* Actor=Member.Actor.Get())
  { Actor->SetActorHiddenInGame(true);Actor->SetActorEnableCollision(false); }

@@ -106,6 +106,20 @@ public:
 	int32 LastScanSelfBlocked = 0;
 
 private:
+	struct FBeam
+	{
+		FVector Local;
+		int32 Column;
+		double Distance=0.;
+		uint8 Result=0;
+		TWeakObjectPtr<UPrimitiveComponent> Component;
+	};
+	void EnsureBeamDirections(int32 Columns);
+	TArray<FVector> BeamDirections;
+	TArray<FBeam> BeamScratch;
+	int32 CachedColumns=0,CachedChannels=0;
+	float CachedFov=0,CachedVerticalMin=0,CachedVerticalMax=0;
+	friend class FAgvLidarDirectionCacheTest;
 	TArray<FVector> Points;
 	TArray<FAgvLidarReturn> LastReturns;
 	FRandomStream Noise;
