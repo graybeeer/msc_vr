@@ -494,8 +494,11 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  int32 CandidateCount=0,StartConnections=0,GoalConnections=0;bool Found=false;
  // Planning runs inside the game-thread tick: every millisecond here stalls the whole editor.
  const double PlanStartSeconds=FPlatformTime::Seconds();
+ bool HybridUsed=false;
  ON_SCOPE_EXIT
  {
+  // A failed trial plan leaves the flag alone: the fleet's detour attempts put the previous route back afterwards.
+  if (Found) bRouteFromHybrid=HybridUsed;
   const double PlanMs=(FPlatformTime::Seconds()-PlanStartSeconds)*1000.0;
   if (Found && Query.bInsertionRetryEscape) RecoveryStart=RouteStart;
   if (Found && PlanMs>200.0)
@@ -532,7 +535,7 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
    UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_BLOCKERS %s goal_pose=[%s] approach_lane=[%s]"),*VehicleName,*GoalBlockers,*LaneBlockers);
   }
  };
- PlannedRoute.Reset(); RouteIndex=0;bEndpointDriving=false;bEndpointOrienting=false;bRouteTurning=false;EndpointSegment=-1;bRouteFromHybrid=false;
+ PlannedRoute.Reset(); RouteIndex=0;bEndpointDriving=false;bEndpointOrienting=false;bRouteTurning=false;EndpointSegment=-1;
  // Precise docking and alignment stay on the short lane connections they were tuned with.
  const bool PreciseState=AIState==EWarehouseAIState::AlignVehicle || AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::ElevatorApproach ||
   AIState==EWarehouseAIState::DockCharge || AIState==EWarehouseAIState::NavigateCharge;
@@ -543,7 +546,7 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
   bHybridGoalBlocked=false;
   const bool HybridFound=PlanHybridRoute(StartPose,Goal,Query,!ActiveJob.JobId.IsEmpty(),PlannedRoute,&HybridReport);
   LastPlanReport=HybridReport;
-  if (HybridFound) { Found=true;bRouteFromHybrid=true;return true; }
+  if (HybridFound) { Found=true;HybridUsed=true;return true; }
   PlannedRoute.Reset();
   if (PlannerOverride>0 || bHybridGoalBlocked) return false;
   UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_FALLBACK %s goal=%s %s"),*VehicleName,*Goal.GetLocation().ToString(),*HybridReport);

@@ -260,6 +260,8 @@ private:
  float RouteTimeSeconds(const TArray<FWarehouseRoutePoint>& Route,const FTransform& Start,float* OutLength=nullptr,float* OutTurnDegrees=nullptr,int32* OutFlips=nullptr) const;
  int32 PlannerOverride=-1;
  bool bRouteFromHybrid=false;
+ int32 HybridRouteReplans=0;
+ FVector HybridReplanProgress=FVector::ZeroVector;
  mutable bool bHybridGoalBlocked=false;
  int32 AlignRechecks=0;
  FString LastPlanReport;
