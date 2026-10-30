@@ -27,8 +27,8 @@ namespace AgvHybrid
 	constexpr int32 MaxAnalyticTries = 15;
 	constexpr int32 MaxNearAnalyticTries = 60;
 	constexpr int32 ExtraExpansionsAfterFound = 5000;
-	constexpr double MaxSearchSeconds = 0.5;
-	constexpr double MaxImproveSeconds = 0.15;
+	constexpr int32 MaxSearchQueries = 220000; // about 0.5s
+	constexpr int32 MaxImproveQueries = 70000;
 	constexpr int32 MaxSearches = 3;
 	constexpr float Unreached = 1e9f;
 
@@ -566,12 +566,12 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 			if ((Local & 255) == 0)
 			{
 				// Planning stalls the game thread. With a route in hand, stop improving it soon; without one, give it a little longer.
-				const double Spent = FPlatformTime::Seconds() - StartedAt;
-				if (BestNode != INDEX_NONE && Spent > MaxImproveSeconds)
+				// Counted in queries, not clock time, so that a run does not depend on what else the computer is doing.
+				if (BestNode != INDEX_NONE && NativeQueries > MaxImproveQueries)
 				{
 					break;
 				}
-				if (Spent > MaxSearchSeconds)
+				if (NativeQueries > MaxSearchQueries)
 				{
 					bTimedOut = true;
 					break;

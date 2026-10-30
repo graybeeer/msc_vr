@@ -463,6 +463,14 @@ bool UAgvForkliftLocalizerComponent::EnsureMap()
 			Built->Width = Built->Height = 0;
 			return Built;
 		}
+		// A handful of parts, as in a small test scene, gives scan matching too little to lock on: the estimate could only
+		// drift until it counts as lost. Treat it as no map, so travel uses the exact pose. The warehouse has over 300 parts.
+		constexpr int32 MinMapParts = 20;
+		if (Parts.Num() < MinMapParts)
+		{
+			Built->Width = Built->Height = 0;
+			return Built;
+		}
 		// Occupancy: a cell is occupied when a cell-sized column over the band overlaps the part.
 		TArray<bool> Occupied;
 		Occupied.Init(false, Built->Width * Built->Height);

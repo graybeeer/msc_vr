@@ -152,6 +152,9 @@ bool AWarehouseFleetCoordinator::Permit(AWarehouseForklift* V,const FTransform* 
   if (!It.Key().IsValid() || !It.Key()->bPowered || It.Key()->IsRemoteControlled()) It.RemoveCurrent();
  for (const auto& Pair : Yields) if (Pair.Key.Get()!=V && Intersects(Request.Corridor,Pair.Value.Escape))
  {
+  // The vehicle this one gave way to may use the lane it backed along, once it stands clear of the leader's way.
+  if (Pair.Value.Arrived && Pair.Value.Leader.Get()==V && Pair.Key.IsValid() &&
+      !Intersects(Request.Corridor,{Footprint(Pair.Key.Get(),Pair.Key->GetActorTransform())})) continue;
   const double Now=GetWorld()->GetTimeSeconds();
   if (Pair.Value.Arrived && !PreciseGoal && Now-Request.LastDetour>5 && !V->PlannedRoute.IsEmpty())
   {

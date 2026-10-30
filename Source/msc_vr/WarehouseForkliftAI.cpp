@@ -427,6 +427,21 @@ bool AWarehouseForklift::ConnectLanePoses(const FTransform& Start,const FTransfo
  // A short fork alignment creeps at 15cm/s: a curve for a 30cm sideways shift backs 3m out of the aisle and took 80s (2026-10-30).
  // Turn, creep and turn back first; the curve remains for when that is blocked.
  const bool ShortAlignment=AIState==EWarehouseAIState::AlignVehicle && FVector::Dist2D(Start.GetLocation(),Goal.GetLocation())<150.f;
+ if (ShortAlignment)
+ {
+  // Sideways with almost nothing to go forward, the turn would have to be huge (it rocked up to 57 degrees, 2026-10-30).
+  // Back straight up far enough for a shallow angle, then drive in.
+  const FVector Offset=Goal.GetLocation()-Start.GetLocation();
+  const float Along=FVector::DotProduct(Offset,Goal.GetUnitAxis(EAxis::X)),Side=FMath::Abs(FVector::DotProduct(Offset,Goal.GetUnitAxis(EAxis::Y)));
+  if (Side>1.f && FMath::Abs(Along)<Side*4.7f)
+  {
+   const FTransform Lead(Goal.GetRotation(),Goal.GetLocation()-Goal.GetUnitAxis(EAxis::X)*FMath::Max(60.f,Side*6.f));
+   TArray<FWarehouseRoutePoint> Back,In;float A,B;
+   if (ConnectLanePoses(Start,Lead,Back,A,Query) && ConnectPoses(Lead,Goal,In,B,Query))
+   { Route=MoveTemp(Back);Route.Append(In);Cost=A+B;return true; }
+   Route.Reset();Cost=FLT_MAX;
+  }
+ }
  if (!ShortAlignment && ConnectPoses(Start,Goal,Route,Cost,Query)) return true;
  Route.Reset();Cost=FLT_MAX;
  // Every lane junction can use the same physically swept pivot/straight/pivot
@@ -539,12 +554,13 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  // Precise docking and alignment stay on the short lane connections they were tuned with.
  const bool PreciseState=AIState==EWarehouseAIState::AlignVehicle || AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::ElevatorApproach ||
   AIState==EWarehouseAIState::DockCharge || AIState==EWarehouseAIState::NavigateCharge;
- const bool UseHybrid=SensorMode==EWarehouseSensorMode::Autonomous && !PreciseState && (PlannerOverride>=0 ? PlannerOverride>0 : CVarHybridPlanner.GetValueOnGameThread()!=0);
+ // A traffic yield asks for this short move and no other way around: its corridor must stay as small as the fleet expects.
+ const bool UseHybrid=SensorMode==EWarehouseSensorMode::Autonomous && !PreciseState && !bTrafficEscape && (PlannerOverride>=0 ? PlannerOverride>0 : CVarHybridPlanner.GetValueOnGameThread()!=0);
  if (UseHybrid)
  {
   FString HybridReport;
   bHybridGoalBlocked=false;
-  const bool HybridFound=PlanHybridRoute(StartPose,Goal,Query,!ActiveJob.JobId.IsEmpty(),PlannedRoute,&HybridReport);
+  const bool HybridFound=PlanHybridRoute(StartPose,Goal,Query,true,PlannedRoute,&HybridReport);
   LastPlanReport=HybridReport;
   if (HybridFound)
   {
@@ -733,7 +749,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  // heading window as well made the second inbound job end in RECOVERY WITHDRAW BLOCKED; the heading stays at 1.5.
  // Lane corners likewise: arriving from the estimate 8-12cm off the line, a 12cm hand-over left the pivot beside a rack
  // (OBSTACLE / TURN CLEARANCE x3), so the corner is finished within 6cm on the exact pose.
- const float PositionTolerance=ChargingAlignment && SegmentEnd==PlannedRoute.Num()-1 ? .5f : AIState==EWarehouseAIState::AlignUnload ? 1.5f : RelaxedAlign ? (AgvEstimateInUse() ? 4.f : 7.f) : IntermediatePivot ? (AgvEstimateInUse() ? 6.f : 12.f) : (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery) ? FMath::Max(5.f,CVarOptArrivalTol.GetValueOnGameThread()) : 5.f;
+ const float PositionTolerance=ChargingAlignment && SegmentEnd==PlannedRoute.Num()-1 ? .5f : AIState==EWarehouseAIState::AlignUnload ? 1.5f : RelaxedAlign ? (AgvEstimateInUse() ? 4.f : 7.f) : IntermediatePivot ? (AgvEstimateInUse() ? 6.f : 12.f) : (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery || AIState==EWarehouseAIState::NavigateParking) ? FMath::Max(5.f,CVarOptArrivalTol.GetValueOnGameThread()) : 5.f;
  // Inside the charging capture region align to its fixed line heading before
  // handing off. Chasing a sub-centimetre point bearing repeatedly slews the
  // real steering spindle and can drift out of the docking lateral envelope.
@@ -1393,9 +1409,9 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   const bool OptAlign=CVarOptAlign.GetValueOnGameThread()!=0;
   const float AlignSide=FMath::Abs(FVector::DotProduct(AlignmentOffset,GetActorRightVector()));
   const float AlignAlong=FVector::DotProduct(AlignmentOffset,GetActorForwardVector());
-  // The insertion line stops at 5cm sideways. What counts is the offset where the forks end up, which a small heading error adds to.
-  const float InsertSide=FMath::Abs(FVector::DotProduct(PalletApproach(ObservedPallet,65).GetLocation()-GetActorLocation(),GetActorRightVector()));
-  if (OptAlign ? (AlignSide<=7.f && InsertSide<=4.5f && AlignmentYaw<1.8f) : (AlignSide<=5.f && AlignmentYaw<1.5f))
+  // Sideways in the pallet's frame: the insertion line holds this offset and keeps the tines parallel (see MoveToLine).
+  const float PalletSide=FMath::Abs(FVector::DotProduct(AlignmentOffset,AlignmentPose.GetUnitAxis(EAxis::Y)));
+  if (OptAlign ? (PalletSide<=6.f && AlignmentYaw<1.8f) : (AlignSide<=5.f && AlignmentYaw<1.5f))
   {
    if (OptAlign && FMath::Abs(AlignAlong)<=3.f)
    {

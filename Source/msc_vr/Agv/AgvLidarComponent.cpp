@@ -5,6 +5,7 @@
 #include "GameFramework/Actor.h"
 #include "HAL/PlatformTime.h"
 #include "Async/ParallelFor.h"
+#include "Misc/ScopeLock.h"
 #include "WarehousePhysics.h"
 
 namespace
@@ -111,6 +112,21 @@ void UAgvLidarComponent::Step(float Dt)
 	const FTransform Sensor = GetComponentTransform();
 	const FVector Origin = Sensor.GetLocation();
 	const AActor* Owner = GetOwner();
+	// The solid test reads a component's body setup, which a shape component may build on first use: not safe from two
+	// workers at once (engine assertion, whole editor down; 2026-10-30). One answer per component, asked under a lock.
+	TMap<const UPrimitiveComponent*, bool> SolidCache;
+	FCriticalSection SolidLock;
+	const auto SolidOnce = [&](const UPrimitiveComponent* Component)
+	{
+		FScopeLock Lock(&SolidLock);
+		if (const bool* Known = SolidCache.Find(Component))
+		{
+			return *Known;
+		}
+		const bool bSolid = IsSolid(Component);
+		SolidCache.Add(Component, bSolid);
+		return bSolid;
+	};
 	ParallelFor(Beams.Num(), [&](int32 Index)
 	{
 		FBeam& Beam = Beams[Index];
@@ -121,7 +137,7 @@ void UAgvLidarComponent::Step(float Dt)
 		double Skip = 0.0;
 		bool bHit = World->LineTraceSingleByObjectType(Hit, Origin, End, Objects, Query);
 		UPrimitiveComponent* HitComponent = bHit ? Hit.GetComponent() : nullptr;
-		bool bSolid = HitComponent && IsSolid(HitComponent);
+		bool bSolid = HitComponent && SolidOnce(HitComponent);
 		AActor* HitActor = bSolid ? Hit.GetActor() : nullptr;
 		for (int32 Retry = 0; bHit && HitComponent && Retry < 4; ++Retry)
 		{
@@ -139,7 +155,7 @@ void UAgvLidarComponent::Step(float Dt)
 			}
 			bHit = World->LineTraceSingleByObjectType(Hit, Origin + Direction * Skip, End, Objects, Query);
 			HitComponent = bHit ? Hit.GetComponent() : nullptr;
-			bSolid = HitComponent && IsSolid(HitComponent);
+			bSolid = HitComponent && SolidOnce(HitComponent);
 			HitActor = bSolid ? Hit.GetActor() : nullptr;
 		}
 		if (bHit && bSolid)

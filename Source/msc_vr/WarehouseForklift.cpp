@@ -498,10 +498,13 @@ bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt,flo
 {
  const FVector Offset=Destination-GetActorLocation();
  const bool ElevatorLine=IsValid(Elevator) && (AIState==EWarehouseAIState::ElevatorCall || AIState==EWarehouseAIState::ElevatorBoard || AIState==EWarehouseAIState::ElevatorExit);
- const float LateralLimit=AIState==EWarehouseAIState::DockCharge ? ChargingDockLateralLimitCm : AIState==EWarehouseAIState::AlignUnload ? 15.f : 5.f;
+ // The tines enter parallel to the pallet with 8.75cm to spare either side, so what matters is the sideways offset in the pallet's frame.
+ // Measured across the vehicle, 1.8 degrees of heading over the 120cm line alone used up the 5cm and aborted good insertions.
+ const bool PalletLine=AIState==EWarehouseAIState::AlignVehicle || AIState==EWarehouseAIState::InsertFork;
+ const float LateralLimit=AIState==EWarehouseAIState::DockCharge ? ChargingDockLateralLimitCm : AIState==EWarehouseAIState::AlignUnload ? 15.f : PalletLine ? 7.f : 5.f;
  // A long straight boarding line magnifies a small heading error. Measure
  // corridor departure against the shaft, then steer onto that same line.
- const FVector LateralAxis=ElevatorLine ? Elevator->GetActorRightVector() : GetActorRightVector();
+ const FVector LateralAxis=ElevatorLine ? Elevator->GetActorRightVector() : PalletLine ? ObservedPallet.GetUnitAxis(EAxis::Y) : GetActorRightVector();
  if (FMath::Abs(FVector::DotProduct(Offset,LateralAxis))>LateralLimit || FMath::Abs(Offset.Z)>3)
  { StopFor(TEXT("ROUTE MISALIGNED")); return false; }
  const float Distance=FVector::DotProduct(Offset,GetActorForwardVector());
