@@ -24,7 +24,8 @@ namespace AgvHybrid
 	constexpr double SearchWeight = 1.5;
 	constexpr double AnalyticRangeCm = 1200.0;
 	constexpr int32 MaxExpansions = 30000;
-	constexpr int32 MaxAnalyticTries = 40;
+	constexpr int32 MaxAnalyticTries = 15;
+	constexpr int32 MaxNearAnalyticTries = 60;
 	constexpr int32 ExtraExpansionsAfterFound = 1500;
 	constexpr double MaxSearchSeconds = 0.5;
 	constexpr int32 MaxSearches = 3;
@@ -281,13 +282,53 @@ float AWarehouseForklift::RouteTimeSeconds(const TArray<FWarehouseRoutePoint>& R
 	return (float)Time;
 }
 
-bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransform& Goal, const FWarehouseNavigationQuery& Query, TArray<FWarehouseRoutePoint>& OutRoute, FString* OutReport) const
+bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransform& FinalGoal, const FWarehouseNavigationQuery& InQuery, bool bStraightIn, TArray<FWarehouseRoutePoint>& OutRoute, FString* OutReport) const
 {
 	using namespace AgvHybrid;
 	OutRoute.Reset();
-	if (!SensorKit || !Query.bHasPivot || FMath::Abs(Start.GetLocation().Z - Goal.GetLocation().Z) > 1.0)
+	if (!SensorKit || !InQuery.bHasPivot || FMath::Abs(Start.GetLocation().Z - FinalGoal.GetLocation().Z) > 1.0)
 	{
 		return false;
+	}
+	FWarehouseNavigationQuery Query = InQuery;
+	// The approach pose stands just clear of the pallet, closer than the travel margin allows, so the margin would call the goal
+	// itself blocked. Near its own target the vehicle uses the catalog box of the pallet below instead of the scan of it.
+	const bool bGuardTarget = !bSupportingPallet && IsValid(TargetPallet) && !Query.PerceptionIgnored.Contains(TargetPallet);
+	const FTransform TargetPose = bGuardTarget ? TaskSourcePose() : FTransform::Identity;
+	if (bGuardTarget && FVector::Dist2D(FinalGoal.GetLocation(), TargetPose.GetLocation()) < 350.0)
+	{
+		for (const FAgvObservedObstacle& Entry : SensorKit->GetObservedObstacles())
+		{
+			if (!Entry.bPerson && Entry.Actor.IsValid() && FVector::Dist2D(Entry.WorldBounds.GetCenter(), TargetPose.GetLocation()) < 130.0)
+			{
+				Query.PerceptionIgnored.AddUnique(Entry.Actor.Get());
+			}
+		}
+	}
+	// Arrive straight along the goal's heading: a final turn on the spot would shift the vehicle sideways just before fork alignment.
+	FTransform Goal = FinalGoal;
+	TArray<FWarehouseRoutePoint> Tail;
+	if (bStraightIn)
+	{
+		constexpr double TailCm = 120.0;
+		const FVector Back = FinalGoal.GetUnitAxis(EAxis::X);
+		bool bTailClear = true;
+		for (double D = TailCm; D > 0.0; D -= 5.0)
+		{
+			FWarehouseRoutePoint Step;
+			Step.Pose = FTransform(FinalGoal.GetRotation(), FinalGoal.GetLocation() - Back * (D - 5.0));
+			bTailClear = bTailClear && NavigationClear(Step.Pose, &Query);
+			Tail.Add(Step);
+		}
+		const FTransform PreGoal(FinalGoal.GetRotation(), FinalGoal.GetLocation() - Back * TailCm);
+		if (bTailClear && NavigationClear(PreGoal, &Query))
+		{
+			Goal = PreGoal;
+		}
+		else
+		{
+			Tail.Reset();
+		}
 	}
 	const double StartedAt = FPlatformTime::Seconds();
 	const double BaseZ = Start.GetLocation().Z;
@@ -355,18 +396,17 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 	const double BuildMs = (FPlatformTime::Seconds() - StartedAt) * 1000.0;
 
 	// A pallet about to be picked up may be out of the sensors' view. The job says where it stands: do not drive through it.
-	const bool bGuardTarget = !bSupportingPallet && IsValid(TargetPallet) && !Query.PerceptionIgnored.Contains(TargetPallet);
-	const FTransform TargetPose = bGuardTarget ? TaskSourcePose() : FTransform::Identity;
+	const FBox TargetEnvelope = Query.Envelope.ExpandBy(FVector(-17.0, -17.0, 0.0)); // the body and 8cm, not the 25cm travel margin
 	const auto HitsTarget = [&](const FTransform& Pose)
 	{
 		if (!bGuardTarget)
 		{
 			return false;
 		}
-		const FBox2D Local(FVector2D(Query.Envelope.Min), FVector2D(Query.Envelope.Max));
-		for (const double CX : { -65.0, 65.0 })
+		const FBox2D Local(FVector2D(TargetEnvelope.Min), FVector2D(TargetEnvelope.Max));
+		for (const double CX : { -85.0, 0.0, 85.0 })
 		{
-			for (const double CY : { -65.0, 65.0 })
+			for (const double CY : { -85.0, 0.0, 85.0 })
 			{
 				const FVector P = Pose.InverseTransformPosition(TargetPose.TransformPosition(FVector(CX, CY, 0.0)));
 				if (P.X >= Local.Min.X && P.X <= Local.Max.X && P.Y >= Local.Min.Y && P.Y <= Local.Max.Y)
@@ -375,7 +415,17 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 				}
 			}
 		}
-		return FVector2D::DistSquared(FVector2D(Pose.GetLocation()), FVector2D(TargetPose.GetLocation())) < 65.0 * 65.0;
+		return false;
+	};
+	// A vehicle stopped close to something, as after a withdrawal, has to leave it: the first stretch only needs the real body clear.
+	FWarehouseNavigationQuery EscapeQuery = Query;
+	EscapeQuery.Envelope = Query.Envelope.ExpandBy(FVector(-20.0, -20.0, 0.0));
+	const bool bStartBlocked = !NavigationClear(Start, &Query);
+	constexpr double EscapeCm = 90.0;
+	const auto FullyClear = [&](const FTransform& Pose)
+	{
+		const bool bEscape = bStartBlocked && FVector2D::DistSquared(FVector2D(Pose.GetLocation()), StartXY) < EscapeCm * EscapeCm;
+		return NavigationClear(Pose, bEscape ? &EscapeQuery : &Query);
 	};
 
 	// Collision: far from every obstacle only the floor and traffic need asking; otherwise the same query as the old planner.
@@ -408,7 +458,7 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 			return bFloor;
 		}
 		++NativeQueries;
-		return NavigationClear(Pose, &Query);
+		return FullyClear(Pose);
 	};
 	const auto SweepClear = [&](double X, double Y, double Yaw, double Curvature, double Signed)
 	{
@@ -430,7 +480,7 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 		return FVector2D(X, Y) + FVector2D(FRotator(0.0, Yaw, 0.0).RotateVector(Query.Pivot));
 	};
 
-	int32 Expansions = 0, AnalyticTries = 0, Searches = 0;
+	int32 Expansions = 0, AnalyticTries = 0, NearAnalyticTries = 0, Searches = 0;
 	TArray<FNode> Nodes;
 	TArray<FWarehouseRoutePoint> BestRoute;
 	bool bValid = false;
@@ -480,14 +530,17 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 				break;
 			}
 			// Try to finish with a curve or turn-drive-turn onto the exact goal pose.
-			if (FVector2D::Distance(FVector2D(Node.X, Node.Y), GoalXY) < AnalyticRangeCm && AnalyticTries < MaxAnalyticTries)
+			const double ToGoal = FVector2D::Distance(FVector2D(Node.X, Node.Y), GoalXY);
+			const bool bNearGoal = ToGoal < 400.0;
+			if (ToGoal < AnalyticRangeCm && (bNearGoal ? NearAnalyticTries < MaxNearAnalyticTries : AnalyticTries < MaxAnalyticTries))
 			{
-				const uint64 Coarse = (uint64(FMath::FloorToInt32(Node.X / 100.0) + 100000) << 32) | (uint64(FMath::FloorToInt32(Node.Y / 100.0) + 100000) << 8) |
-					(uint64(FMath::RoundToInt32(FRotator::ClampAxis(Node.Yaw) / 45.0)) & 15);
+				const double CoarseCell = bNearGoal ? 50.0 : 100.0, CoarseYaw = bNearGoal ? 15.0 : 45.0;
+				const uint64 Coarse = (uint64(FMath::FloorToInt32(Node.X / CoarseCell) + 100000) << 32) | (uint64(FMath::FloorToInt32(Node.Y / CoarseCell) + 100000) << 8) |
+					(uint64(FMath::RoundToInt32(FRotator::ClampAxis(Node.Yaw) / CoarseYaw)) & 31);
 				if (!Tried.Contains(Coarse))
 				{
 					Tried.Add(Coarse);
-					++AnalyticTries;
+					++(bNearGoal ? NearAnalyticTries : AnalyticTries);
 					TArray<FWarehouseRoutePoint> Edge;
 					float Unused;
 					if (ConnectLanePoses(PoseOf(Node), Goal, Edge, Unused, &Query))
@@ -675,6 +728,7 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 			++At;
 		}
 		Route.Append(BestEdge);
+		Route.Append(Tail);
 
 		// Every point meets the full query, whatever the cheap check assumed. A blocked point goes into the grid for the next search.
 		bValid = true;
@@ -688,7 +742,7 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 					Checked[I] = true;
 					const FTransform& Pose = Route[I].Pose;
 					const bool bNearStart = FVector2D::DistSquared(FVector2D(Pose.GetLocation()), StartXY) < 60.0 * 60.0;
-					if (!NavigationClear(Pose, &Query) || (!bNearStart && HitsTarget(Pose)))
+					if (!FullyClear(Pose) || (!bNearStart && HitsTarget(Pose)))
 					{
 						bValid = false;
 						int32 CX, CY;
@@ -708,8 +762,8 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 	const double TotalMs = (FPlatformTime::Seconds() - StartedAt) * 1000.0;
 	if (OutReport)
 	{
-		*OutReport = FString::Printf(TEXT("hybrid_ms=%.0f grid_ms=%.0f expansions=%d native=%d analytic=%d searches=%d timeout=%d reachable=%d"),
-			TotalMs, BuildMs, Expansions, NativeQueries, AnalyticTries, Searches, bTimedOut, Field.bGoalTimeUsable);
+		*OutReport = FString::Printf(TEXT("hybrid_ms=%.0f grid_ms=%.0f expansions=%d native=%d analytic=%d/%d searches=%d timeout=%d reachable=%d start_blocked=%d straight=%d"),
+			TotalMs, BuildMs, Expansions, NativeQueries, AnalyticTries, NearAnalyticTries, Searches, bTimedOut, Field.bGoalTimeUsable, bStartBlocked, Tail.Num() > 0);
 	}
 	if (!bValid)
 	{

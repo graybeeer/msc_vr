@@ -256,7 +256,7 @@ private:
  bool NavigationClear(const FTransform& Pose,const FWarehouseNavigationQuery* Query=nullptr) const;
  bool ConnectPoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost,const FWarehouseNavigationQuery* Query=nullptr) const;
  bool ConnectLanePoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost,const FWarehouseNavigationQuery* Query=nullptr) const;
- bool PlanHybridRoute(const FTransform& Start,const FTransform& Goal,const FWarehouseNavigationQuery& Query,TArray<FWarehouseRoutePoint>& OutRoute,FString* OutReport=nullptr) const;
+ bool PlanHybridRoute(const FTransform& Start,const FTransform& FinalGoal,const FWarehouseNavigationQuery& InQuery,bool bStraightIn,TArray<FWarehouseRoutePoint>& OutRoute,FString* OutReport=nullptr) const;
  float RouteTimeSeconds(const TArray<FWarehouseRoutePoint>& Route,const FTransform& Start,float* OutLength=nullptr,float* OutTurnDegrees=nullptr,int32* OutFlips=nullptr) const;
  int32 PlannerOverride=-1;
  FString LastPlanReport;

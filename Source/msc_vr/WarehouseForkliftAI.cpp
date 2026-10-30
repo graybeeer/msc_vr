@@ -424,7 +424,10 @@ bool AWarehouseForklift::ConnectLanePoses(const FTransform& Start,const FTransfo
   const auto Local=BuildNavigationQuery();
   return ConnectLanePoses(Start,Goal,Route,Cost,&Local);
  }
- if (ConnectPoses(Start,Goal,Route,Cost,Query)) return true;
+ // A short fork alignment creeps at 15cm/s: a curve for a 30cm sideways shift backs 3m out of the aisle and took 80s (2026-10-30).
+ // Turn, creep and turn back first; the curve remains for when that is blocked.
+ const bool ShortAlignment=AIState==EWarehouseAIState::AlignVehicle && FVector::Dist2D(Start.GetLocation(),Goal.GetLocation())<150.f;
+ if (!ShortAlignment && ConnectPoses(Start,Goal,Route,Cost,Query)) return true;
  Route.Reset();Cost=FLT_MAX;
  // Every lane junction can use the same physically swept pivot/straight/pivot
  // connection. Curved-only graph edges could not turn into the west staging aisle.
@@ -443,6 +446,7 @@ bool AWarehouseForklift::ConnectLanePoses(const FTransform& Start,const FTransfo
    { Route=MoveTemp(First);Route.Append(Travel);Route.Append(Last);Cost=A+B+C; }
   }
  }
+ if (ShortAlignment && Cost==FLT_MAX) return ConnectPoses(Start,Goal,Route,Cost,Query);
  return Cost<FLT_MAX;
 }
 FString AWarehouseForklift::BenchRoutePlan(const FTransform& Goal,bool bHybrid)
@@ -499,9 +503,9 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
     WarehouseNavigationQueryCount-QueryStart,*Goal.GetLocation().ToString());
   if (!Found)
   {
-   UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_NO_ROUTE %s from=%s goal=%s candidates=%d start_edges=%d goal_edges=%d start_clear=%d goal_clear=%d ms=%.0f queries=%u"),
+   UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_NO_ROUTE %s from=%s goal=%s candidates=%d start_edges=%d goal_edges=%d start_clear=%d goal_clear=%d ms=%.0f queries=%u %s"),
     *VehicleName,*GetActorLocation().ToString(),*Goal.GetLocation().ToString(),CandidateCount,StartConnections,GoalConnections,
-    NavigationClear(GetActorTransform(),&Query),NavigationClear(Goal,&Query),PlanMs,WarehouseNavigationQueryCount-QueryStart);
+    NavigationClear(GetActorTransform(),&Query),NavigationClear(Goal,&Query),PlanMs,WarehouseNavigationQueryCount-QueryStart,*LastPlanReport);
    // Name what stands in the way so the log says why, not only that: the goal pose itself and, when it is free, the
    // straight approach lane behind it (the stretch every route into this goal has to use last).
    auto Blockers=[&](const FTransform& Pose)
@@ -536,7 +540,7 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  if (UseHybrid)
  {
   FString HybridReport;
-  const bool HybridFound=PlanHybridRoute(StartPose,Goal,Query,PlannedRoute,&HybridReport);
+  const bool HybridFound=PlanHybridRoute(StartPose,Goal,Query,!ActiveJob.JobId.IsEmpty(),PlannedRoute,&HybridReport);
   LastPlanReport=HybridReport;
   if (HybridFound) { Found=true;return true; }
   PlannedRoute.Reset();
