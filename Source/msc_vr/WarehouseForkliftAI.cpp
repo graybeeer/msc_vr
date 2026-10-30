@@ -555,7 +555,7 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  const bool PreciseState=AIState==EWarehouseAIState::AlignVehicle || AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::ElevatorApproach ||
   AIState==EWarehouseAIState::DockCharge || AIState==EWarehouseAIState::NavigateCharge || AIState==EWarehouseAIState::PlanCharge || bChargePending;
  // A traffic yield asks for this short move and no other way around: its corridor must stay as small as the fleet expects.
- const bool UseHybrid=SensorMode==EWarehouseSensorMode::Autonomous && !PreciseState && !bTrafficEscape && (PlannerOverride>=0 ? PlannerOverride>0 : CVarHybridPlanner.GetValueOnGameThread()!=0);
+ const bool UseHybrid=SensorMode==EWarehouseSensorMode::Autonomous && !PreciseState && (!bTrafficEscape || bHybridRetreat) && (PlannerOverride>=0 ? PlannerOverride>0 : CVarHybridPlanner.GetValueOnGameThread()!=0);
  if (UseHybrid)
  {
   FString HybridReport;
@@ -762,7 +762,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  if (HybridTravel && SegmentEnd<PlannedRoute.Num()-1)
  {
   const float Along=FVector::DotProduct(GoalPose.GetLocation()-Pose.GetLocation(),GoalPose.GetUnitAxis(EAxis::X))*(Goal.bReverse ? -1.f : 1.f);
-  if (Remaining<12.f || (Remaining<30.f && Along<0.f))
+  if (Remaining<12.f || (Remaining<150.f && Along<0.f))
   {
    BrakeDrive();
    if (FMath::Abs(CurrentSpeedCm)<2.f) { RouteIndex=SegmentEnd+1;bRouteTurning=false; }
@@ -1850,6 +1850,8 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   if (WaitSeconds>=30.f) { ResumeAI=WaitResumeAI; FaultAI(TEXT("OBSTACLE TIMEOUT - CLEAR ROUTE")); ResumeAI=WaitResumeAI; }
   else if (AIElapsed>=1.f)
   {
+   // A hybrid route can go around someone who stays put. The planner keeps the same clearance from them, and the follower still stops for people.
+   if (WaitObstacleReason.Contains(TEXT("PERSON")) && WaitSeconds>=3.f && !bFloorTransfer && TryHybridReplanHere(WaitResumeAI)) break;
    if (WaitObstacleReason.Contains(TEXT("PERSON")) || bFloorTransfer)
     Next(WaitResumeAI,TEXT("RECHECK PATH / SAFETY ZONE"));
    else BeginRecovery(WaitResumeAI,WaitObstacleReason);

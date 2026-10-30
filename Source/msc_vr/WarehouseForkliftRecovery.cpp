@@ -18,6 +18,23 @@ void AWarehouseForklift::RecoveryFault(const TCHAR* Reason,const TCHAR* PlayerMe
  FaultAI(Reason);
 }
 
+bool AWarehouseForklift::TryHybridReplanHere(EWarehouseAIState From)
+{
+ if (!bRouteFromHybrid || (From!=EWarehouseAIState::NavigatePickup && From!=EWarehouseAIState::NavigateDelivery && From!=EWarehouseAIState::NavigateParking)) return false;
+ if (HybridRouteReplans==0 || FVector::Dist2D(GetActorLocation(),HybridReplanProgress)>=100.f)
+ { HybridRouteReplans=0;HybridReplanProgress=GetActorLocation(); }
+ if (HybridRouteReplans>=3 || (From==EWarehouseAIState::NavigatePickup && !IsValid(TargetPallet))) return false;
+ const FTransform Goal=From==EWarehouseAIState::NavigatePickup ? PalletApproach(TaskSourcePose(),220) :
+  From==EWarehouseAIState::NavigateDelivery ? PalletApproach(ActiveJob.Destination,220) : IdlePose;
+ if (!PlanAutonomousRoute(Goal)) return false;
+ ++HybridRouteReplans;++DetourCount;
+ ReportJob(TEXT("REPLANNED"),TEXT("SENSED OBSTACLE - NEW ROUTE FROM HERE"));
+ ProgressLocation=GetActorLocation();StalledSeconds=0;WaitSeconds=0;
+ TransitionAI(From,TEXT("SENSED OBSTACLE - NEW ROUTE FROM HERE"));
+ bRouteStarted=true;
+ return true;
+}
+
 bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Reason)
 {
  BrakeDrive();
@@ -27,26 +44,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  { RecoveryFault(TEXT("RECOVERY REQUIRES SAFE FLOOR / LOW LOAD - OPERATOR REQUIRED"),TEXT("승강기 또는 높은 적재 상태에서 자동 탈출할 수 없습니다.")); return false; }
  // A hybrid route is not tied to the lanes and can meet something the sensors could not see when it was planned.
  // Route around it from where the vehicle stands: backing away blindly once ended up against a pallet behind it (2026-10-30).
- if (bRouteFromHybrid && (Reason==TEXT("OBSTACLE ON ROUTE") || Reason==TEXT("OBSTACLE / TURN CLEARANCE")) &&
-     (From==EWarehouseAIState::NavigatePickup || From==EWarehouseAIState::NavigateDelivery || From==EWarehouseAIState::NavigateParking))
- {
-  if (HybridRouteReplans==0 || FVector::Dist2D(GetActorLocation(),HybridReplanProgress)>=100.f)
-  { HybridRouteReplans=0;HybridReplanProgress=GetActorLocation(); }
-  if (HybridRouteReplans<3 && (From!=EWarehouseAIState::NavigatePickup || IsValid(TargetPallet)))
-  {
-   const FTransform Goal=From==EWarehouseAIState::NavigatePickup ? PalletApproach(TaskSourcePose(),220) :
-    From==EWarehouseAIState::NavigateDelivery ? PalletApproach(ActiveJob.Destination,220) : IdlePose;
-   if (PlanAutonomousRoute(Goal))
-   {
-    ++HybridRouteReplans;++DetourCount;
-    ReportJob(TEXT("REPLANNED"),TEXT("SENSED OBSTACLE - NEW ROUTE FROM HERE"));
-    ProgressLocation=GetActorLocation();StalledSeconds=0;WaitSeconds=0;
-    TransitionAI(From,TEXT("SENSED OBSTACLE - NEW ROUTE FROM HERE"));
-    bRouteStarted=true;
-    return true;
-   }
-  }
- }
+ if ((Reason==TEXT("OBSTACLE ON ROUTE") || Reason==TEXT("OBSTACLE / TURN CLEARANCE")) && TryHybridReplanHere(From)) return true;
  bool AlignmentRetry=false;
  if (From==EWarehouseAIState::AlignVehicle && IsValid(TargetPallet))
  {

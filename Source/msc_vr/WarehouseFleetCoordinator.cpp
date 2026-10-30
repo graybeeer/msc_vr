@@ -105,8 +105,10 @@ bool AWarehouseFleetCoordinator::Retreat(AWarehouseForklift* V,AWarehouseForklif
  const auto Saved=V->PlannedRoute;const int32 SavedIndex=V->RouteIndex;
  const auto Start=V->GetActorTransform();
  TGuardValue<bool> Escape(V->bTrafficEscape,true);
- for (float Side : {0.f,-220.f,220.f}) for (float Back : {180.f,280.f,420.f,-180.f,-280.f,-420.f})
+ // Short lane moves first. Only with all of them blocked may the free-space planner find a way there, which takes a wider corridor.
+ for (bool Hybrid : {false,true}) for (float Side : {0.f,-220.f,220.f}) for (float Back : {180.f,280.f,420.f,-180.f,-280.f,-420.f})
  {
+  TGuardValue<bool> Free(V->bHybridRetreat,Hybrid);
   FVector P=Start.TransformPosition(FVector(-Back,Side,0));P.Z=V->FloorBase(Start.GetLocation().Z);
   const FTransform Goal(FRotator(0,Start.Rotator().Yaw,0),P);
   if (Intersects({Footprint(V,Goal).ExpandBy(FVector(20,20,0))},Passage) || !V->PlanAutonomousRoute(Goal)) continue;
