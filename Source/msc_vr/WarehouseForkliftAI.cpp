@@ -633,7 +633,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
   if (PlannedRoute[I].bPivot || PlannedRoute[I].bReverse!=PlannedRoute[RouteIndex].bReverse)
   { SegmentEnd=I-1;break; }
  const auto& Goal=PlannedRoute[SegmentEnd];
- if (EndpointSegment!=SegmentEnd) { EndpointSegment=SegmentEnd;bEndpointDriving=false;bEndpointOrienting=false;bRouteTurning=false; }
+ if (EndpointSegment!=SegmentEnd) { EndpointSegment=SegmentEnd;EndpointCorrections=0;bEndpointDriving=false;bEndpointOrienting=false;bRouteTurning=false; }
  const FTransform GoalPose=Goal.Pose;
  const FTransform Pose=FVector::Dist2D(GetActorLocation(),Goal.Pose.GetLocation())<80.f ? GetActorTransform() : TravelPose;
  const float Remaining=FVector::Dist2D(Pose.GetLocation(),Goal.Pose.GetLocation());
@@ -709,7 +709,11 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
   if (FMath::Abs(CurrentSpeedCm)>=1.f) return false;
   if (ChassisBody && FMath::Abs(ChassisBody->GetPhysicsAngularVelocityInDegrees().Z)>=.5f) return false;
   bRouteTurning=false;
-  if (Remaining>=PositionTolerance) { bEndpointOrienting=false;return false; }
+  // A mid-route corner only hands over to the next stretch. The final pivot itself moves the origin a few cm, so chasing the
+  // point again turned the vehicle back and forth for 30s (hunting, 2026-10-30). One correction, then accept twice the tolerance.
+  const bool MidRouteTravel=SegmentEnd<PlannedRoute.Num()-1 && (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery || AIState==EWarehouseAIState::NavigateParking);
+  if (Remaining>=PositionTolerance && !(MidRouteTravel && EndpointCorrections>=1 && Remaining<PositionTolerance*2.f))
+  { ++EndpointCorrections;bEndpointOrienting=false;return false; }
   if (SegmentEnd==PlannedRoute.Num()-1) return true;
   RouteIndex=SegmentEnd+1;return false;
  }

@@ -188,7 +188,7 @@ private:
  bool bPlanningRoute=false,bAvoidTrafficReservations=false,bTrafficEscape=false;
  bool bObservedPickupEscape=false;
  bool bEndpointDriving=false,bEndpointOrienting=false,bRouteTurning=false;
- int32 EndpointSegment=-1;
+ int32 EndpointSegment=-1; int32 EndpointCorrections=0;
  FBox NavigationEnvelope() const;
  // Commands are actuator targets. Telemetry and fork pose always come from Chaos.
  UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> ChassisBody;
