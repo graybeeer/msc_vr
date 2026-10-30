@@ -28,10 +28,10 @@ namespace AgvHybrid
 	constexpr double ReversePenalty = 1.05;
 	constexpr double SearchWeight = 1.2;
 	constexpr double AnalyticRangeCm = 1200.0;
-	constexpr int32 MaxExpansions = 30000;
+	constexpr int32 MaxExpansions = 12000;
 	constexpr int32 MaxAnalyticTries = 15;
 	constexpr int32 MaxNearAnalyticTries = 60;
-	constexpr int32 ExtraExpansionsAfterFound = 5000;
+	constexpr int32 ExtraExpansionsAfterFound = 2500;
 	constexpr int32 MaxSearchQueries = 220000; // about 0.5s
 	constexpr int32 MaxImproveQueries = 70000;
 	constexpr int32 MaxSearches = 3;
