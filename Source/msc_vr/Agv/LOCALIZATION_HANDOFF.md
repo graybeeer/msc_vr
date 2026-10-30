@@ -226,13 +226,23 @@
 - **실측**(`scen_three`, 위치 추정 켬, 저장 맵, sim 초):
 | | 병합 전 기존 | 새 길찾기 |
 |---|---|---|
-| 전체 | 333 | 155 |
-| 입고 1 | 165 | 96 |
-| 콘솔 출고 | 169 | 100 |
-| 입고 2 | 170 | 114 |
+| 전체 | 333 | 161 |
+| 입고 1 | 165 | 88 |
+| 콘솔 출고 | 169 | 103 |
+| 입고 2 | 170 | 101 |
 | 제자리 헌팅 합계 | 118 | 0 |
-| 200ms 넘는 계획 | 11건 이상, 최대 5.5s | 6건, 최대 0.57s |
+| 200ms 넘는 계획 | 11건 이상, 최대 5.5s | 5건, 최대 약 0.4s |
 병합 전 수치는 다른 입고 순서여서 직접 비교에는 한계가 있다. 병합 후 기존 플래너는 첫 입고에서 고장 났다(`NO SAFE DETOUR`).
+- **최종 실측과 회귀(2026-10-31 기준, 저장 맵, 위치 추정 켬)**:
+  - `scen_three`: 작업 88/103/101s, 전체 161s, 복구 0, 고장 0. 화면 렌더링 실행도 수치가 같다. 위치 추정 끔은 83/92/100s, 전체 191s. 병합 후 기존 플래너는 첫 입고에서 고장(완료 0).
+  - 새 길찾기로 통과: `dual_outbound`, `scen_block`, `shared_charging`, `fleet_traffic`(`-fleetclosedsection` 구간 폐쇄 포함), `obstacle_interval`, `remote_drive_continuity`, `elevator_route_visuals`, `forklift_focus`, `forklift_work_control`, `work_control_dispatch`, `layout_editor`, `forklift_sensors`, `repeating_inbound`, `instant_rack_carry`, `shipping_workflow`.
+  - 시험 가정을 고친 복사본(`Saved/AgvHarness/fixed`, 원본 유지)으로 확인:
+    - `fleet_workflow`: 작업 4건 완료 후 플레이어 손 운반 단계에서 실패. 기존 플래너는 그 전에 지게차 고장.
+    - `fleet_layout_stress`: 3개 사례 통과 후 저장 맵 화물 물리 단계에서 실패. 기존 플래너와 같다.
+    - `forklift_recovery`: 복구 세부 항목 통과 후 같은 시간 초과. 기존 플래너와 같다.
+    - `dual_forklifts_remote`: 동시 주행, 원격 일시정지·재개, 운반 완료 통과 후 원격 차량 선택 단계에서 실패. 하역 오차 기준을 2cm에서 3cm로 임시 완화해 통과시킨 결과다.
+  - 기존 플래너에서도 같은 위치에서 실패: `native_forklift_motion`, `layout_inventory`. 길찾기와 무관한 실패: `warehouse_experiments`(저장 슬롯 6개 가득), `focus_ui`(전용 실행 옵션 필요).
+  - **남은 주의점**: 랙 하역 오차가 새 길찾기에서 1.6~2.6cm로, 병합 전 기존(0.4~2.0cm)보다 조금 크다. 층간 실제 운반, 배치 변경 뒤 주행, 사람이 직접 Play로 본 확인은 아직 없다.
 - **남은 한계**: 센서 관측은 매초 새로 만들어져 지나온 곳의 짐을 기억하지 않는다. 새 경로는 차선에 묶이지 않아 안 보이던 짐을 만날 수 있고, 그때는 6번으로 처리한다.
 - **도구**: `Saved/AgvHarness/plan_bench.py`(계획만 비교), `tools_20261030/report.sh`, `one.sh`.
 
