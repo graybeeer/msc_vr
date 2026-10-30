@@ -546,7 +546,14 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
   bHybridGoalBlocked=false;
   const bool HybridFound=PlanHybridRoute(StartPose,Goal,Query,!ActiveJob.JobId.IsEmpty(),PlannedRoute,&HybridReport);
   LastPlanReport=HybridReport;
-  if (HybridFound) { Found=true;HybridUsed=true;return true; }
+  if (HybridFound)
+  {
+   Found=true;HybridUsed=true;
+   float Length=0,Turned=0;int32 Flips=0;
+   const float Estimate=RouteTimeSeconds(PlannedRoute,StartPose,&Length,&Turned,&Flips);
+   UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_ROUTE %s goal=%s time=%.1f len=%.0f turn=%.0f flips=%d %s"),*VehicleName,*Goal.GetLocation().ToCompactString(),Estimate,Length,Turned,Flips,*HybridReport);
+   return true;
+  }
   PlannedRoute.Reset();
   if (PlannerOverride>0 || bHybridGoalBlocked) return false;
   UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_FALLBACK %s goal=%s %s"),*VehicleName,*Goal.GetLocation().ToString(),*HybridReport);

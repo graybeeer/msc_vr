@@ -21,12 +21,12 @@ namespace AgvHybrid
 	constexpr double HeuristicInflateCm = 55.0;
 	constexpr double HeuristicFreeNearCm = 250.0;
 	constexpr double ReversePenalty = 1.05;
-	constexpr double SearchWeight = 1.5;
+	constexpr double SearchWeight = 1.2;
 	constexpr double AnalyticRangeCm = 1200.0;
 	constexpr int32 MaxExpansions = 30000;
 	constexpr int32 MaxAnalyticTries = 15;
 	constexpr int32 MaxNearAnalyticTries = 60;
-	constexpr int32 ExtraExpansionsAfterFound = 1500;
+	constexpr int32 ExtraExpansionsAfterFound = 5000;
 	constexpr double MaxSearchSeconds = 0.5;
 	constexpr int32 MaxSearches = 3;
 	constexpr float Unreached = 1e9f;
@@ -243,7 +243,7 @@ namespace AgvHybrid
 float AWarehouseForklift::RouteTimeSeconds(const TArray<FWarehouseRoutePoint>& Route, const FTransform& Start, float* OutLength, float* OutTurnDegrees, int32* OutFlips) const
 {
 	using namespace AgvHybrid;
-	const FSpec Spec = bSupportingPallet ? FSpec{ FMath::Min(100.0, (double)LoadedTravelSpeedCm), 40.0, 0.3, 1.33, 2.33 } : FSpec{ FMath::Min(180.0, (double)EmptyTravelSpeedCm), 80.0, 0.4, 2.0, 3.0 };
+	const FSpec Spec = bSupportingPallet ? FSpec{ FMath::Min(100.0, (double)LoadedTravelSpeedCm), 40.0, 0.3, 2.0, 4.0 } : FSpec{ FMath::Min(180.0, (double)EmptyTravelSpeedCm), 80.0, 0.4, 2.5, 5.0 };
 	double Time = 0, Length = 0, Turned = 0;
 	int32 Flips = 0;
 	uint8 Mode = MoveRest;
@@ -351,7 +351,7 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 	}
 	const double StartedAt = FPlatformTime::Seconds();
 	const double BaseZ = Start.GetLocation().Z;
-	const FSpec Spec = bSupportingPallet ? FSpec{ FMath::Min(100.0, (double)LoadedTravelSpeedCm), 40.0, 0.3, 1.33, 2.33 } : FSpec{ FMath::Min(180.0, (double)EmptyTravelSpeedCm), 80.0, 0.4, 2.0, 3.0 };
+	const FSpec Spec = bSupportingPallet ? FSpec{ FMath::Min(100.0, (double)LoadedTravelSpeedCm), 40.0, 0.3, 2.0, 4.0 } : FSpec{ FMath::Min(180.0, (double)EmptyTravelSpeedCm), 80.0, 0.4, 2.5, 5.0 };
 	const FVector2D StartXY(Start.GetLocation()), GoalXY(Goal.GetLocation());
 	const auto Ignored = [&](const FAgvObservedObstacle& Entry)
 	{
@@ -667,7 +667,7 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 					}
 				}
 			}
-			for (const double Delta : { 15.0, -15.0, 45.0, -45.0 })
+			for (const double Delta : { 15.0, -15.0, 45.0, -45.0, 90.0, -90.0 })
 			{
 				const int8 TurnSign = Delta > 0 ? 1 : -1;
 				if (Node.Mode == MoveTurn && Node.TurnSign == -TurnSign)
@@ -786,6 +786,18 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 			if (Route[I].bPivot && Route[I - 1].bPivot)
 			{
 				Route.RemoveAt(I - 1);
+			}
+		}
+		// Stopping for a few degrees costs about 6s; path tracking takes up the same error while driving.
+		for (int32 I = Route.Num() - 2; I >= 0; --I)
+		{
+			if (Route[I].bPivot && !Route[I + 1].bPivot)
+			{
+				const FTransform& Before = I > 0 ? Route[I - 1].Pose : Start;
+				if (FMath::Abs(FMath::FindDeltaAngleDegrees(Before.Rotator().Yaw, Route[I].Pose.Rotator().Yaw)) < 12.0)
+				{
+					Route.RemoveAt(I);
+				}
 			}
 		}
 
