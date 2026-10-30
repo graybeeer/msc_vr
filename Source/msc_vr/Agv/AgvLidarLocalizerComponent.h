@@ -2,25 +2,11 @@
 
 #include "CoreMinimal.h"
 #include "AgvLocalizerComponent.h"
+#include "AgvScanMatching.h"
 #include "AgvLidarLocalizerComponent.generated.h"
 
 class UAgvLidarComponent;
 class UAgvTricycleDriveComponent;
-
-/** 2D map the vehicle localizes against: distance (cm) from each cell to the nearest obstacle, capped. */
-struct FAgvDistanceMap
-{
-	FVector2D Origin = FVector2D::ZeroVector; // world position of cell (0, 0)'s corner
-	double CellCm = 5.0;
-	int32 Width = 0;
-	int32 Height = 0;
-	double CapCm = 50.0;
-	int32 OccupiedCells = 0;
-	TArray<float> Distance;
-
-	/** Bilinear distance at a world point; CapCm outside the map. */
-	double Sample(const FVector2D& Point) const;
-};
 
 /**
  * Pose from what a real AGV has: wheel odometry (drive wheel encoder + steering encoder, with calibration errors and
@@ -35,6 +21,9 @@ class MSC_VR_API UAgvLidarLocalizerComponent : public UAgvLocalizerComponent
 
 public:
 	virtual bool GetPose(FVector2D& OutPosition, double& OutYaw) const override;
+
+	/** The dead-reckoned pose (encoder + gyro, odometry frame, no scan corrections): its change is the measured motion. */
+	void GetOdometryPose(FVector2D& OutPosition, double& OutYaw) const { OutPosition = OdomPosition; OutYaw = OdomYaw; }
 	virtual void Step(float Dt) override;
 	virtual void InitializePose() override;
 	virtual bool IsMappedStructure(const FVector2D& WorldPointCm, double ToleranceCm) const override;
@@ -71,6 +60,14 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Odometry")
 	bool bUseGyro = true;
+
+	/**
+	 * Standstill detection (zero-velocity update): while the drive wheel encoder counts no travel and the gyro reads
+	 * less than this (deg/s), the heading is held instead of integrating the gyro. Parked with its LiDARs asleep the
+	 * bias otherwise turned the estimate 0.01 deg every second (16 deg after half an hour). 0 turns it off.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Localization", meta=(ClampMin="0"))
+	float StandstillGyroDegS = 0.3f;
 
 	/** Constant rate error of the gyro (deg/s); an uncalibrated MEMS part drifts about this much. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Odometry")

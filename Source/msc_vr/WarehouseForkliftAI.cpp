@@ -1,4 +1,5 @@
 #include "WarehouseForklift.h"
+#include "Agv/AgvForkliftLocalizer.h"
 #include "WarehousePerformance.h"
 #include "WarehouseExperimentMetrics.h"
 #include "WarehouseExperimentSubsystem.h"
@@ -166,6 +167,7 @@ void AWarehouseForklift::RefreshAfterLayout(bool PublishTaskLocation)
  PlannedRoute.Reset();RouteIndex=0;bRouteStarted=false;
  LastObstacleCheckSeconds=-1;ObstacleCheckFrame=MAX_uint64;
  InvalidateSensorSnapshot(TEXT("LAYOUT MAP REVISION / FRESH SCAN REQUIRED"));
+ if (auto* Localizer=FindComponentByClass<UAgvForkliftLocalizerComponent>()) Localizer->InitializePose();
  ObservedRouteReplans=0;ObservedRouteProgress=GetActorLocation();
  ProgressLocation=GetActorLocation();StalledSeconds=0;WaitSeconds=0;
  if (PublishTaskLocation && IsValid(TargetPallet))
@@ -464,7 +466,9 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  TGuardValue<TOptional<bool>> Readiness(PlanningSensorReadiness,TOptional<bool>(AutonomousSensorsReady()));
  auto Query=BuildNavigationQuery();
  ON_SCOPE_EXIT { CSV_CUSTOM_STAT(Warehouse,GeometryRejectedCandidates,int32(Query.GeometryRejectedCandidates),ECsvCustomStatOp::Accumulate); };
- const FVector RouteStart=GetActorLocation();
+ // AGV localization: plan from the estimate (an insertion-retry escape keeps the exact pose it measures from).
+ const FTransform StartPose=bUseAgvLocalization && !Query.bInsertionRetryEscape ? NavigationTransform() : GetActorTransform();
+ const FVector RouteStart=StartPose.GetLocation();
  const bool Diagnostics=FParse::Param(FCommandLine::Get(),TEXT("DriveDiagnostics"));
  Query.bDiagnostics=Diagnostics;Query.DiagnosticGoal=Goal.GetLocation();
  int32 CandidateCount=0,StartConnections=0,GoalConnections=0;bool Found=false;
@@ -478,15 +482,15 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  };
  PlannedRoute.Reset(); RouteIndex=0;bEndpointDriving=false;bEndpointOrienting=false;bRouteTurning=false;EndpointSegment=-1;
  float DirectCost;
- if (ConnectLanePoses(GetActorTransform(),Goal,PlannedRoute,DirectCost,&Query)) { Found=true;return true; }
+ if (ConnectLanePoses(StartPose,Goal,PlannedRoute,DirectCost,&Query)) { Found=true;return true; }
  // Pose graph: each edge is a swept, curvature-limited cubic. Anchors describe warehouse travel lanes.
  // ponytail: at most 40 lane poses; use incremental hybrid A* for a large unstructured warehouse.
- TArray<FTransform> Nodes{GetActorTransform(),Goal};
+ TArray<FTransform> Nodes{StartPose,Goal};
  if (Query.bHasPivot)
  {
   const FVector Pivot=Query.Pivot;
-  const float Bearing=(Goal.GetLocation()-GetActorLocation()).Rotation().Yaw;
-  for (const FTransform& Base : {GetActorTransform(),Goal}) for (float Yaw : {Bearing,Bearing+180.f})
+  const float Bearing=(Goal.GetLocation()-RouteStart).Rotation().Yaw;
+  for (const FTransform& Base : {StartPose,Goal}) for (float Yaw : {Bearing,Bearing+180.f})
   {
    const FRotator Heading(0,Yaw,0);
    FVector Point=Base.TransformPosition(Pivot)-Heading.RotateVector(Pivot);Point.Z=Base.GetLocation().Z;
@@ -496,7 +500,7 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  }
  int32 FloorCandidates=0;
  for (const auto& Anchor : NavigationAnchors)
-  if (FMath::Abs(Anchor.GetLocation().Z-GetActorLocation().Z)<1.f)
+  if (FMath::Abs(Anchor.GetLocation().Z-RouteStart.Z)<1.f)
   {
    if (++FloorCandidates>40) break;
    if (NavigationClear(Anchor,&Query)) Nodes.Add(Anchor);
@@ -605,9 +609,16 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  const float HeadingTolerance=FMath::DegreesToRadians(ChargingAlignment && RouteIndex>=PlannedRoute.Num()-1 ? .2f : AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::ElevatorApproach ? .5f : 1.f);
  if (FleetCoordinator && !FleetCoordinator->Permit(this)) return false;
  RouteIndex=FMath::Min(RouteIndex,PlannedRoute.Num()-1);
+ // AGV localization: route travel decisions use NavigationTransform(). Alignment, docking, elevator approach and the
+ // last 80cm keep the exact pose (the vehicle's precise docking/fork sensors); collision forecasts stay exact.
+ const bool bPreciseState=ChargingAlignment || AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::AlignVehicle ||
+  AIState==EWarehouseAIState::ElevatorApproach;
+ const FTransform TravelPose=bPreciseState ? GetActorTransform() : NavigationTransform();
+ FString LocalizationReason;
+ if (!bPreciseState && AgvLocalizationBlocked(LocalizationReason)) { BrakeDrive(); StopFor(LocalizationReason); return false; }
  if (PlannedRoute[RouteIndex].bPivot)
  {
-  const float Angle=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,PlannedRoute[RouteIndex].Pose.Rotator().Yaw));
+  const float Angle=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(TravelPose.Rotator().Yaw,PlannedRoute[RouteIndex].Pose.Rotator().Yaw));
   BrakeDrive();
   // Stop before starting the pivot, not on every tick of the pivot: the
   // actor origin moves around the load-wheel axle during a physical turn.
@@ -629,11 +640,12 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  const auto& Goal=PlannedRoute[SegmentEnd];
  if (EndpointSegment!=SegmentEnd) { EndpointSegment=SegmentEnd;bEndpointDriving=false;bEndpointOrienting=false;bRouteTurning=false; }
  const FTransform GoalPose=Goal.Pose;
- const float Remaining=FVector::Dist2D(GetActorLocation(),Goal.Pose.GetLocation());
- const float HeadingError=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,Goal.Pose.Rotator().Yaw));
+ const FTransform Pose=FVector::Dist2D(GetActorLocation(),Goal.Pose.GetLocation())<80.f ? GetActorTransform() : TravelPose;
+ const float Remaining=FVector::Dist2D(Pose.GetLocation(),Goal.Pose.GetLocation());
+ const float HeadingError=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(Pose.Rotator().Yaw,Goal.Pose.Rotator().Yaw));
  // Tighten heading for the loaded pallet's lever arm while retaining enough
  // position margin for nonholonomic steering. Final pallet acceptance stays 2cm.
- const float PositionTolerance=ChargingAlignment && SegmentEnd==PlannedRoute.Num()-1 ? .5f : AIState==EWarehouseAIState::AlignUnload ? 1.5f : 5.f;
+ const float PositionTolerance=ChargingAlignment && SegmentEnd==PlannedRoute.Num()-1 ? .5f : AIState==EWarehouseAIState::AlignUnload ? 1.5f : AIState==EWarehouseAIState::AlignVehicle && AgvEstimateInUse() ? 4.f : 5.f;
  // Inside the charging capture region align to its fixed line heading before
  // handing off. Chasing a sub-centimetre point bearing repeatedly slews the
  // real steering spindle and can drift out of the docking lateral envelope.
@@ -714,13 +726,13 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  }
  // A force-driven vehicle can overshoot. Brake and plan a short reverse
  // correction instead of chasing a forward waypoint behind the truck.
- const float GoalAlong=FVector::DotProduct(GoalPose.GetLocation()-GetActorLocation(),GoalPose.GetUnitAxis(EAxis::X))*(Goal.bReverse ? -1.f : 1.f);
+ const float GoalAlong=FVector::DotProduct(GoalPose.GetLocation()-Pose.GetLocation(),GoalPose.GetUnitAxis(EAxis::X))*(Goal.bReverse ? -1.f : 1.f);
  if (Remaining<150.f && GoalAlong<-1.f)
  {
   // Correct small braking overshoot with a slow physical reverse. A full
   // pose-graph search for a few centimetres can stall the game thread.
   if (Remaining<20.f && FMath::Abs(HeadingError)<FMath::DegreesToRadians(5.f) &&
-      FMath::Abs(FVector::DotProduct(GoalPose.GetLocation()-GetActorLocation(),GetActorRightVector()))<5.f)
+      FMath::Abs(FVector::DotProduct(GoalPose.GetLocation()-Pose.GetLocation(),Pose.GetUnitAxis(EAxis::Y)))<5.f)
   { MovePrecise(GoalPose.GetLocation(),5.f,Dt);return false; }
   BrakeDrive();
   if (FMath::Abs(CurrentSpeedCm)<2.f && !PlanAutonomousRoute(FinalGoal)) StopFor(TEXT("OBSTACLE / OVERSHOOT REALIGNMENT"));
@@ -728,14 +740,14 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  }
  RouteIndex=FMath::Min(RouteIndex,PlannedRoute.Num()-1);
  while (RouteIndex+1<PlannedRoute.Num() && !PlannedRoute[RouteIndex+1].bPivot && PlannedRoute[RouteIndex+1].bReverse==PlannedRoute[RouteIndex].bReverse &&
-        FVector::DistSquared2D(GetActorLocation(),PlannedRoute[RouteIndex+1].Pose.GetLocation())<FVector::DistSquared2D(GetActorLocation(),PlannedRoute[RouteIndex].Pose.GetLocation())) ++RouteIndex;
+        FVector::DistSquared2D(Pose.GetLocation(),PlannedRoute[RouteIndex+1].Pose.GetLocation())<FVector::DistSquared2D(Pose.GetLocation(),PlannedRoute[RouteIndex].Pose.GetLocation())) ++RouteIndex;
  const float LookAhead=FMath::Clamp(FMath::Abs(CurrentSpeedCm)*.8f,40.f,145.f);
  int32 Aim=RouteIndex;
  float Ahead=0;
  while (Aim+1<PlannedRoute.Num() && !PlannedRoute[Aim+1].bPivot && Ahead<LookAhead && PlannedRoute[Aim+1].bReverse==PlannedRoute[Aim].bReverse)
  { Ahead+=FVector::Dist2D(PlannedRoute[Aim].Pose.GetLocation(),PlannedRoute[Aim+1].Pose.GetLocation()); ++Aim; }
  const auto& Step=PlannedRoute[Aim];
- const FVector Local=GetActorTransform().InverseTransformPosition(Step.Pose.GetLocation());
+ const FVector Local=Pose.InverseTransformPosition(Step.Pose.GetLocation());
  const float Sign=Step.bReverse ? -1.f : 1.f;
  const float Limit=bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(180.f,EmptyTravelSpeedCm);
  float Desired=FMath::Min(FMath::Min(Speed,Limit),FMath::Sqrt(240.f*Remaining));

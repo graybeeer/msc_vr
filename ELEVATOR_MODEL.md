@@ -74,6 +74,8 @@ Unreal 임포트·맵 저장 기록은 `Saved/Testing/CargoElevator/ApplyReport.
 
 ## main 선별 통합 (2026-10-22)
 
+2026-10-31 재통합 요청에서 `lhk/b17e458c`의 주요 Blender/FBX 원본22개와 현재 main의 Git 객체를 다시 비교했고 모두 동일했다. 이미 적용된 모델과4층 파생 부품·native 호출대·충돌 보정을 유지하며 예전 맵·외부 호출대 액터·Local4K 화물 복제는 덮어쓰지 않는다. 대조 결과는 `Saved/Testing/EstimatedNavigation_20261031/Models.json`에 기록한다. 추정 위치 주행의 현재 범위는 [AUTONOMY.md](AUTONOMY.md)를 따른다.
+
 이 외형은 지게차가 탑승하는 **범용 승강기 `WarehouseElevator`**에 적용한다. 팔레트 한 개 전용 `WarehousePalletLift`와 구분한다. 팀원의 원래 3층 Blender 원본·조립본은 보존하고, `extend_cargo_elevator_fourth_floor.py`로 3층 모듈에서 4층용 문·랜딩·볼라드·호출대 FBX 5개를 만든다. 층 표시를 실제4로 바꾸며 최종 부품 manifest는25개다. 원본은 그대로 두고 백그라운드 Blender에서 파생 파일만 내보낸다.
 
 현재4층 편집·가이드 프레임 보정을 보존한 상태로 모델을 선별 연결한다. 호출대는 native 컴포넌트이며 고정 샤프트의 높이만 층수에 맞춰 변경한다. 캐빈·바닥 규격과500kg 이동부 질량은 유지한다. 모델이 일부 누락되면 전체를 기존 큐브 구성으로 복귀하며, 실행 중 모델 교체는 허용하지 않는다. `ApplyCargoModel`의 에디터 적용은 켜기/끄기 모두 원래 물리 구성을 복원한다.

@@ -1,6 +1,6 @@
 # 지게차 이동 알고리즘과 실제 관제 시스템 비교
 
-정리 기준: **2026-10-20**. 현재 맵에서 실행되는 `WarehouseForklift`와 `WarehouseFleetCoordinator`의 코드를 읽어 도식화했다. 아래의 실제 시스템 설명은 제조사·표준 작성자·Open-RMF의 공개 자료에 근거하며, 비공개 제조사 알고리즘까지 같다고 가정하지 않는다. 센서 선별 통합의 진행 상태·정보 경계·실행 검사와 운반 시간의 확인 범위는 [AUTONOMY.md](AUTONOMY.md), 물리 계수·실측 전 가정은 [PHYSICS.md](PHYSICS.md)를 따른다.
+도식 정리 기준은 **2026-10-20**, 위치 추정 연결은 **2026-10-31**에 갱신했다. 현재 맵에서 실행되는 `WarehouseForklift`와 `WarehouseFleetCoordinator`의 코드를 읽어 도식화했다. 아래의 실제 시스템 설명은 제조사·표준 작성자·Open-RMF의 공개 자료에 근거하며, 비공개 제조사 알고리즘까지 같다고 가정하지 않는다. 센서·추정 위치 통합의 진행 상태·정보 경계·실행 검사와 운반 시간의 확인 범위는 [AUTONOMY.md](AUTONOMY.md), 물리 계수·실측 전 가정은 [PHYSICS.md](PHYSICS.md)를 따른다.
 
 ## 1. 전체 담당 관계
 
@@ -14,6 +14,10 @@ flowchart LR
     AI --> Plan["차량별 경로 계획<br/>차체·화물·회전·바닥 검사"]
     Building["건물·고정 랙 지도"] --> Plan
     Sensors["차량별 센서 관측<br/>내부 물체는 실측 후 사용"] --> Plan
+    Sensors --> Localization["바퀴·자이로 + 1초 LiDAR 지도 매칭<br/>자율 통로 주행의 추정 위치"]
+    Building --> Localization
+    Localization --> Plan
+    Localization --> Control
     Sensors --> Safe
     Plan --> Traffic["중앙 교통 관리자<br/>통로 예약·우회·양보·폐쇄"]
     Traffic --> Control["차량 경로 추종<br/>속도·조향·포크 목표"]
@@ -24,7 +28,7 @@ flowchart LR
     Report --> User
 ```
 
-차량 AI와 중앙 교통 관리자가 별도 위치에 있어도, 현재 둘은 같은 게임 프로세스의 객체 호출로 연결된다. 실제 WMS/MES 서버, MQTT 브로커, 네트워크 지연·통신 끊김 처리는 아직 연결되어 있지 않다. `Source/msc_vr/Agv/`에서는 LiDAR 센서만 선별 연결하며, 별도 내비게이션·위치 추정·타이어 구동은 분리한다. 원격 조작은 센서·AI를 거치지 않고 기존 물리 구동에 입력한다.
+차량 AI와 중앙 교통 관리자가 별도 위치에 있어도, 현재 둘은 같은 게임 프로세스의 객체 호출로 연결된다. 실제 WMS/MES 서버, MQTT 브로커, 네트워크 지연·통신 끊김 처리는 아직 연결되어 있지 않다. `Source/msc_vr/Agv/`의 LiDAR 센서와 위치 추정을 기존 경로 추종에 선별 연결하며, 독립 내비게이터·타이어 구동·안전 모듈은 분리한다. 정밀 접근·추정 상실·지도 변경 경계는 [AUTONOMY.md](AUTONOMY.md)의 추정 위치 주행 통합 절을 따른다. 원격 조작은 센서·AI·위치 추정을 거치지 않고 기존 물리 구동에 입력한다.
 
 ## 2. 차량의 작업 상태 흐름
 
@@ -186,7 +190,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | 작업과 관제 분담 | 로컬 컴퓨터/입고 구역이 지시하고 차량 상태 머신이 실행·보고 | VisionNav 사례는 WMS→중앙 관제→차량 운반이며 RCS는 차량·작업·이상·실시간 경로를 관리한다. [제조사 운용 사례](https://www.visionnav.com/application/vnsl14productionlinemanufacturingindustry), [RCS](https://www.visionnav.com/product/robot-control-system.php) | 작업 단계와 병목 위치는 비교할 수 있다. 실제 IT 연동 시간은 포함되지 않는다. |
 | 관제 통신 | 같은 프로세스의 함수·이벤트, 작업 큐 | VDA5050은 MQTT/JSON의 지시·상태·접속·차량 정보 교환을 정의한다. [공식 명세4·5절](https://github.com/VDA5050/VDA5050/blob/main/VDA5050_EN.md#4-transport-protocol) | 무선 지연·손실·끊김·재접속은 아직 시험할 수 없다. |
-| 위치와 팔레트 인식 | 기존 자기 위치 가정,5개 센서의 잡음·가림을 포함한 반환점, 관측 후 팔레트 모델 자세와 오차 주입 | VisionNav VNSL14 공개 사례는3D laser SLAM과3D 센서 기반 팔레트 자세·포크 구멍 인식을 설명한다. [제조사 사례](https://www.visionnav.com/application/vnsl14productionlinemanufacturingindustry) | 별도 SLAM의 위치 추정 피드백이나 실제 점군·영상에서 자세를 추론하는 인식기는 연결하지 않았다. |
+| 위치와 팔레트 인식 | 바퀴/자이로 오도메트리와 공통1초 LiDAR 스냅샷의 지도 매칭을 기존 경로 추종에 연결. 관측 후 팔레트 모델 자세와 오차 주입 | VisionNav VNSL14 공개 사례는3D laser SLAM과3D 센서 기반 팔레트 자세·포크 구멍 인식을 설명한다. [제조사 사례](https://www.visionnav.com/application/vnsl14productionlinemanufacturingindustry) | 완전한3D SLAM이나 영상/점군 기반 팔레트 ML 인식기는 아니다. 정밀 접근은 기존 정확한 자세를 유지한다. |
 | 경로 계획 | 차량별 차로 앵커 A*와 곡선/자리 회전 연결 | VDA5050은 선로 추종과 차량 자체 계획을 구분하지만 특정 계획 알고리즘을 지정하지 않는다. [공식 명세2·3·5절](https://github.com/VDA5050/VDA5050/blob/main/VDA5050_EN.md#2-scope) | 현재 A*가 제조사와 동일하거나 표준이 요구하는 알고리즘이라고 말할 수 없다. |
 | 교통 승인 | 남은 경로 외곽 예약, 진입 차량 우선·신규 요청 순서 | VDA5050의 실행 허가와 요청/응답은 승인 교환을 표현한다. Open-RMF는 시간 정보를 가진 궤적·계획을 제안·거절·대안 협상한다. [VDA5050 6.9절](https://github.com/VDA5050/VDA5050/blob/main/VDA5050_EN.md#69-requestresponse-mechanism), [RMF 협상 코드](https://github.com/open-rmf/rmf_traffic/blob/main/rmf_traffic/include/rmf_traffic/schedule/Negotiation.hpp), [RMF 궤적 코드](https://github.com/open-rmf/rmf_traffic/blob/main/rmf_traffic/include/rmf_traffic/Trajectory.hpp) | 현재 예약은 시간 슬롯 최적화·도착시각 기반 협상보다 보수적이며 처리량이 달라질 수 있다. |
 | 정체와 복구 | 우회·퇴로 확보·실제 후퇴·접촉 분리·재개·안전 공간 없으면 작업자 요청 | VDA5050은 관제의 막힘 해소 역할과 실행 허가 상실 시 대응을 설명하되, 상세 교통 해법은 범위 밖이다. [공식 명세5.3·6.6.10절](https://github.com/VDA5050/VDA5050/blob/main/VDA5050_EN.md#53-functions-of-the-fleet-control) | 이 게임의60cm 분리·후퇴 후보·횟수 제한은 프로젝트 구현이며 제조사 복구 절차로 일반화하지 않는다. |

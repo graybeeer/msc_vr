@@ -4,7 +4,7 @@
 
 Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. 센서 인식 이상, 충돌, 포크와 팔레트/적재물 결합 실패 같은 상황을 재현하고, 창고 운영 조건별 효율을 비교하는 것이 목표다. 향후 물리 거동은 질량·관성·마찰·접촉·하중을 실제 장비에 맞춰 검증해야 한다.
 
-**현재 맵:** 3층 복층·승강기, 트럭 적재함과 외부 환경, 양손 화물 운반, 1층 지게차 2대의 자율 작업·G 스마트폰 원격 조작, 센서/충돌/하중 검사와 자동 충전이 있다. 지게차·작업자 NPC·일반 화물은 Chaos 강체와 유한 구동력을 사용한다. 플레이어는 즉시 반응하는 CharacterMovement와 질량 무제한 손 운반을 사용한다. 실행 검증·계수·한계는 `PHYSICS.md`, 맵은 `WAREHOUSE.md`, 장비 사양은 `VNSL14_SPEC.md`를 확인한다. 기존 `WarehouseForklift`에 `Agv`의 센서만 연결하며, 별도 타이어·주행 알고리즘은 연결하지 않는다.
+**현재 맵:** 3층 복층·승강기, 트럭 적재함과 외부 환경, 양손 화물 운반, 1층 지게차 2대의 자율 작업·G 스마트폰 원격 조작, 센서/충돌/하중 검사와 자동 충전이 있다. 지게차·작업자 NPC·일반 화물은 Chaos 강체와 유한 구동력을 사용한다. 플레이어는 즉시 반응하는 CharacterMovement와 질량 무제한 손 운반을 사용한다. 실행 검증·계수·한계는 `PHYSICS.md`, 맵은 `WAREHOUSE.md`, 장비 사양은 `VNSL14_SPEC.md`를 확인한다. 기존 `WarehouseForklift`에 `Agv`의 센서·위치 추정을 연결하며, 별도 타이어·내비게이터는 연결하지 않는다.
 
 ## 실행 구조 한눈에 보기
 
@@ -23,13 +23,14 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 배치 보관·반복 실험·성과 | `WarehouseExperimentStorage`, `WarehouseExperimentSubsystem`, `WarehouseExperimentMetrics`, `WarehouseExperimentUI` | 초기 배치 JSON 복원, 공통 주문·새 레벨 반복, 완료·대기 시간과 CSV/JSON 비교 |
 | 검증·모델·맵 | `Scripts/verify_*`, `Art/`, `Content/`, `Config/` | 회귀 검사·적용 도구, 자체 모델 원본, Unreal 에셋·맵, 실행 설정 |
 
-관제·차량·설비는 현재 같은 게임 프로세스 안에서 연결된다. `Source/msc_vr/Agv/` 중 센서만 운용 차량에 연결하며, 별도 주행·위치 추정은 독립 개발 영역이다. 자세한 상태 흐름과 정보 경계는 [알고리즘 도식](FLEET_ALGORITHM_COMPARISON.md)과 [자율 운반 기준](AUTONOMY.md)을 따른다.
+관제·차량·설비는 현재 같은 게임 프로세스 안에서 연결된다. `Source/msc_vr/Agv/`의 센서와 `AgvForkliftLocalizer` 위치 추정만 기존 운용 차량에 연결하며 독립 타이어·내비게이터·안전 제어는 활성화하지 않는다. 자세한 상태 흐름과 정보 경계는 [알고리즘 도식](FLEET_ALGORITHM_COMPARISON.md)과 [자율 운반 기준](AUTONOMY.md)을 따른다.
 
 ## 작업별 첫 탐색 경로
 
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
+| 추정 위치 주행·지도 변경/층간 이동 후 위치 초기화 | `Agv/AgvForkliftLocalizer.h/.cpp`, `Agv/AgvScanMatching.h/.cpp`, `WarehouseForkliftAI::PlanAutonomousRoute`/`FollowRoute`/`RefreshAfterLayout`, `Scripts/verify_estimated_navigation_pie.py` | 현재 통합 경계는 `AUTONOMY.md`. `-EstimatedCase=shipping/remote/layout/elevator`로 기존 실제 운행 검사를 재사용하며, 이동 추정에는 공통1초 스냅샷만 사용. 원격은 위치 추정도 중단. `Agv`의 인계·설계 문서는 개발 이력 |
 | 작업 완전 중지·기존 짐 하역 후 새 지시·운반 불가 보류·입출고 탭/차량 스크롤 | `WarehouseForkliftWorkControl.cpp`, `WarehouseForkliftAI`, `WarehouseInboundZone`, `WarehouseShippingSystem`, `WarehouseFocusDirector`, `WarehouseFocusUI` | 중지/물리 정리와 보류 기준은 `AUTONOMY.md`, 조작은 `WAREHOUSE.md`; 검사 `verify_forklift_work_control_pie.py`(기본 바닥/원격, `-RetainedInsertOnly`, `-RetainedRackLoad`, `-RetainedBlockedDrop`), `verify_work_control_dispatch_pie.py`, `verify_focus_ui_pie.py` |
 | 랙 팔레트 즉시 집기·랙 E 즉시 적재·바닥/선반 즉시 안착 | `msc_vrCharacter::FindCarryTarget`/`CanPlaceHeldGroup`/`TryPlaceOnRack`/`TryPlaceOnSurface`/`TryPlaceOnPallet`, `WarehouseLayoutInventory::RackSlotsFor`, `verify_instant_rack_carry_pie.py` | 플레이어만 최종 실형상·수평 받침을 검사해 즉시 이동. 현재 적재 자리·미등록 랙의 실제 데크 형상을 사용하며 빈 공간이 없으면 손에 유지. `-RackGeometryOnly`는 후자의 검사. 보행 중 스윕과 놓은 뒤 물리는 유지. 기존 경계 검사는 `verify_arcade_carry_placement_pie.py`, 기준은 `PHYSICS.md` |
 | 바닥 비충돌 충전기 전선·실내 작업자 외부 배치 | `WarehouseChargerWiring`, `WarehouseWorker::RelocateIndoorWorkers`, `relocate_warehouse_workers_outside.py`, `verify_floor_wiring_workers_pie.py` | 전선 공통 기준은 `COLLISION_POLICY.md`, 배선은 `WAREHOUSE_SERVICES_MODEL.md`, 역할/배치는 `WAREHOUSE.md`; 시작·건물 편집 시 현재 외곽·실제 지지와 빈 공간을 확인 |
@@ -296,6 +297,7 @@ msc_vr/
     verify_elevator_model_layout_pie.py
     verify_elevator_route_visuals_pie.py
     verify_empty_storage_pie.py
+    verify_estimated_navigation_pie.py
     verify_first_person_warehouse.py
     verify_fleet_layout_stress_pie.py
     verify_fleet_traffic_pie.py
