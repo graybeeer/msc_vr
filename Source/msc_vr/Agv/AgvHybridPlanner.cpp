@@ -28,6 +28,7 @@ namespace AgvHybrid
 	constexpr int32 MaxNearAnalyticTries = 60;
 	constexpr int32 ExtraExpansionsAfterFound = 5000;
 	constexpr double MaxSearchSeconds = 0.5;
+	constexpr double MaxImproveSeconds = 0.15;
 	constexpr int32 MaxSearches = 3;
 	constexpr float Unreached = 1e9f;
 
@@ -562,10 +563,19 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 				continue;
 			}
 			++Local;
-			if ((Local & 255) == 0 && FPlatformTime::Seconds() - StartedAt > MaxSearchSeconds)
+			if ((Local & 255) == 0)
 			{
-				bTimedOut = true;
-				break;
+				// Planning stalls the game thread. With a route in hand, stop improving it soon; without one, give it a little longer.
+				const double Spent = FPlatformTime::Seconds() - StartedAt;
+				if (BestNode != INDEX_NONE && Spent > MaxImproveSeconds)
+				{
+					break;
+				}
+				if (Spent > MaxSearchSeconds)
+				{
+					bTimedOut = true;
+					break;
+				}
 			}
 			// Try to finish with a curve or turn-drive-turn onto the exact goal pose.
 			const double ToGoal = FVector2D::Distance(FVector2D(Node.X, Node.Y), GoalXY);
