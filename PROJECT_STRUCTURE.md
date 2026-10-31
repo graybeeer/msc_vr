@@ -30,7 +30,8 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
-| 추정 위치 주행·지도 변경/층간 이동 후 위치 초기화 | `Agv/AgvForkliftLocalizer.h/.cpp`, `Agv/AgvScanMatching.h/.cpp`, `WarehouseForkliftAI::PlanAutonomousRoute`/`FollowRoute`/`RefreshAfterLayout`, `Scripts/verify_estimated_navigation_pie.py` | 현재 통합 경계는 `AUTONOMY.md`. `-EstimatedCase=shipping/remote/layout/elevator`로 기존 실제 운행 검사를 재사용하며, 이동 추정에는 공통1초 스냅샷만 사용. 원격은 위치 추정도 중단. `Agv`의 인계·설계 문서는 개발 이력 |
+| 추정 위치 주행·지도 변경/층간 이동 후 위치 초기화 | `Agv/AgvForkliftLocalizer.h/.cpp`, `Agv/AgvScanMatching.h/.cpp`, `WarehouseForkliftAI::PlanAutonomousRoute`/`FollowRoute`/`RefreshAfterLayout`, `Scripts/verify_estimated_navigation_pie.py`, `Scripts/verify_localization_improvements_pie.py` | 후자는 `-LocStages=0,1,2,3`로 같은 실제 운반의 보정·신뢰도·제한 재탐색을 비교하며 결과는 `Saved/Testing/LocalizationImprovements_20261031/`에 보관. 현재 통합 경계는 `AUTONOMY.md`. `-EstimatedCase=shipping/remote/layout/elevator`로 기존 실제 운행 검사를 재사용하며, 이동 추정에는 공통1초 스냅샷만 사용. 원격은 위치 추정도 중단. `Agv`의 인계·설계 문서는 개발 이력 |
+| 좁은 통로 계획 여유·실제 화물 기준 바닥 하역·운반 시간 비교 | `WarehouseForkliftAI::PlanAutonomousRoute`/`TryPlanAutonomousRoute`/`FollowRoute`/`AlignUnload`, `Scripts/verify_forklift_handling_pie.py` | 기본25cm 계획 실패 때10/3cm 재계획·좁은 구간 요청30cm/s, 실제 접촉/1초 관측/원격 제외 유지. 기준은 `AUTONOMY.md`, 같은 배치 A/B·좁은 문 검사는 `Saved/Testing/HandlingImprovements_20261031/` |
 | 작업 완전 중지·기존 짐 하역 후 새 지시·운반 불가 보류·입출고 탭/차량 스크롤 | `WarehouseForkliftWorkControl.cpp`, `WarehouseForkliftAI`, `WarehouseInboundZone`, `WarehouseShippingSystem`, `WarehouseFocusDirector`, `WarehouseFocusUI` | 중지/물리 정리와 보류 기준은 `AUTONOMY.md`, 조작은 `WAREHOUSE.md`; 검사 `verify_forklift_work_control_pie.py`(기본 바닥/원격, `-RetainedInsertOnly`, `-RetainedRackLoad`, `-RetainedBlockedDrop`), `verify_work_control_dispatch_pie.py`, `verify_focus_ui_pie.py` |
 | 랙 팔레트 즉시 집기·랙 E 즉시 적재·바닥/선반 즉시 안착 | `msc_vrCharacter::FindCarryTarget`/`CanPlaceHeldGroup`/`TryPlaceOnRack`/`TryPlaceOnSurface`/`TryPlaceOnPallet`, `WarehouseLayoutInventory::RackSlotsFor`, `verify_instant_rack_carry_pie.py` | 플레이어만 최종 실형상·수평 받침을 검사해 즉시 이동. 현재 적재 자리·미등록 랙의 실제 데크 형상을 사용하며 빈 공간이 없으면 손에 유지. `-RackGeometryOnly`는 후자의 검사. 보행 중 스윕과 놓은 뒤 물리는 유지. 기존 경계 검사는 `verify_arcade_carry_placement_pie.py`, 기준은 `PHYSICS.md` |
 | 바닥 비충돌 충전기 전선·실내 작업자 외부 배치 | `WarehouseChargerWiring`, `WarehouseWorker::RelocateIndoorWorkers`, `relocate_warehouse_workers_outside.py`, `verify_floor_wiring_workers_pie.py` | 전선 공통 기준은 `COLLISION_POLICY.md`, 배선은 `WAREHOUSE_SERVICES_MODEL.md`, 역할/배치는 `WAREHOUSE.md`; 시작·건물 편집 시 현재 외곽·실제 지지와 빈 공간을 확인 |
@@ -307,6 +308,7 @@ msc_vr/
     verify_forklift_autonomy.py
     verify_forklift_autonomy_pie.py
     verify_forklift_focus_pie.py
+    verify_forklift_handling_pie.py
     verify_forklift_recovery_pie.py
     verify_forklift_sensors_pie.py
     verify_forklift_training.py
@@ -323,6 +325,7 @@ msc_vr/
     verify_layout_editing_ui_pie.py
     verify_layout_editor_pie.py
     verify_layout_inventory_pie.py
+    verify_localization_improvements_pie.py
     verify_mcp.py
     verify_mezzanine.py
     verify_mezzanine_pie.py

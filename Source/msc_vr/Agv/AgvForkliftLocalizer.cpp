@@ -26,6 +26,76 @@ namespace AgvForkliftLoc
 	// Error histogram for the 95th percentile: 0.5 cm bins up to 200 cm, the last bin holds the rest.
 	constexpr double BinCm = 0.5;
 	constexpr int32 Bins = 401;
+	// Staged A/B verification. Sensor snapshots and physical driving are unchanged at every level.
+	static TAutoConsoleVariable<int32> FilterLevel(TEXT("Warehouse.Localization.FilterLevel"), 3,
+		TEXT("Localization A/B: 0 original, 1 motion prior/gate, 2 geometry confidence, 3 bounded recovery."), ECVF_Default);
+	static TAutoConsoleVariable<float> PriorWeight(TEXT("Warehouse.Localization.PriorWeight"), 0.001f,
+		TEXT("Odometry regularization scale for measured localization tuning; independent of the innovation gate."), ECVF_Default);
+
+	struct FScanConfidence
+	{
+		int32 Inliers = 0;
+		int32 Normals = 0;
+		int32 NearMap = 0;
+		double Translation = 0.0;
+		double Heading = 0.0;
+		bool FullPose(int32 Minimum) const { return Normals >= Minimum && Translation >= 0.01 && Heading >= 0.005; }
+		bool Fits(int32 Minimum) const { return FullPose(Minimum) && NearMap > 0 && double(Inliers) / NearMap >= 0.7; }
+	};
+
+	static FVector2D RecoveryOffset(int32 Index)
+	{
+		static const FVector2D Offsets[] = { {25, 0}, {-25, 0}, {0, 25}, {0, -25}, {50, 0}, {-50, 0}, {0, 50}, {0, -50} };
+		return Offsets[Index % UE_ARRAY_COUNT(Offsets)];
+	}
+
+	// Information from visible map-compatible returns only. Translation is in cm; yaw is normalized to the
+	// displacement at a 10m lever arm before comparing constraints. Schur complements account for pose coupling.
+	static FScanConfidence ScanConfidence(const FAgvDistanceMap& Map, const TArray<FVector2D>& Points,
+		const FVector2D& Position, double Yaw, double InlierCm)
+	{
+		FScanConfidence Result;
+		double H[3][3] = {};
+		const double Step = FMath::Max(2.0 * Map.CellCm, 2.0 * InlierCm);
+		for (const FVector2D& P : Points)
+		{
+			const FVector2D R = AgvMath::Rotate(Yaw, P), Q = R + Position;
+			const double D = Map.Sample(Q);
+			Result.NearMap += D < Map.CapCm;
+			if (D > InlierCm) continue;
+			++Result.Inliers;
+			// At a distance-field minimum the central gradient is zero. A one-sided surface normal still
+			// describes the geometric constraint; never infer observability from numerical damping/prior.
+			auto Gradient = [&](FVector2D Axis)
+			{
+				const double A = (Map.Sample(Q + Axis * Step) - D) / Step;
+				const double B = (D - Map.Sample(Q - Axis * Step)) / Step;
+				return FMath::Abs(A) >= FMath::Abs(B) ? A : B;
+			};
+			FVector2D Normal(Gradient(FVector2D(1, 0)), Gradient(FVector2D(0, 1)));
+			if (Normal.SizeSquared() < 0.0025) continue;
+			Normal.Normalize();
+			++Result.Normals;
+			const double J[3] = { Normal.X, Normal.Y, (-Normal.X * R.Y + Normal.Y * R.X) / 1000.0 };
+			for (int32 I = 0; I < 3; ++I) for (int32 K = 0; K < 3; ++K) H[I][K] += J[I] * J[K];
+		}
+		if (!Result.Normals) return Result;
+		for (auto& Row : H) for (double& V : Row) V /= Result.Normals;
+		if (H[2][2] > 1e-9)
+		{
+			const double XX = H[0][0] - H[0][2] * H[0][2] / H[2][2];
+			const double XY = H[0][1] - H[0][2] * H[1][2] / H[2][2];
+			const double YY = H[1][1] - H[1][2] * H[1][2] / H[2][2];
+			Result.Translation = FMath::Max(0.0, (XX + YY - FMath::Sqrt(FMath::Square(XX - YY) + 4 * XY * XY)) * 0.5);
+		}
+		const double Det = H[0][0] * H[1][1] - H[0][1] * H[0][1];
+		if (Det > 1e-9)
+		{
+			Result.Heading = FMath::Max(0.0, H[2][2] - (H[1][1] * H[0][2] * H[0][2]
+				- 2 * H[0][1] * H[0][2] * H[1][2] + H[0][0] * H[1][2] * H[1][2]) / Det);
+		}
+		return Result;
+	}
 
 	// Usage in the console during play: agv.loc (start shadow localization; again = report), agv.loc reset
 	static FAutoConsoleCommandWithWorldAndArgs Command(
@@ -171,6 +241,7 @@ void UAgvForkliftLocalizerComponent::InitializePose()
 	CorrectionOffset = DrivingOffset = FVector2D::ZeroVector;
 	CorrectionYaw = DrivingYaw = 0.0;
 	TravelSinceMatchCm = 0.f;
+	TurnSinceMatchRad = 0.0;
 	LastTrueLocation = Actor.GetLocation();
 	// A snapshot already taken belongs to the old pose.
 	SeenSnapshot = SensorKit ? SensorKit->SnapshotCount : -1;
@@ -385,6 +456,7 @@ void UAgvForkliftLocalizerComponent::StepOdometry(float Dt)
 	OdomPosition += AgvMath::Rotate(OdomYaw + TurnRad * 0.5, FVector2D(Measured, Side));
 	OdomYaw += TurnRad;
 	TravelSinceMatchCm += (float)FVector2D(Measured, Side).Size();
+	TurnSinceMatchRad += FMath::Abs(TurnRad);
 
 	// Diagnostic: measured against the actual travel of the reference point (sign and scale of the encoder model).
 	const FVector ReferenceWorld = Actor.TransformPosition(FVector(ReferenceOffset, 0.0));
@@ -523,6 +595,12 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	SeenSnapshot = SensorKit->SnapshotCount;
 	const TArray<TObjectPtr<UAgvLidarComponent>>& Sources = SensorKit->Lidars;
 	const double Start = FPlatformTime::Seconds();
+	auto RecordMatchTime = [&]
+	{
+		LastMatchMilliseconds = (float)((FPlatformTime::Seconds() - Start) * 1000.0);
+		MatchMillisecondsSum += LastMatchMilliseconds;
+		bMatchToLog = bLogMatches;
+	};
 	const bool bHadNoMap = bNoMap;
 	const bool bHaveMap = EnsureMap();
 	// No known structure at all (a test scene with only a floor slab): there is nothing to localize against, so the
@@ -541,6 +619,9 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	if (!bHaveMap)
 	{
 		++RejectedMatches;
+		LastInlierRatio = LastCorrectionCm = 0.f;
+		LastMatchPoints = 0;
+		RecordMatchTime();
 		return;
 	}
 
@@ -548,6 +629,9 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	// angle and the fixed mount are used; the height band uses the floor the vehicle stands on.
 	const FTransform Actor = Forklift->GetActorTransform();
 	// Points from low on the structure count too (the side scanners sweep 27 cm above the floor across rack posts).
+	const bool bMotionPrior = AgvForkliftLoc::FilterLevel.GetValueOnGameThread() >= 1;
+	const bool bConfidence = AgvForkliftLoc::FilterLevel.GetValueOnGameThread() >= 2;
+	const bool bBoundedRecovery = AgvForkliftLoc::FilterLevel.GetValueOnGameThread() >= 3;
 	const double Low = SensorKit->SnapshotFloorZCm + PointMinZCm, High = SensorKit->SnapshotFloorZCm + MapMaxZCm;
 	TArray<FVector2D> ScanPoints;
 	TArray<double> ScanHeights;
@@ -577,12 +661,31 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	}
 	TArray<FVector2D> Points;
 	AgvScanMatch::Voxelize(ScanPoints, MatchVoxelCm, Points);
+	if (bMotionPrior)
+	{
+		// Keep the original voxel grid/returns, then optimize about the axle instead of the distant world origin.
+		for (FVector2D& P : Points) P -= OdomPosition;
+		for (FVector2D& P : ScanPoints) P -= OdomPosition;
+	}
 	LastMatchPoints = Points.Num();
-	if (Points.Num() < MinMatchPoints)
+	FVector2D Predicted;
+	double PredictedYaw;
+	ToMap(OdomPosition, OdomYaw, Predicted, PredictedYaw);
+	const int32 StrongMinimum = FMath::Min(MinMatchPoints, FMath::Max(12, MinMatchPoints / 2));
+	const int32 RawPointCount = Points.Num();
+	const TArray<FVector2D> DisplayPoints = Points;
+	if (bConfidence && !bLost && TravelSinceMatchCm < 200.f)
+	{
+		// Foreground returns far from any known structure cannot localize a recently tracked vehicle.
+		// This changes only the matching copy, never the obstacle/safety snapshot or an actor's collision.
+		Points.RemoveAll([&](const FVector2D& P) { return Map->Sample(Predicted + AgvMath::Rotate(CorrectionYaw, P)) >= Map->CapCm; });
+	}
+	if (Points.Num() < (bConfidence ? StrongMinimum : MinMatchPoints))
 	{
 		++RejectedMatches;
 		LastInlierRatio = 0.f;
-		bMatchToLog = bLogMatches;
+		LastCorrectionCm = 0.f;
+		RecordMatchTime();
 		return;
 	}
 
@@ -591,40 +694,97 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	Params.InlierDistanceCm = InlierDistanceCm;
 	Params.RobustScaleCm = RobustScaleCm;
 	Params.Iterations = MatchIterations;
-	double Tx = CorrectionOffset.X, Ty = CorrectionOffset.Y, Th = CorrectionYaw;
+	// Uncertainty grows with sensor-integrated travel/turn, including rejected scans. These are model bounds,
+	// not a full covariance filter. The real engine position/error is used only in diagnostics below.
+	const double PositionSigma = 6.0 + 0.04 * TravelSinceMatchCm;
+	const double YawSigma = FMath::DegreesToRadians(0.35 + 0.015 * FMath::RadiansToDegrees(TurnSinceMatchRad) + 0.0005 * TravelSinceMatchCm);
+	if (bMotionPrior)
+	{
+		Params.PriorPosition = Predicted;
+		Params.PriorYaw = CorrectionYaw;
+		// Weak regularization holds an unobservable direction, without suppressing valid LiDAR corrections.
+		// The first stronger prior reduced peaks but increased mean error in the closed-loop A/B test.
+		const double Weight = FMath::Max(0.f, AgvForkliftLoc::PriorWeight.GetValueOnGameThread());
+		Params.TranslationWeight = Weight * FMath::Square(3.0 / PositionSigma);
+		Params.RotationWeight = Weight * FMath::Square(3.0 / YawSigma);
+	}
+	double Tx = bMotionPrior ? Predicted.X : CorrectionOffset.X, Ty = bMotionPrior ? Predicted.Y : CorrectionOffset.Y, Th = CorrectionYaw;
 	double Ratio = AgvScanMatch::Refine(*Map, Points, Params, Tx, Ty, Th);
-	if (Ratio < MinInlierRatio)
+	auto ValidCandidate = [&](FVector2D Position, double Yaw, double FitRatio, bool bRequireFullPose = false)
+	{
+		if (!AgvScanMatch::AcceptInnovation(Position - Predicted, Yaw - CorrectionYaw, PositionSigma, YawSigma)) return false;
+		const auto Quality = AgvForkliftLoc::ScanConfidence(*Map, Points, Position, Yaw, InlierDistanceCm);
+		const bool bOriginalSupport = RawPointCount >= MinMatchPoints && FitRatio * Points.Num() / RawPointCount >= MinInlierRatio;
+		return (FitRatio >= MinInlierRatio || Quality.Fits(StrongMinimum))
+			&& (bOriginalSupport || Quality.FullPose(StrongMinimum)) && (!bRequireFullPose || Quality.FullPose(StrongMinimum));
+	};
+	const bool bInitialValid = bBoundedRecovery && ValidCandidate(FVector2D(Tx, Ty), Th, Ratio);
+	const bool bRecoveryAttempted = bBoundedRecovery ? !bInitialValid : Ratio < MinInlierRatio;
+	if (bRecoveryAttempted)
 	{
 		// Recovery from headings around the current estimate, keeping its position (see UAgvLidarLocalizerComponent).
 		FVector2D Position;
 		double Yaw;
 		ToMap(OdomPosition, OdomYaw, Position, Yaw);
+		double BestValidRatio = bInitialValid ? Ratio : -1.0;
+		auto TrySeed = [&](FVector2D Seed, double SeedTh, bool bFullPose)
+		{
+			const double SeedRatio = AgvScanMatch::Refine(*Map, Points, Params, Seed.X, Seed.Y, SeedTh);
+			const bool Better = bBoundedRecovery
+				? ValidCandidate(Seed, SeedTh, SeedRatio, bFullPose) && (SeedRatio > BestValidRatio + 1e-6
+					|| (FMath::Abs(SeedRatio - BestValidRatio) <= 1e-6 && FVector2D::DistSquared(Seed, Predicted) < FVector2D::DistSquared(FVector2D(Tx, Ty), Predicted)))
+				: SeedRatio > Ratio;
+			if (Better)
+			{
+				BestValidRatio = Ratio = SeedRatio;
+				Tx = Seed.X; Ty = Seed.Y; Th = SeedTh;
+			}
+		};
 		for (const double OffsetDeg : { 2.0, -2.0, 4.0, -4.0, 7.0, -7.0, 10.0, -10.0, 15.0, -15.0 })
 		{
 			double SeedTh = CorrectionYaw + FMath::DegreesToRadians(OffsetDeg);
-			FVector2D Seed = Position - AgvMath::Rotate(SeedTh, OdomPosition);
-			const double SeedRatio = AgvScanMatch::Refine(*Map, Points, Params, Seed.X, Seed.Y, SeedTh);
-			if (SeedRatio > Ratio)
-			{
-				Ratio = SeedRatio;
-				Tx = Seed.X;
-				Ty = Seed.Y;
-				Th = SeedTh;
-			}
+			FVector2D Seed = bMotionPrior ? Position : Position - AgvMath::Rotate(SeedTh, OdomPosition);
+			TrySeed(Seed, SeedTh, false);
 		}
-		RecoveredMatches += Ratio >= MinInlierRatio;
+		if (bBoundedRecovery && BestValidRatio < 0.0 && TravelSinceMatchCm > 100.f)
+		{
+			// Four translational seeds per ordinary 1s snapshot; alternate the eight offsets. No global search,
+			// hidden actor coordinates, new scans, vehicle teleports or unbounded per-frame work.
+			for (int32 I = 0; I < 4; ++I) TrySeed(Predicted + AgvForkliftLoc::RecoveryOffset(SeenSnapshot * 4 + I), CorrectionYaw, true);
+		}
 	}
 	LastInlierRatio = (float)Ratio;
-	if (Ratio >= MinInlierRatio)
+	const FVector2D Candidate = bMotionPrior ? FVector2D(Tx, Ty) : AgvMath::Rotate(Th, OdomPosition) + FVector2D(Tx, Ty);
+	const bool bConsistent = !bMotionPrior || AgvScanMatch::AcceptInnovation(Candidate - Predicted, Th - CorrectionYaw, PositionSigma, YawSigma);
+	AgvForkliftLoc::FScanConfidence Confidence;
+	if (bConfidence) Confidence = AgvForkliftLoc::ScanConfidence(*Map, Points, Candidate, Th, InlierDistanceCm);
+	// Fewer points or mostly foreground occlusion need actual constraints on all three pose axes.
+	const bool bSupported = !bConfidence || ((RawPointCount >= MinMatchPoints && Ratio * Points.Num() / RawPointCount >= MinInlierRatio)
+		|| Confidence.FullPose(StrongMinimum));
+	const bool bFit = Ratio >= MinInlierRatio || (bConfidence && Confidence.Fits(StrongMinimum));
+	LastCorrectionCm = 0.f;
+	if (!bConsistent) ++InnovationRejections;
+	if (bFit && bConsistent && bSupported)
 	{
+		RecoveredMatches += bRecoveryAttempted;
 		FVector2D Before, After;
 		double BeforeYaw, AfterYaw;
 		ToMap(OdomPosition, OdomYaw, Before, BeforeYaw);
-		CorrectionOffset += (FVector2D(Tx, Ty) - CorrectionOffset) * CorrectionGain;
-		CorrectionYaw += AgvMath::Wrap(Th - CorrectionYaw) * CorrectionGain;
+		if (bMotionPrior)
+		{
+			CorrectionYaw += AgvMath::Wrap(Th - CorrectionYaw) * CorrectionGain;
+			const FVector2D FusedPosition = FMath::Lerp(Predicted, Candidate, (double)CorrectionGain);
+			CorrectionOffset = FusedPosition - AgvMath::Rotate(CorrectionYaw, OdomPosition);
+		}
+		else
+		{
+			CorrectionOffset += (FVector2D(Tx, Ty) - CorrectionOffset) * CorrectionGain;
+			CorrectionYaw += AgvMath::Wrap(Th - CorrectionYaw) * CorrectionGain;
+		}
 		ToMap(OdomPosition, OdomYaw, After, AfterYaw);
 		LastCorrectionCm = (float)FVector2D::Distance(Before, After);
 		TravelSinceMatchCm = 0.f;
+		TurnSinceMatchRad = 0.0;
 		++AcceptedMatches;
 		if (bLost)
 		{
@@ -636,6 +796,12 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	else
 	{
 		++RejectedMatches;
+	}
+	if (bConfidence && bLogMatches)
+	{
+		UE_LOG(LogAgvForkliftLoc, Log, TEXT("AGV_LOC_CONFIDENCE %s t=%.1f raw=%d used=%d inliers=%d normals=%d near_map=%d translation=%.4f heading=%.4f gate=%d supported=%d recovery=%d"),
+			*Forklift->GetName(), GetWorld()->GetTimeSeconds(), RawPointCount, Points.Num(), Confidence.Inliers, Confidence.Normals, Confidence.NearMap,
+			Confidence.Translation, Confidence.Heading, bConsistent, bSupported, bRecoveryAttempted);
 	}
 	{
 		// Diagnostic: the matched pose (before the driving blend) against the truth, along and across the vehicle.
@@ -653,24 +819,23 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	LastScan3D.Reset();
 	LastScan3DMapped.Reset();
 	const int32 Stride = FMath::Max(1, ScanPoints.Num() / 3000);
+	const FVector2D ScanOffset = CorrectionOffset + (bMotionPrior ? AgvMath::Rotate(CorrectionYaw, OdomPosition) : FVector2D::ZeroVector);
 	for (int32 Index = 0; Index < ScanPoints.Num(); Index += Stride)
 	{
-		const FVector2D Placed = AgvMath::Rotate(CorrectionYaw, ScanPoints[Index]) + CorrectionOffset;
+		const FVector2D Placed = AgvMath::Rotate(CorrectionYaw, ScanPoints[Index]) + ScanOffset;
 		LastScan3D.Add(FVector(Placed, ScanHeights[Index]));
 		LastScan3DMapped.Add(Map->Sample(Placed) <= InlierDistanceCm);
 	}
 	// The scan as the vehicle now places it: on the map where it believes it stands.
-	LastScanInMap.Reset(Points.Num());
-	LastScanMapped.Reset(Points.Num());
-	for (const FVector2D& Point : Points)
+	LastScanInMap.Reset(DisplayPoints.Num());
+	LastScanMapped.Reset(DisplayPoints.Num());
+	for (const FVector2D& Point : DisplayPoints)
 	{
-		const FVector2D Placed = AgvMath::Rotate(CorrectionYaw, Point) + CorrectionOffset;
+		const FVector2D Placed = AgvMath::Rotate(CorrectionYaw, Point) + ScanOffset;
 		LastScanInMap.Add(Placed);
 		LastScanMapped.Add(Map->Sample(Placed) <= InlierDistanceCm);
 	}
-	LastMatchMilliseconds = (float)((FPlatformTime::Seconds() - Start) * 1000.0);
-	MatchMillisecondsSum += LastMatchMilliseconds;
-	bMatchToLog = bLogMatches;
+	RecordMatchTime();
 }
 
 void UAgvForkliftLocalizerComponent::Measure()
@@ -724,6 +889,7 @@ void UAgvForkliftLocalizerComponent::ResetStatistics()
 {
 	ErrorSamples = LostFrames = LostEvents = Reinitializations = 0;
 	AcceptedMatches = RejectedMatches = RecoveredMatches = 0;
+	InnovationRejections = 0;
 	ErrorSum = MatchMillisecondsSum = 0.0;
 	MeanErrorCm = MaxErrorCm = P95ErrorCm = MaxHeadingErrorDeg = 0.f;
 	EncoderMeasuredTrue = EncoderTrueSquared = 0.0;
@@ -1286,3 +1452,59 @@ void UAgvLocalizationSubsystem::DrawFirstPersonPanel(UCanvas* Canvas, UAgvForkli
 		Text(TEXT("map structure blue | scan on map green | unmapped orange | route blue"), PanelMax.Y + 20.0, FLinearColor(0.75f, 0.78f, 0.8f, 1.f));
 	}
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgvLocalizationConfidenceTest, "Warehouse.Localization.GeometryConfidence",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAgvLocalizationConfidenceTest::RunTest(const FString& Parameters)
+{
+    FAgvDistanceMap Map;
+    Map.Origin = FVector2D(-1000, -1000); Map.Width = Map.Height = 400;
+    TArray<bool> Occupied;
+    Occupied.Init(false, Map.Width * Map.Height);
+    for (int32 I = 0; I < 400; ++I) Occupied[I * 400 + 200] = Occupied[60 * 400 + I] = true;
+    Map.BuildFromOccupancy(Occupied);
+    TArray<FVector2D> Points;
+    for (int32 Y = -500; Y <= 700; Y += 20) Points.Add(FVector2D(2.5, Y));
+    const auto Wall = AgvForkliftLoc::ScanConfidence(Map, Points, FVector2D::ZeroVector, 0, 10);
+    TestFalse(TEXT("One wall cannot establish the full pose, even with many inliers"), Wall.FullPose(25));
+    for (int32 X = -500; X <= 700; X += 20) Points.Add(FVector2D(X, -697.5));
+    const auto Corner = AgvForkliftLoc::ScanConfidence(Map, Points, FVector2D::ZeroVector, 0, 10);
+    TestTrue(TEXT("Distributed perpendicular features constrain x/y/yaw"), Corner.FullPose(25));
+    const int32 OriginalInliers = Corner.Inliers;
+    for (int32 I = 0; I < 500; ++I) Points.Add(FVector2D(-500, -400));
+    const auto Foreground = AgvForkliftLoc::ScanConfidence(Map, Points, FVector2D::ZeroVector, 0, 10);
+    TestEqual(TEXT("Unmapped foreground adds no localization information"), Foreground.Inliers, OriginalInliers);
+    TestTrue(TEXT("Visible fixed features remain usable through partial occlusion"), Foreground.FullPose(25));
+    TestTrue(TEXT("Unmapped foreground does not dilute a well-constrained fit"), Foreground.Fits(25));
+    TestFalse(TEXT("A high inlier fraction on one wall cannot replace a full pose fix"), Wall.Fits(25));
+
+    TArray<FVector2D> RecoveryPoints;
+    for (int32 Y = -500; Y <= 700; Y += 10) RecoveryPoints.Add(FVector2D(2.5, Y));
+    for (int32 X = -500; X <= 700; X += 20) RecoveryPoints.Add(FVector2D(X, -697.5));
+    AgvScanMatch::FParams Params;
+    Params.PriorPosition = FVector2D(65, 0);
+    Params.TranslationWeight = 0.001 * FMath::Square(3.0 / 20.0);
+    Params.RotationWeight = 20.0;
+    double X = 65, Y = 0, Yaw = 0;
+    const double InitialRatio = AgvScanMatch::Refine(Map, RecoveryPoints, Params, X, Y, Yaw);
+    TestTrue(TEXT("An initial pose beyond the distance cap needs a recovery seed"), InitialRatio < 0.5 && X > 50);
+    bool bRecovered = false;
+    for (int32 I = 0; I < 8; ++I)
+    {
+        FVector2D Seed = Params.PriorPosition + AgvForkliftLoc::RecoveryOffset(I);
+        double Th = 0;
+        AgvScanMatch::Refine(Map, RecoveryPoints, Params, Seed.X, Seed.Y, Th);
+        const auto Quality = AgvForkliftLoc::ScanConfidence(Map, RecoveryPoints, Seed, Th, 10);
+        if (Quality.Fits(25) && AgvScanMatch::AcceptInnovation(Seed-Params.PriorPosition, Th, 20, 0.02))
+            bRecovered |= Seed.Size() < 8;
+    }
+    TestTrue(TEXT("Bounded translation seeds recover a legitimate 65cm drift using visible geometry"), bRecovered);
+    Map.Origin += FVector2D(100000, -200000);
+    const auto Far = AgvForkliftLoc::ScanConfidence(Map, Points, FVector2D(100000, -200000), 0, 10);
+    TestTrue(TEXT("Confidence independent of global origin"), FMath::Abs(Far.Translation-Corner.Translation)<1e-6 && FMath::Abs(Far.Heading-Corner.Heading)<1e-6);
+    return true;
+}
+#endif

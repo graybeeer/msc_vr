@@ -134,7 +134,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="0", ClampMax="1"))
 	float MinInlierRatio = 0.5f;
 
-	/** Fewest voxelized points for a match. */
+	/** Ordinary point floor. A fully constrained sparse scan can use half, with extra geometry checks. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Matching", meta=(ClampMin="3"))
 	int32 MinMatchPoints = 50;
 
@@ -187,6 +187,10 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
 	float LastCorrectionCm = 0.f;
+
+	/** Scan correction rejected for contradicting the wheel/gyro prediction. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
+	int32 InnovationRejections = 0;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
 	float TravelSinceMatchCm = 0.f;
@@ -290,6 +294,7 @@ private:
 	// Odometry: reference-point pose in the odometry frame (cm, rad).
 	FVector2D OdomPosition = FVector2D::ZeroVector;
 	double OdomYaw = 0.0;
+	double TurnSinceMatchRad = 0.0;
 
 	// Correction map <- odometry: map = Rotate(CorrectionYaw) * odometry + CorrectionOffset.
 	FVector2D CorrectionOffset = FVector2D::ZeroVector;

@@ -30,6 +30,11 @@ namespace AgvScanMatch
 		/** Final width of the robust weight: points farther than this from the map have no pull. */
 		double RobustScaleCm = 8.0;
 		int32 Iterations = 20;
+		/** Optional odometry prior. Weights are per scan point, independent of the return count. */
+		FVector2D PriorPosition = FVector2D::ZeroVector;
+		double PriorYaw = 0.0;
+		double TranslationWeight = 0.0;
+		double RotationWeight = 0.0;
 	};
 
 	/** One point per voxel so dense nearby surfaces do not outweigh far ones. */
@@ -40,4 +45,7 @@ namespace AgvScanMatch
 	 * Returns the share of points within InlierDistanceCm of a mapped surface after refinement.
 	 */
 	double Refine(const FAgvDistanceMap& Map, const TArray<FVector2D>& Points, const FParams& Params, double& Tx, double& Ty, double& Th);
+
+	/** Prediction-relative gate; ground-truth pose and actual body velocity are deliberately not inputs. */
+	bool AcceptInnovation(const FVector2D& Delta, double DeltaYaw, double PositionSigmaCm, double YawSigmaRad);
 }

@@ -73,6 +73,8 @@ public:
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") EWarehouseAIState AIState = EWarehouseAIState::Off;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") FWarehouseWorkOrder ActiveJob;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") TArray<FWarehouseRoutePoint> PlannedRoute;
+ /** Planning padding only; native collision shapes and scanner protection are never reduced. */
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Autonomy") float RouteClearanceCm=25.f;
  // AGV LiDAR localization selected from feature/forklift-navigation (main integration 2026-10-31).
  // Enabled for autonomous route travel; remote input never uses this estimate.
  // Route travel and the planning start use the estimate; precise alignment, docking and the last 80cm keep the exact pose.
@@ -195,6 +197,10 @@ private:
  FTransform TaskSourcePose() const;
  UPROPERTY(Transient) TObjectPtr<AWarehouseFleetCoordinator> FleetCoordinator;
  bool bPlanningRoute=false,bAvoidTrafficReservations=false,bTrafficEscape=false;
+ bool TryPlanAutonomousRoute(const FTransform& Goal,float ClearanceCm);
+ float PlanningClearanceCm=25.f;
+ int32 ClearanceSpeedSnapshot=INDEX_NONE;
+ bool bNarrowSpeed=true;
  // Valid only within one synchronous game-thread PlanAutonomousRoute call.
  TOptional<bool> PlanningSensorReadiness;
  bool bObservedPickupEscape=false;

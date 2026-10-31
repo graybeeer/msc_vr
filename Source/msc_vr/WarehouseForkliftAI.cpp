@@ -31,6 +31,10 @@ static uint32 WarehouseNavigationQueryCount=0;
 
 static TAutoConsoleVariable<int32> CVarWarehouseGeometryPruning(TEXT("Warehouse.NavigationGeometryPruning"),1,
  TEXT("Reject unexecutable curves before native collision queries; 0 preserves the reference query order."));
+static TAutoConsoleVariable<int32> CVarWarehouseAdaptiveClearance(TEXT("Warehouse.AdaptiveClearance"),1,
+ TEXT("Retry failed autonomous travel plans with 10cm then 3cm padding; retain all actual contacts and slow in narrow space."));
+static TAutoConsoleVariable<int32> CVarWarehouseHandlingStage(TEXT("Warehouse.Handling.Stage"),1,
+ TEXT("Handling A/B: 0 original; 1 load-relative floor docking (default)."));
 
 // Each synchronous plan owns its query setup; every native collision check stays live.
 struct FWarehouseNavigationQuery
@@ -271,7 +275,7 @@ FWarehouseNavigationQuery AWarehouseForklift::BuildNavigationQuery() const
  // track an obstacle-hugging curve with zero clearance. Fork alignment keeps
  // its real insertion geometry, without this travel-only margin.
  if (bPlanningRoute && AIState!=EWarehouseAIState::AlignVehicle)
-  Query.Envelope=Query.Envelope.ExpandBy(FVector(25,25,0));
+  Query.Envelope=Query.Envelope.ExpandBy(FVector(PlanningClearanceCm,PlanningClearanceCm,0));
  if (Query.bHasPivot)
   Query.Pivot=GetActorTransform().InverseTransformPosition((Wheels[1]->GetComponentLocation()+Wheels[2]->GetComponentLocation())*.5);
  return Query;
@@ -449,6 +453,25 @@ bool AWarehouseForklift::ConnectLanePoses(const FTransform& Start,const FTransfo
 }
 bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
 {
+ const bool Precision=AIState==EWarehouseAIState::AlignVehicle;
+ const bool Adaptive=CVarWarehouseAdaptiveClearance.GetValueOnGameThread()!=0 && !Precision &&
+  !IsRemoteControlled() && SensorMode==EWarehouseSensorMode::Autonomous;
+ for (float Margin : {25.f,10.f,3.f})
+ {
+  if (Margin<25.f && !Adaptive) break;
+  if (TryPlanAutonomousRoute(Goal,Margin))
+  {
+   RouteClearanceCm=Precision ? 0.f : Margin;
+   ClearanceSpeedSnapshot=INDEX_NONE;bNarrowSpeed=true;
+   if (Adaptive && Margin<25.f)
+    ReportJob(TEXT("CLEARANCE"),FString::Printf(TEXT("좁은 통로: 계획 여유 %.0fcm · 좁은 구간 0.3m/s 이하"),Margin));
+   return true;
+  }
+ }
+ return false;
+}
+bool AWarehouseForklift::TryPlanAutonomousRoute(const FTransform& Goal,float ClearanceCm)
+{
  RouteObstacleSnapshot=INDEX_NONE;
  if (IsRemoteControlled() || SensorMode!=EWarehouseSensorMode::Autonomous)
  {
@@ -461,6 +484,7 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  ON_SCOPE_EXIT { CSV_CUSTOM_STAT(Warehouse,NavigationQueries,int32(WarehouseNavigationQueryCount-QueryStart),ECsvCustomStatOp::Accumulate); };
  if (!FleetCoordinator) FleetCoordinator=AWarehouseFleetCoordinator::Find(this);
  TGuardValue<bool> Planning(bPlanningRoute,true);
+ TGuardValue<float> Margin(PlanningClearanceCm,ClearanceCm);
  // No game-thread sensor/layout/time update can interleave this synchronous
  // search. Restore the optional on every exit; never reuse it in another tick.
  TGuardValue<TOptional<bool>> Readiness(PlanningSensorReadiness,TOptional<bool>(AutonomousSensorsReady()));
@@ -481,6 +505,9 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
     NavigationClear(GetActorTransform(),&Query),NavigationClear(Goal,&Query));
  };
  PlannedRoute.Reset(); RouteIndex=0;bEndpointDriving=false;bEndpointOrienting=false;bRouteTurning=false;EndpointSegment=-1;
+ // A blocked endpoint cannot be reached by this envelope. Preserve the
+ // existing short swept departure from a start that only its padding overlaps.
+ if (!NavigationClear(Goal,&Query)) return false;
  float DirectCost;
  if (ConnectLanePoses(StartPose,Goal,PlannedRoute,DirectCost,&Query)) { Found=true;return true; }
  // Pose graph: each edge is a swept, curvature-limited cubic. Anchors describe warehouse travel lanes.
@@ -602,6 +629,32 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
 bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
 {
  if (PlannedRoute.IsEmpty()) { BrakeDrive(); return true; }
+ if (RouteClearanceCm>0.f && RouteClearanceCm<25.f && SensorKit && !IsRemoteControlled())
+ {
+  if (ClearanceSpeedSnapshot!=SensorKit->SnapshotCount)
+  {
+   ClearanceSpeedSnapshot=SensorKit->SnapshotCount;
+   const auto Query=BuildNavigationQuery();
+   const FBox Wide=NavigationEnvelope().ExpandBy(FVector(25,25,0));
+   bNarrowSpeed=!PerceivedBoxClear(NavigationTransform(),Wide,Query.PerceptionIgnored);
+   const float Cruise=bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(180.f,EmptyTravelSpeedCm);
+   const float Forecast=Cruise*1.1f+Cruise*Cruise/100.f+20.f;
+   const FTransform CurrentPose=NavigationTransform();
+   FVector Previous=CurrentPose.GetLocation();float Covered=0;int32 Checks=0,I=FMath::Max(0,RouteIndex);
+   FTransform LastChecked=CurrentPose;
+   for (;!bNarrowSpeed && I<PlannedRoute.Num() && Covered<Forecast && Checks<80;++I)
+   {
+    Covered+=FVector::Dist2D(Previous,PlannedRoute[I].Pose.GetLocation());
+    Previous=PlannedRoute[I].Pose.GetLocation();
+    if (I+1<PlannedRoute.Num() && FVector::Dist2D(Previous,LastChecked.GetLocation())<10.f &&
+        FMath::Abs(FMath::FindDeltaAngleDegrees(LastChecked.Rotator().Yaw,PlannedRoute[I].Pose.Rotator().Yaw))<2.f) continue;
+    ++Checks;LastChecked=PlannedRoute[I].Pose;
+    bNarrowSpeed=!PerceivedBoxClear(LastChecked,Wide,Query.PerceptionIgnored);
+   }
+   if (Checks>=80 && Covered<Forecast && I<PlannedRoute.Num()) bNarrowSpeed=true;
+  }
+  if (bNarrowSpeed) Speed=FMath::Min(Speed,30.f);
+ }
  // A temporary traffic retreat is a normal lane stop, even when it interrupts
  // a charging trip. It must not use the electrical approach's precision phase.
  const bool ChargingAlignment=!bTrafficYielding &&
@@ -1409,6 +1462,47 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
     else BeginRecovery(EWarehouseAIState::AlignUnload,TEXT("FLOOR LOAD ALIGNMENT OUTSIDE SLOT"));
    }
    break;
+  }
+  if (CVarWarehouseHandlingStage.GetValueOnGameThread()>=1 && DropHeight<=5.f && Wheels.Num()>=3)
+  {
+   // The existing precision sensor proxy measures load-to-truck pose. Follow a fixed
+   // docking heading while correcting the sensed load shift, rather than pivoting a
+   // loose pallet back and forth at the last centimetre of an old vehicle-only goal.
+   const FTransform Relative=TargetPallet->GetActorTransform().GetRelativeTransform(GetActorTransform());
+   const FRotator Heading(0,ActiveJob.Destination.Rotator().Yaw-Relative.Rotator().Yaw,0);
+   FVector Point=ActiveJob.Destination.GetLocation()-Heading.RotateVector(Relative.GetLocation());Point.Z=Ground;
+   const FTransform Goal(Heading,Point);
+   const FVector Error=Point-GetActorLocation();
+   const float Along=FVector::DotProduct(Error,Heading.Vector());
+   const float Side=FVector::DotProduct(Error,Goal.GetUnitAxis(EAxis::Y));
+   const float YawError=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,Heading.Yaw));
+   if (FMath::Abs(Side)<=8.f && FMath::Abs(YawError)<=FMath::DegreesToRadians(3.f) && Along>=-15.f && Along<=200.f)
+   {
+    bRouteStarted=false;
+    if (FleetCoordinator && !FleetCoordinator->Permit(this,&Goal)) break;
+    if (FMath::Abs(Along)<.7f)
+    {
+     BrakeDrive();
+     if (FMath::Abs(CurrentSpeedCm)<1.f && ChassisBody->GetPhysicsAngularVelocityInDegrees().Size()<.5f)
+     {
+      if (FMath::Abs(YawError)>FMath::DegreesToRadians(.35f))
+       CommandTurn(FMath::Sign(YawError)*FMath::Clamp(FMath::Abs(YawError),.015f,.08f),Dt);
+      else BeginRecovery(EWarehouseAIState::AlignUnload,TEXT("FLOOR LOAD ALIGNMENT OUTSIDE SLOT"));
+     }
+     break;
+    }
+    const FVector Axle=(Wheels[1]->GetComponentLocation()+Wheels[2]->GetComponentLocation())*.5f;
+    const FVector LocalAxle=GetActorTransform().InverseTransformPosition(Axle);
+    const float Cross=FVector::DotProduct(Goal.TransformPosition(LocalAxle)-Axle,Goal.GetUnitAxis(EAxis::Y));
+    const float Sign=Along<0.f ? -1.f : 1.f;
+    constexpr float LookAhead=35.f;
+    const float DesiredYaw=Heading.Yaw+FMath::RadiansToDegrees(FMath::Atan(Sign*Cross/LookAhead));
+    const float Turn=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,DesiredYaw));
+    const float Curvature=Sign*FMath::Clamp(Turn/LookAhead,-1.f/FMath::Max(117.3f,MinimumTurningRadiusCm),1.f/FMath::Max(117.3f,MinimumTurningRadiusCm));
+    TGuardValue<float> Precision(SensorPrecisionDistanceCm,FMath::Abs(Along));
+    CommandDrive(Sign*FMath::Min(10.f,FMath::Abs(Along)*1.2f),Curvature,Dt);
+    break;
+   }
   }
   if (ActiveJob.bRackDestination && DropHeight>5 && RackLoadAligned() &&
       FVector::Dist2D(TargetPallet->GetActorLocation(),ActiveJob.Destination.GetLocation())<=2.f)
