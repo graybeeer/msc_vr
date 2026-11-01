@@ -21,6 +21,8 @@ class UTexture2D;
  *    with calibration errors and noise;
  *  - scans: the returns of the vehicle's own one-second LiDAR snapshot (UAgvShadowSensorsComponent);
  *  - map: the sensor kit's known map (building structure and fixed racks), rebuilt when that map changes.
+ * Raw wheel/gyro samples are buffered, then integrated at the configured prediction rate (50 Hz target,
+ * capped by the game frame rate). Scans remain one second and are matched at their capture time.
  * Each new snapshot is matched to the 2D distance map and the odometry is corrected. The estimate is compared with
  * the exact pose to measure the error. Autonomous route travel uses the estimate; precise docking stays native.
  */
@@ -42,7 +44,7 @@ public:
 
 	/**
 	 * The actor transform the estimate implies (x, y, yaw estimated; height, pitch and roll as they are). This is the
-	 * driving estimate: scan corrections reach it at a limited rate so the steering does not jump. False when lost,
+	 * driving estimate: bounded corrections are applied on prediction updates and held until the next. False when lost,
 	 * unless bEvenIfLost (the dead-reckoned guess, for planning a stop).
 	 */
 	bool GetEstimatedActorTransform(FTransform& Out, bool bEvenIfLost = false) const;
@@ -233,6 +235,13 @@ public:
 	/** Re-initialisations to the exact pose (elevator ride, relocation by the layout editor). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Error")
 	int32 Reinitializations = 0;
+	/** Published odometry/scan updates. Raw encoder/gyro readings are buffered between updates. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
+	int32 PredictionUpdates = 0;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
+	double LastPredictionSeconds = -1.0;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
+	float LastPredictionDeltaSeconds = 0.f;
 
 	/** Measured / actual reference-point travel (least squares). About 1 when the encoder model is right. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Error")
@@ -247,7 +256,14 @@ public:
 
 private:
 	bool ResolveParts();
-	void StepOdometry(float Dt);
+	struct FOdometrySample
+	{
+		float Dt;
+		double RimRate, Steer, LoadRate, GyroRate;
+		double TrueTravel, TrueSide; // Diagnostics only; never used to predict the pose.
+	};
+	void CaptureOdometry(float Dt);
+	void StepOdometry(const FOdometrySample& Sample);
 	void CollectAndMatchScan();
 	bool EnsureMap();
 	void Measure();
@@ -279,6 +295,9 @@ private:
 	float MatchAcrossCm = 0.f;
 	bool bNoMap = false;
 	float LastDt = 0.f;
+	TArray<FOdometrySample> PendingOdometry;
+	double PendingOdometrySeconds = 0.0;
+	double PredictionClockSeconds = 0.0;
 	double WheelRadiusCm = 15.f;
 
 	/** Fixed load-wheel axle middle in the actor frame (cm): the point that moves without side slip. */

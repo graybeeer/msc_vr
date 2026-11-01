@@ -4,6 +4,7 @@
 #include "AgvShadowSensors.h"
 #include "WarehouseForklift.h"
 #include "WarehouseAutonomyTypes.h"
+#include "WarehousePerformance.h"
 #include "CanvasItem.h"
 #include "Components/PrimitiveComponent.h"
 #include "Debug/DebugDrawService.h"
@@ -26,11 +27,15 @@ namespace AgvForkliftLoc
 	// Error histogram for the 95th percentile: 0.5 cm bins up to 200 cm, the last bin holds the rest.
 	constexpr double BinCm = 0.5;
 	constexpr int32 Bins = 401;
+	static TAutoConsoleVariable<float> PredictionHz(TEXT("Warehouse.Localization.PredictionHz"),50.f,
+		TEXT("Motion prediction target Hz (1..200), at most once per game frame. Scans remain 1 Hz; 2 compares the previous half-second setting."));
 	// Staged A/B verification. Sensor snapshots and physical driving are unchanged at every level.
 	static TAutoConsoleVariable<int32> FilterLevel(TEXT("Warehouse.Localization.FilterLevel"), 3,
 		TEXT("Localization A/B: 0 original, 1 motion prior/gate, 2 geometry confidence, 3 bounded recovery."), ECVF_Default);
 	static TAutoConsoleVariable<float> PriorWeight(TEXT("Warehouse.Localization.PriorWeight"), 0.001f,
 		TEXT("Odometry regularization scale for measured localization tuning; independent of the innovation gate."), ECVF_Default);
+	static TAutoConsoleVariable<float> StraightGraceCm(TEXT("Warehouse.Localization.StraightGraceCm"),0.f,
+		TEXT("Optional odometry allowance, cm (maximum 2000); accumulated gyro turns of 60 degrees retain the normal loss limit. 0 is reference."));
 
 	struct FScanConfidence
 	{
@@ -242,6 +247,11 @@ void UAgvForkliftLocalizerComponent::InitializePose()
 	CorrectionYaw = DrivingYaw = 0.0;
 	TravelSinceMatchCm = 0.f;
 	TurnSinceMatchRad = 0.0;
+	PendingOdometry.Reset();
+	PendingOdometrySeconds = 0.0;
+	PredictionClockSeconds = 0.0;
+	LastPredictionSeconds = -1.0;
+	LastPredictionDeltaSeconds = 0.f;
 	LastTrueLocation = Actor.GetLocation();
 	// A snapshot already taken belongs to the old pose.
 	SeenSnapshot = SensorKit ? SensorKit->SnapshotCount : -1;
@@ -332,6 +342,7 @@ double UAgvForkliftLocalizerComponent::Gauss()
 
 void UAgvForkliftLocalizerComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
+	CSV_SCOPED_TIMING_STAT(Warehouse, LocalizationTick);
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	if (!ResolveParts())
 	{
@@ -343,6 +354,9 @@ void UAgvForkliftLocalizerComponent::TickComponent(float DeltaTime, ELevelTick T
 	{
 		bWasRemote = true;
 		LastDt = 0.f;
+		PendingOdometry.Reset();
+		PendingOdometrySeconds = 0.0;
+		PredictionClockSeconds = 0.0;
 		StatusText = TEXT("REMOTE - LOCALIZATION SUSPENDED");
 		return;
 	}
@@ -366,6 +380,9 @@ void UAgvForkliftLocalizerComponent::TickComponent(float DeltaTime, ELevelTick T
 	if (Forklift->AIState == EWarehouseAIState::ElevatorRide)
 	{
 		bRiding = true;
+		PendingOdometry.Reset();
+		PendingOdometrySeconds = 0.0;
+		PredictionClockSeconds = 0.0;
 	}
 	else
 	{
@@ -380,9 +397,31 @@ void UAgvForkliftLocalizerComponent::TickComponent(float DeltaTime, ELevelTick T
 		else if (LastDt > 0.f)
 		{
 			// The state read now is the result of the physics step that ran for the previous frame's time.
-			StepOdometry(LastDt);
-			CollectAndMatchScan();
-			SlewDrivingCorrection(LastDt);
+			CaptureOdometry(LastDt);
+			const double Now = GetWorld()->GetTimeSeconds();
+			const bool NewScanNow = SensorKit && SensorKit->bSnapshotValid && SensorKit->SnapshotCount!=SeenSnapshot &&
+				FMath::Abs(SensorKit->LastSnapshotSeconds-Now)<KINDA_SMALL_NUMBER;
+			const double Period = 1.0/FMath::Clamp(AgvForkliftLoc::PredictionHz.GetValueOnGameThread(),1.f,200.f);
+			PredictionClockSeconds += LastDt;
+			const bool Due = PredictionClockSeconds>=Period-KINDA_SMALL_NUMBER;
+			// Prediction has its own clock. A new observation is matched at its
+			// actual capture time, without reusing an old scan or fabricating sub-frame readings.
+			if (Due || NewScanNow)
+			{
+				const float Window = float(PendingOdometrySeconds);
+				{
+					CSV_SCOPED_TIMING_STAT(Warehouse, MotionPrediction);
+					for (const FOdometrySample& Sample : PendingOdometry) StepOdometry(Sample);
+					PendingOdometry.Reset();PendingOdometrySeconds=0.0;
+				}
+				// Keep the fractional deadline at 60 Hz (50 Hz need not divide it).
+				// A late frame consumes all readings once, never a catch-up burst.
+				if (Due) PredictionClockSeconds=FMath::Fmod(FMath::Max(PredictionClockSeconds,Period),Period);
+				if (NewScanNow) CollectAndMatchScan();
+				SlewDrivingCorrection(Window);
+				++PredictionUpdates;LastPredictionSeconds=Now;LastPredictionDeltaSeconds=Window;
+				CSV_CUSTOM_STAT(Warehouse, PredictionUpdates, 1, ECsvCustomStatOp::Accumulate);
+			}
 		}
 		if (Forklift->IsRemoteControlled() || bNoMap)
 		{
@@ -390,9 +429,13 @@ void UAgvForkliftLocalizerComponent::TickComponent(float DeltaTime, ELevelTick T
 			// the session decide again, instead of a fault the moment the vehicle returns to autonomous work.
 			TravelSinceMatchCm = 0.f;
 		}
-		if (TravelSinceMatchCm > LostAfterTravelCm && !bLost)
+		// Wheel/gyro-only grace on a nearly straight leg. No true position/error is
+		// used to extend the budget; turns retain the original loss interlock.
+		const float Grace=FMath::Clamp(AgvForkliftLoc::StraightGraceCm.GetValueOnGameThread(),0.f,2000.f);
+		const float LossLimit=TurnSinceMatchRad<FMath::DegreesToRadians(60.f) ? FMath::Max(LostAfterTravelCm,Grace) : LostAfterTravelCm;
+		if (TravelSinceMatchCm > LossLimit && !bLost)
 		{
-			UE_LOG(LogAgvForkliftLoc, Warning, TEXT("AGV_LOC_LOST %s after %.0f cm without a LiDAR match"), *Forklift->GetName(), TravelSinceMatchCm);
+			UE_LOG(LogAgvForkliftLoc, Warning, TEXT("AGV_LOC_LOST %s after %.0f cm without a LiDAR match (limit %.0f cm, gyro turn %.1f deg)"), *Forklift->GetName(), TravelSinceMatchCm,LossLimit,FMath::RadiansToDegrees(TurnSinceMatchRad));
 			bLost = true;
 			++LostEvents;
 		}
@@ -411,7 +454,7 @@ void UAgvForkliftLocalizerComponent::TickComponent(float DeltaTime, ELevelTick T
 	LastDt = DeltaTime;
 }
 
-void UAgvForkliftLocalizerComponent::StepOdometry(float Dt)
+void UAgvForkliftLocalizerComponent::CaptureOdometry(float Dt)
 {
 	const FTransform Actor = Forklift->GetActorTransform();
 	const FVector Up = Actor.GetUnitAxis(EAxis::Z);
@@ -425,11 +468,10 @@ void UAgvForkliftLocalizerComponent::StepOdometry(float Dt)
 	const FVector Roll = FVector::CrossProduct(Axle, Up).GetSafeNormal();
 	// Steering encoder: the rolling direction in the vehicle frame (0 = straight ahead, 90 deg = turning on the spot).
 	const double Steer = FMath::Atan2(FVector::DotProduct(Roll, Right), FVector::DotProduct(Roll, Forward)) + FMath::DegreesToRadians((double)SteerOffsetDeg);
-	const double Rim = Spin * WheelRadiusCm * Dt * (1.0 + WheelRadiusErrorPercent / 100.0) * (1.0 + Gauss() * EncoderNoisePercent / 100.0);
+	FOdometrySample Sample{Dt,Spin*WheelRadiusCm,Steer,0.0,FVector::DotProduct(Body->GetPhysicsAngularVelocityInRadians(),Up),0.0,0.0};
 	// Travel of the load-wheel axle: from the free-rolling load wheels' encoders (they neither spin under drive torque
 	// nor lock under the brake, which put 6-26 cm between one-second scans with the drive wheel, 2026-10-27), else
 	// the drive wheel's forward share.
-	double Measured = Rim * FMath::Cos(Steer);
 	if (bLoadWheelEncoders && LoadWheels.Num() == 2 && LoadWheels[0] && LoadWheels[1])
 	{
 		double Sum = 0.0;
@@ -439,11 +481,25 @@ void UAgvForkliftLocalizerComponent::StepOdometry(float Dt)
 			const double WheelSpin = FVector::DotProduct(Wheel->GetPhysicsAngularVelocityInRadians() - Body->GetPhysicsAngularVelocityInRadians(), WheelAxle);
 			Sum += WheelSpin * LoadWheelRadiusCm * FVector::DotProduct(FVector::CrossProduct(WheelAxle, Up).GetSafeNormal(), Forward);
 		}
-		Measured = Sum * 0.5 * Dt * (1.0 + WheelRadiusErrorPercent / 100.0) * (1.0 + Gauss() * EncoderNoisePercent / 100.0);
+		Sample.LoadRate=Sum*0.5;
 	}
+	const FVector ReferenceWorld = Actor.TransformPosition(FVector(ReferenceOffset,0.0));
+	Sample.TrueTravel=FVector::DotProduct(Body->GetPhysicsLinearVelocityAtPoint(ReferenceWorld),Forward)*Dt;
+	Sample.TrueSide=FVector::DotProduct(Body->GetPhysicsLinearVelocityAtPoint(ReferenceWorld),Right)*Dt;
+	PendingOdometry.Add(Sample);PendingOdometrySeconds+=Dt;
+}
+
+void UAgvForkliftLocalizerComponent::StepOdometry(const FOdometrySample& Sample)
+{
+	const float Dt=Sample.Dt;
+	const double Steer=Sample.Steer;
+	const double Rim=Sample.RimRate*Dt*(1.0+WheelRadiusErrorPercent/100.0)*(1.0+Gauss()*EncoderNoisePercent/100.0);
+	double Measured=Rim*FMath::Cos(Steer);
+	if (bLoadWheelEncoders && LoadWheels.Num()==2 && LoadWheels[0] && LoadWheels[1])
+		Measured=Sample.LoadRate*Dt*(1.0+WheelRadiusErrorPercent/100.0)*(1.0+Gauss()*EncoderNoisePercent/100.0);
 
 	// Yaw-rate gyro with bias and angle random walk; held at standstill (zero-velocity update).
-	const double Rate = FVector::DotProduct(Body->GetPhysicsAngularVelocityInRadians(), Up) + FMath::DegreesToRadians((double)GyroBiasDegS);
+	const double Rate = Sample.GyroRate + FMath::DegreesToRadians((double)GyroBiasDegS);
 	double TurnRad = Rate * Dt + FMath::DegreesToRadians((double)GyroNoiseDegSqrtS) * FMath::Sqrt((double)Dt) * Gauss();
 	if (FMath::Abs(Measured) < 0.01 && FMath::Abs(TurnRad) < FMath::DegreesToRadians((double)StandstillGyroDegS) * Dt)
 	{
@@ -459,12 +515,11 @@ void UAgvForkliftLocalizerComponent::StepOdometry(float Dt)
 	TurnSinceMatchRad += FMath::Abs(TurnRad);
 
 	// Diagnostic: measured against the actual travel of the reference point (sign and scale of the encoder model).
-	const FVector ReferenceWorld = Actor.TransformPosition(FVector(ReferenceOffset, 0.0));
-	const double TrueTravel = FVector::DotProduct(Body->GetPhysicsLinearVelocityAtPoint(ReferenceWorld), Forward) * Dt;
+	const double TrueTravel = Sample.TrueTravel;
 	EncoderMeasuredTrue += Measured * TrueTravel;
 	EncoderTrueSquared += TrueTravel * TrueTravel;
 	EncoderScale = EncoderTrueSquared > 1.0 ? (float)(EncoderMeasuredTrue / EncoderTrueSquared) : 0.f;
-	const double TrueSide = FVector::DotProduct(Body->GetPhysicsLinearVelocityAtPoint(ReferenceWorld), Right) * Dt;
+	const double TrueSide = Sample.TrueSide;
 	SideMeasuredTrue += Side * TrueSide;
 	SideTrueSquared += TrueSide * TrueSide;
 	SideSlipScale = SideTrueSquared > 1.0 ? (float)(SideMeasuredTrue / SideTrueSquared) : 0.f;
@@ -586,6 +641,7 @@ bool UAgvForkliftLocalizerComponent::EnsureMap()
 
 void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 {
+	CSV_SCOPED_TIMING_STAT(Warehouse, LocalizationScanMatch);
 	// Scans come from the vehicle's one-second observation snapshot (all five LiDARs); none while the observation frame
 	// is suspended (remote control, elevator ride, power, scanner fault).
 	if (!SensorKit || !SensorKit->bSnapshotValid || SensorKit->SnapshotCount == SeenSnapshot)
@@ -888,6 +944,7 @@ void UAgvForkliftLocalizerComponent::Measure()
 void UAgvForkliftLocalizerComponent::ResetStatistics()
 {
 	ErrorSamples = LostFrames = LostEvents = Reinitializations = 0;
+	PredictionUpdates = 0;
 	AcceptedMatches = RejectedMatches = RecoveredMatches = 0;
 	InnovationRejections = 0;
 	ErrorSum = MatchMillisecondsSum = 0.0;

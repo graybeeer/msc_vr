@@ -594,7 +594,7 @@ def tick(dt):
         if not game:
             assert wall-phase_wall < 30, 'PIE world failed to start'
             return
-        assert wall-phase_wall < (1000 if CASES[index]['kind'] == 'saved' else 300), 'Case wall-clock limit exceeded'
+        assert wall-phase_wall < CASES[index].get('wall_limit',1000 if CASES[index]['kind'] == 'saved' else 300), 'Case wall-clock limit exceeded'
         now = unreal.GameplayStatics.get_time_seconds(game)
         definition = CASES[index]
         assert now < definition['limit'], ('Case simulation timeout', [live[name].status for name in runtime['vehicles']] if live else None)

@@ -2,6 +2,8 @@
 
 Run via the serial editor host with -HitchProfileLabel=<unique name>.
 Uses the saved fleet, physics, orders and 1x clock without saving the map.
+Optional -HitchPredictionHz=2/50 and -HitchPhaseSeconds=20 compare prediction
+cost. -HitchStartFleet starts the fleet through the ordinary public command.
 Warmup is recorded explicitly; this is a performance sample, not a job test.
 """
 import csv
@@ -16,6 +18,13 @@ command = unreal.SystemLibrary.get_command_line()
 match = re.search(r'-HitchProfileLabel=([A-Za-z0-9_-]+)', command, re.I)
 assert match, 'A unique -HitchProfileLabel is required'
 label = match.group(1)
+rate_match = re.search(r'-HitchPredictionHz=([0-9.]+)', command, re.I)
+prediction_hz = float(rate_match.group(1)) if rate_match else None
+duration_match = re.search(r'-HitchPhaseSeconds=([0-9.]+)', command, re.I)
+phase_seconds = float(duration_match.group(1)) if duration_match else 40.
+assert prediction_hz is None or 1 <= prediction_hz <= 200
+assert 15 <= phase_seconds <= 120
+start_fleet = '-hitchstartfleet' in command.lower()
 saved = Path(unreal.Paths.project_saved_dir()).resolve()
 out = saved / 'Testing' / 'PeriodicHitches'
 out.mkdir(parents=True, exist_ok=True)
@@ -24,9 +33,14 @@ assert not capture.exists(), 'Use a new label; previous captures are preserved'
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 assert not editor.get_game_world(), 'Stop PIE before profiling'
+if prediction_hz is not None:
+    unreal.SystemLibrary.execute_console_command(editor.get_editor_world(),
+        'Warehouse.Localization.PredictionHz ' + str(prediction_hz))
+    unreal.SystemLibrary.execute_console_command(editor.get_editor_world(), 'Log LogAgvForkliftLoc Error')
 assert level.load_level('/Game/FirstPerson/Lvl_FirstPerson')
 unreal.get_default_object(unreal.load_class(None, '/Script/UnrealEd.EditorPerformanceSettings')).set_editor_property('bThrottleCPUWhenNotForeground', False)
 report = dict(label=label, command=command, phases=[], samples=[], sensor_updates=[],
+              prediction_updates=[], prediction_hz=prediction_hz, phase_seconds=phase_seconds, start_fleet=start_fleet,
               callback_gaps=[], map_saved=False, physics_modified=False, requested_speed=1)
 started = time.monotonic()
 game = pc = fleet = None
@@ -36,6 +50,7 @@ last_sim = -1.
 last_wall = None
 last_sample = -10.
 last_sensor_counts = {}
+last_prediction_counts = {}
 pending = None
 capture_size = None
 capture_stable = 0.
@@ -105,6 +120,9 @@ def tick(delta):
             fleet = sorted(unreal.GameplayStatics.get_all_actors_of_class(game, unreal.WarehouseForklift), key=lambda v: v.get_name())
             assert fleet, 'Saved warehouse has no vehicles'
             assert pc.set_simulation_speed(1)
+            if start_fleet:
+                directors = unreal.GameplayStatics.get_all_actors_of_class(game, unreal.WarehouseFocusDirector)
+                assert len(directors) == 1 and directors[0].set_fleet_running(True), 'Fleet start command failed'
             report['actors'] = len(unreal.GameplayStatics.get_all_actors_of_class(game, unreal.Actor))
             report['cargo'] = len(unreal.GameplayStatics.get_all_actors_of_class(game, unreal.WarehouseCargo))
             report['pallets'] = len(unreal.GameplayStatics.get_all_actors_of_class(game, unreal.WarehousePallet))
@@ -118,17 +136,23 @@ def tick(delta):
             unreal.SystemLibrary.execute_console_command(game, 'csvprofile startfile=Warehouse_' + label, pc)
             unreal.SystemLibrary.execute_console_command(game, 'csvprofile start', pc)
             enter('first_person', now)
-        elif phase == 'first_person' and now-phase_start >= 40:
+        elif phase == 'first_person' and now-phase_start >= phase_seconds:
             pc.toggle_observer_view()
             pc.set_layout_editing(False)
             pc.set_observer_floor(0)
             enter('observer_transition', now)
         elif phase == 'observer_transition' and now-phase_start >= 5:
             enter('observer_floor0', now)
-        elif phase == 'observer_floor0' and now-phase_start >= 40:
+        elif phase == 'observer_floor0' and now-phase_start >= phase_seconds:
             enter('complete', now)
             finish()
         for vehicle in fleet:
+            localizer = vehicle.get_component_by_class(unreal.AgvForkliftLocalizerComponent)
+            if localizer and last_prediction_counts.get(vehicle.get_name()) != localizer.prediction_updates:
+                last_prediction_counts[vehicle.get_name()] = localizer.prediction_updates
+                report['prediction_updates'].append(dict(phase=phase, simulation_seconds=now,
+                    vehicle=vehicle.get_actor_label(), count=localizer.prediction_updates,
+                    window_s=localizer.last_prediction_delta_seconds, error_cm=localizer.error_cm))
             sensor = vehicle.get_component_by_class(unreal.AgvShadowSensorsComponent)
             if not sensor:
                 continue
