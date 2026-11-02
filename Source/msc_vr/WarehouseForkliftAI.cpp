@@ -1415,8 +1415,20 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   const float PalletSide=FMath::Abs(FVector::DotProduct(AlignmentOffset,AlignmentPose.GetUnitAxis(EAxis::Y)));
   // The insertion line itself straightens the last few degrees before the tines reach the pallet; below that the point chase
   // only creeps at 2cm/s (22s for 30cm, 2026-10-30).
-  if (OptAlign ? (PalletSide<=6.f && AlignmentYaw<6.f) : (AlignSide<=5.f && AlignmentYaw<1.5f))
+  if (OptAlign ? (PalletSide<=7.f && AlignmentYaw<6.f) : (AlignSide<=5.f && AlignmentYaw<1.5f))
   {
+   // The tines start about 10cm from the pallet face, too short to steer out a few degrees: entering at 2 degrees caught a tine
+   // and jammed it (2026-11-03). Square up on the spot first; a turn is quick, unlike creeping the point chase into line.
+   if (OptAlign && AlignmentYaw>=1.2f)
+   {
+    BrakeDrive();
+    if (FMath::Abs(CurrentSpeedCm)<1.f)
+    {
+     const float Turn=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,AlignmentPose.Rotator().Yaw));
+     CommandTurn(FMath::Sign(Turn)*FMath::Clamp(FMath::Abs(Turn)*2.f,.02f,.2f),Dt);
+    }
+    break;
+   }
    if (OptAlign && FMath::Abs(AlignAlong)<=3.f)
    {
     BrakeDrive();
