@@ -4,6 +4,8 @@ Run with -BenchGroup=flat -WorkLoads=50 -BenchRepeats=1 -SpeedProfiles=6
 -WorkTopChannels=32 -WorkTopRangeCm=3000 -WorkGraceCm=0 -HandlingStages=1
 -Clearance=1 -PickupRun=name. All scene edits precede PIE; real motors, contacts,
 fork engagement, dynamic freight and final unload perform each transport.
+-ForkCaptureComparison adds a 200kg transport and native engagement checks;
+the rotated case ends after pickup/withdrawal, before its known floor-drop issue.
 """
 from pathlib import Path
 import json,math,re,traceback,unreal
@@ -22,11 +24,15 @@ work['bench']['scope']['out']=out;work['bench']['scope']['scope']['OUT']=out
 env['output']=out/'NativeReport.json'
 base=next(c for c in env['CASES'] if c.get('load_kg')==50)
 scenarios=['normal','closer_standoff','blocked_goal','rotated_pallet']
+capture_comparison='-forkcapturecomparison' in command.lower()
+if capture_comparison:scenarios.insert(1,'normal_200kg')
 env['CASES']=[dict(base,id=base['id']+20000*i,name=name,scenario=name,
-                   expect='deferred' if name=='blocked_goal' else 'transport')
+                   load_kg=200 if name=='normal_200kg' else 50,
+                   expect='deferred' if name=='blocked_goal' else 'pickup' if capture_comparison and name=='rotated_pallet' else 'transport')
               for i,name in enumerate(scenarios)]
 old_setup,old_complete,old_finish=env['setup'],env['complete_case'],env['finish']
 rows=[];defer_at=None;defer_position=None;last_time=-1
+engagement_checks={};capture_poses={}
 
 
 def setup(definition):
@@ -70,7 +76,8 @@ def complete(ok,detail):
 
 def observe(dt):
     global defer_at,defer_position,last_time
-    if not env.get('live') or not env.get('case') or env['case'].get('expectation')!='deferred':return
+    if not env.get('live') or not env.get('case'):return
+    if not capture_comparison and env['case'].get('expectation')!='deferred':return
     if work['bench']['scope']['scope'].get('in_tick'):return
     try:
         game=env['editor'].get_game_world()
@@ -79,6 +86,31 @@ def observe(dt):
         if now==last_time:return
         last_time=now
         vehicle=env['live'][env['jobs'][0]['vehicle']]
+        name=env['CASES'][env['index']]['scenario']
+        if capture_comparison:
+            pallet=env['live'][env['jobs'][0]['pallet']]
+            if name not in engagement_checks:
+                def frame(x=-65,y=0,z=0,yaw=0):
+                    return unreal.MathLibrary.compose_transforms(unreal.Transform(location=unreal.Vector(x,y,z),rotation=unreal.Rotator(yaw=yaw)),pallet.get_actor_transform())
+                checks=dict(valid=pallet.can_engage(frame()),side=pallet.can_engage(frame(y=12)),
+                            yaw=pallet.can_engage(frame(yaw=4)),height=pallet.can_engage(frame(z=2)),
+                            shallow=pallet.can_engage(frame(x=-90)),too_deep=pallet.can_engage(frame(x=-50)))
+                assert checks['valid'] and not any(value for key,value in checks.items() if key!='valid'),checks
+                engagement_checks[name]=checks
+                (out/'EngagementChecks.json').write_text(json.dumps(engagement_checks,indent=2),encoding='utf-8')
+            if name not in capture_poses and vehicle.ai_state==unreal.WarehouseAIState.CORRECT_FORK:
+                target=pallet.get_actor_location()-unreal.MathLibrary.get_forward_vector(pallet.get_actor_rotation())*185
+                offset=target-vehicle.get_actor_location()
+                capture_poses[name]=dict(t=now,side_cm=abs(offset.dot(unreal.MathLibrary.get_right_vector(vehicle.get_actor_rotation()))),
+                    yaw_deg=abs((vehicle.get_actor_rotation().yaw-pallet.get_actor_rotation().yaw+180)%360-180))
+                (out/'CapturePoses.json').write_text(json.dumps(capture_poses,indent=2),encoding='utf-8')
+            if env['case'].get('expectation')=='pickup' and vehicle.ai_state==unreal.WarehouseAIState.TRAVEL_HEIGHT:
+                assert vehicle.get_supported_pallet()==pallet and vehicle.get_load_mass_kg()>0
+                assert pallet.root_component.is_simulating_physics() and vehicle.root_component.is_simulating_physics()
+                assert not vehicle.completed_job_ids,'Pickup-only test must not manufacture completed orders'
+                env['complete_case'](True,'Pickup only: actual insertion, lift and loaded withdrawal; floor delivery excluded')
+                return
+        if env['case'].get('expectation')!='deferred':return
         deferred=next((r for r in vehicle.job_reports if r.result=='DEFERRED'),None)
         if not deferred:return
         assert 'ApproachTestWall' in deferred.detail,('Blocker name missing',deferred.detail)

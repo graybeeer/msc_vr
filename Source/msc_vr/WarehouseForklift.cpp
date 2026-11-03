@@ -490,10 +490,13 @@ bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt,flo
 {
  const FVector Offset=Destination-GetActorLocation();
  const bool ElevatorLine=IsValid(Elevator) && (AIState==EWarehouseAIState::ElevatorCall || AIState==EWarehouseAIState::ElevatorBoard || AIState==EWarehouseAIState::ElevatorExit);
- const float LateralLimit=AIState==EWarehouseAIState::DockCharge ? ChargingDockLateralLimitCm : AIState==EWarehouseAIState::AlignUnload ? 15.f : 5.f;
+ const bool PalletLine=AIState==EWarehouseAIState::AlignVehicle || AIState==EWarehouseAIState::InsertFork;
+ const float LateralLimit=AIState==EWarehouseAIState::DockCharge ? ChargingDockLateralLimitCm : AIState==EWarehouseAIState::AlignUnload ? 15.f :
+  PalletLine ? 7.f : 5.f;
  // A long straight boarding line magnifies a small heading error. Measure
  // corridor departure against the shaft, then steer onto that same line.
- const FVector LateralAxis=ElevatorLine ? Elevator->GetActorRightVector() : GetActorRightVector();
+ // Heading error over a long insertion line is not a lateral miss of the holes.
+ const FVector LateralAxis=ElevatorLine ? Elevator->GetActorRightVector() : PalletLine ? ObservedPallet.GetUnitAxis(EAxis::Y) : GetActorRightVector();
  if (FMath::Abs(FVector::DotProduct(Offset,LateralAxis))>LateralLimit || FMath::Abs(Offset.Z)>3)
  { StopFor(TEXT("ROUTE MISALIGNED")); return false; }
  const float Distance=FVector::DotProduct(Offset,GetActorForwardVector());

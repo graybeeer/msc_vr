@@ -714,7 +714,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  // a charging trip. It must not use the electrical approach's precision phase.
  const bool ChargingAlignment=!bTrafficYielding &&
   (AIState==EWarehouseAIState::NavigateCharge || (AIState==EWarehouseAIState::DockCharge && bDockPullout));
- const float HeadingTolerance=FMath::DegreesToRadians(ChargingAlignment && RouteIndex>=PlannedRoute.Num()-1 ? .2f : AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::ElevatorApproach ? .5f : 1.f);
+ const float HeadingTolerance=FMath::DegreesToRadians(ChargingAlignment && RouteIndex>=PlannedRoute.Num()-1 ? .2f : AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::ElevatorApproach ? .5f : AIState==EWarehouseAIState::AlignVehicle ? 1.5f : 1.f);
  if (FleetCoordinator && !FleetCoordinator->Permit(this)) return false;
  RouteIndex=FMath::Min(RouteIndex,PlannedRoute.Num()-1);
  // AGV localization: route travel decisions use NavigationTransform(). Alignment, docking, elevator approach and the
@@ -1393,11 +1393,11 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   const FTransform AlignmentPose=PalletApproach(ObservedPallet,185);
   const FVector AlignmentOffset=AlignmentPose.GetLocation()-GetActorLocation();
   const float AlignmentYaw=FMath::Abs(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,AlignmentPose.Rotator().Yaw));
-  // A short, already aligned creep does not need an infeasible tiny S curve.
-  // Full fork-hole/angle/support checks remain in VerifyInsertion.
-  if (FMath::Abs(FVector::DotProduct(AlignmentOffset,GetActorRightVector()))<=5.f && AlignmentYaw<1.5f)
+  // Permit a small capture error while the real tines advance into the holes.
+  // Insertion still corrects heading; VerifyInsertion retains full geometry/support checks.
+  if (FMath::Abs(FVector::DotProduct(AlignmentOffset,ObservedPallet.GetUnitAxis(EAxis::Y)))<=7.f && AlignmentYaw<2.5f)
   {
-   if (MovePrecise(AlignmentPose.GetLocation(),WarehouseWorkSpeed(15,30,45,60,90),Dt)) Next(EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"));
+   if (MoveToLine(AlignmentPose.GetLocation(),WarehouseWorkSpeed(15,30,45,60,90),Dt,3.f)) Next(EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"));
   }
   else Route(AlignmentPose,EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"),WarehouseWorkSpeed(15,30,45,60,90));
   break;
@@ -1406,8 +1406,8 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   if (LiftTo(FMath::Max(0.f,SourceHeight))) Next(EWarehouseAIState::InsertFork,TEXT("FORK INSERT - CREEP"));
   break;
  case EWarehouseAIState::InsertFork:
-  // Fully insert both tines with 5 cm end clearance for native tyre settling.
-  if (MovePrecise(PalletApproach(ObservedPallet,65).GetLocation(),WarehouseWorkSpeed(10,25,45,70,100),Dt)) Next(EWarehouseAIState::VerifyInsertion,TEXT("VERIFY BOTH TINES INSERTED"));
+  // Avoid chasing the final centimetre. Both full tines must still pass CanEngage.
+  if (MoveToLine(PalletApproach(ObservedPallet,65).GetLocation(),WarehouseWorkSpeed(10,25,45,70,100),Dt,3.f)) Next(EWarehouseAIState::VerifyInsertion,TEXT("VERIFY BOTH TINES INSERTED"));
   break;
  case EWarehouseAIState::VerifyInsertion:
   if (!TargetPallet->CanEngage(Carriage->GetComponentTransform())) { BeginRecovery(AIState,TEXT("FORK INSERTION FAILED")); break; }
