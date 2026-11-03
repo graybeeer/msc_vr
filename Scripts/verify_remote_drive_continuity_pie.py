@@ -3,12 +3,17 @@
 Checks immediate input, no remote scanner/AI stops, slab seams, real wall contact,
 reverse escape, high-fork travel, pivoting, deadman braking and autonomous scan cadence.
 SetRemoteInput is exercised directly; this is not an OS keyboard/focus test.
+-RemoteCombinedSteering checks full simultaneous forward/reverse and left/right
+inputs, including repeated steering changes. -RemoteRun=name preserves a report.
 """
 import json
+import re
 import time
 import traceback
 from pathlib import Path
 import unreal
+
+unreal.EditorPythonScripting.set_keep_python_script_alive(True)
 
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
@@ -96,6 +101,20 @@ damage.set_editor_property('objects', [
     unreal.WarehouseStrength(name='Pallet', members=[pallet], mass_kg=25, rated_load_kg=100000,
         impact_yield_j=100000, impact_failure_j=1000000, failure=unreal.WarehouseFailure.CRUSH)])
 
+command = unreal.SystemLibrary.get_command_line()
+combined = '-remotecombinedsteering' in command.lower()
+combined_cases = [('forward_left', 1, -1), ('forward_right', 1, 1),
+                  ('reverse_left', -1, -1), ('reverse_right', -1, 1), ('steering_changes', 1, 0)]
+combined_results = []
+combined_speeds = []
+combined_yaw = 0
+previous_yaw = 0
+if combined:
+    # Author a separate clear test lane before PIE; never force a running body.
+    vehicle.set_actor_location(unreal.Vector(-1800, -1600, 0), False, True)
+    operator.set_actor_location(unreal.Vector(-1800, -1820, 75), False, True)
+    person.set_actor_location(unreal.Vector(3500, -3500, 85), False, True)
+
 started = time.monotonic()
 phase = 'start'
 at = 0
@@ -120,8 +139,13 @@ def enter(name, now):
 
 def finish(ok, detail):
     report = dict(passed=ok, detail=detail, phase=phase, samples=rows, autonomous_scan_times=scan_times,
+                  combined_cases=combined_results,
                   scope='Native C++ rig in unsaved Entry; direct input API, actual Chaos contact. No OS input claim.')
     path = Path(unreal.Paths.project_saved_dir()) / 'Testing/RemoteDriveContinuity_20261016.json'
+    run = re.search(r'-RemoteRun=([A-Za-z0-9_-]+)', command, re.I)
+    if run:
+        path = Path(unreal.Paths.project_saved_dir()) / 'Testing/RemoteCombined_20261103' / (run.group(1)+'.json')
+        path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     print('REMOTE_DRIVE_CONTINUITY_PIE_PASSED' if ok else 'REMOTE_DRIVE_CONTINUITY_PIE_FAILED', detail)
     if ok:
@@ -134,6 +158,7 @@ def finish(ok, detail):
 
 def tick(dt):
     global phase, rig, dummy, auto, game, last_scan, contact_since, yaw_start
+    global combined_yaw, previous_yaw
     try:
         assert time.monotonic() - started < 180, ('Manual regression timeout', phase)
         if phase == 'start':
@@ -151,7 +176,8 @@ def tick(dt):
             rig, dummy, auto = [live[n] for n in ('ManualVehicle', 'ManualOperator', 'ScanVehicle')]
             assert rig.begin_remote_control(dummy), rig.status
             rig.set_remote_input(1, 0, 0)
-            enter('immediate', now)
+            previous_yaw = rig.get_actor_rotation().yaw
+            enter(combined_cases[0][0] if combined else 'immediate', now)
             return
         assert rig.root_component.is_simulating_physics()
         assert abs(rig.get_physical_mass_kg() - 1000) < .1
@@ -167,7 +193,37 @@ def tick(dt):
         age = now - at
         speed = rig.current_speed_cm
         if not rows or now - rows[-1]['time'] >= .1:
-            rows.append(dict(time=now, phase=phase, x=rig.get_actor_location().x, speed=speed, status=rig.status))
+            rows.append(dict(time=now, phase=phase, x=rig.get_actor_location().x,
+                             y=rig.get_actor_location().y, yaw=rig.get_actor_rotation().yaw, speed=speed, status=rig.status))
+        if combined:
+            if phase == 'combined_brake':
+                rig.set_remote_input(0, 0, 0)
+                if age >= 1.5:
+                    assert abs(speed) < 5, ('Combined-input release failed to brake', speed)
+                    finish(True, 'Full forward/reverse + left/right curves and repeated steering retain travel; release brakes; native physics and autonomous 1s scans retained')
+                return
+            index = next(i for i, case in enumerate(combined_cases) if case[0] == phase)
+            _, forward, steering = combined_cases[index]
+            if phase == 'steering_changes':
+                steering = 1 if int(age/.25) % 2 == 0 else -1
+            rig.set_remote_input(forward, steering, 0)
+            yaw = rig.get_actor_rotation().yaw
+            combined_yaw += (yaw-previous_yaw+180) % 360-180
+            previous_yaw = yaw
+            if age >= (2.5 if phase == 'reverse_left' else 1):
+                combined_speeds.append(forward*speed)
+                assert forward*speed > 10, ('Steering interrupted held travel', phase, age, speed, rig.status)
+            if age >= 4:
+                if phase != 'steering_changes':
+                    assert combined_yaw*forward*steering > 40, ('Wrong or missing curve direction', phase, combined_yaw)
+                points = [p for p in rows if p['phase'] == phase]
+                distance = sum(((b['x']-a['x'])**2+(b['y']-a['y'])**2)**.5 for a, b in zip(points, points[1:]))
+                assert distance > 100, ('No physical travel', phase, distance) # A full circle can finish near its start.
+                combined_results.append(dict(phase=phase, min_signed_speed_cm_s=min(combined_speeds), yaw_degrees=combined_yaw, distance_cm=distance))
+                combined_speeds.clear()
+                combined_yaw = 0
+                enter(combined_cases[index+1][0] if index+1 < len(combined_cases) else 'combined_brake', now)
+            return
         if phase == 'immediate':
             rig.set_remote_input(1, 0, 0)
             if age < .4:

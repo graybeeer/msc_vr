@@ -263,12 +263,27 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  // spindle still corrects its error and all swept/native contacts remain.
  const float SteeringTolerance=FMath::DegreesToRadians(5.f);
  const bool TurnReady=Turning && SteeringError<SteeringTolerance && ChassisBody->GetPhysicsLinearVelocity().Size2D()<30.f;
- // Finish steering before applying drive torque; a sideways tyre otherwise
- // translates the chassis during a pivot or when resuming straight travel.
- const bool Braking=Turning ? !TurnReady : FMath::Abs(DesiredDriveSpeed)<.01f || SteeringError>SteeringTolerance;
- // Begin the acceleration ramp only after steering is ready. Building a
- // full-speed target under the brake caused a sideways launch after a pivot.
- DriveSpeedTarget=FMath::FInterpConstantTo(DriveSpeedTarget,Braking ? 0.f : DesiredDriveSpeed,Dt,FMath::Max(1.f,DriveAccelerationCm));
+ const bool CruiseState=!IsRemoteControlled() && (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery ||
+  AIState==EWarehouseAIState::NavigateCharge || AIState==EWarehouseAIState::NavigateParking);
+ const bool NarrowTravel=RouteClearanceCm>0.f && RouteClearanceCm<25.f && bNarrowSpeed;
+ const bool NearSegmentEnd=!CruiseState || !PlannedRoute.IsValidIndex(EndpointSegment) ||
+  FVector::DistSquared2D(NavigationTransform().GetLocation(),PlannedRoute[EndpointSegment].Pose.GetLocation())<=250.f*250.f;
+ // Keep a moving lane-following truck rolling through normal steering changes.
+ // Starting from a stop/pivot, creep, endpoint alignment, narrow passages,
+ // traffic retreats and elevator travel retain the steering-ready brake.
+ const float RollingSteeringLimit=FMath::DegreesToRadians(35.f);
+ const bool RollingCruise=CruiseState && !NearSegmentEnd && !bFloorTransfer && !bTrafficYielding && !NarrowTravel &&
+  !bEndpointDriving && !bEndpointOrienting && !bRouteTurning && FMath::Abs(DesiredDriveSpeed)>30.f &&
+  CurrentSpeedCm*FMath::Sign(DesiredDriveSpeed)>5.f && FMath::Abs(ActualSteering)<=RollingSteeringLimit && SteeringError<=RollingSteeringLimit;
+ // Manual travel remains independent of the autonomous steering gate.
+ const bool AwaitSteering=!IsRemoteControlled() && !RollingCruise && SteeringError>SteeringTolerance;
+ const bool Braking=Turning ? !TurnReady : FMath::Abs(DesiredDriveSpeed)<.01f || AwaitSteering;
+ // Let the finite spindle catch up without either a full stop or full-speed
+ // lateral drift. Final approach still uses the original readiness control.
+ const float TravelSpeed=RollingCruise && SteeringError>SteeringTolerance ?
+  FMath::Sign(DesiredDriveSpeed)*FMath::Min(FMath::Abs(DesiredDriveSpeed),60.f) : DesiredDriveSpeed;
+ // Do not accumulate a full-speed target while a readiness brake is engaged.
+ DriveSpeedTarget=FMath::FInterpConstantTo(DriveSpeedTarget,Braking ? 0.f : TravelSpeed,Dt,FMath::Max(1.f,DriveAccelerationCm));
  // The implicit joint brake opposes rolling with finite torque each substep.
  // An explicit RPM-zero motor can reverse a locked tyre between game ticks.
  // Wheel RPM alone cannot measure tyre slip. Close the travel loop on the
@@ -290,9 +305,10 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  const float TorqueNm=FMath::Clamp(float(FVector::DotProduct(JointTorque,Axle)/10000.),-Limit,Limit);
  if (FParse::Param(FCommandLine::Get(),TEXT("DriveDiagnostics")) &&
      FMath::FloorToInt(GetWorld()->GetTimeSeconds()*2.f)!=FMath::FloorToInt((GetWorld()->GetTimeSeconds()-Dt)*2.f))
-  UE_LOG(LogTemp,Log,TEXT("AGV_DRIVE_DIAG %s Turn=%.3f SteerTarget=%.2f SteerActual=%.2f SpinTarget=%.3f Spin=%.3f Torque=%.2f Limit=%.2f Speed=%.2f Powered=%d Route=%d/%d Endpoint=%d Turning=%d Orienting=%d Driving=%d State=%d Lift=%.3f LiftTarget=%.3f LiftVelocity=%.3f"),
+  UE_LOG(LogTemp,Log,TEXT("AGV_DRIVE_DIAG %s Turn=%.3f SteerTarget=%.2f SteerActual=%.2f SpinTarget=%.3f Spin=%.3f Torque=%.2f Limit=%.2f Speed=%.2f Powered=%d Route=%d/%d Endpoint=%d Turning=%d Orienting=%d Driving=%d State=%d Lift=%.3f LiftTarget=%.3f LiftVelocity=%.3f CruiseRoll=%d SteeringGate=%d Braking=%d SteeringError=%.2f"),
    *VehicleName,DesiredTurnRate,FMath::RadiansToDegrees(SteeringAngle),FMath::RadiansToDegrees(ActualSteering),DesiredSpin,Spin,TorqueNm,Limit,CurrentSpeedCm,bPowered,RouteIndex,PlannedRoute.Num(),EndpointSegment,bRouteTurning,bEndpointOrienting,bEndpointDriving,
-   int32(AIState),LiftOffset,DesiredLift,CarriageBody->GetPhysicsLinearVelocity().Z-ChassisBody->GetPhysicsLinearVelocity().Z);
+   int32(AIState),LiftOffset,DesiredLift,CarriageBody->GetPhysicsLinearVelocity().Z-ChassisBody->GetPhysicsLinearVelocity().Z,
+   RollingCruise,AwaitSteering,Braking,FMath::RadiansToDegrees(SteeringError));
  // Bearing resistance dissipates wheel motion and applies the opposite reaction to the chassis.
  for (int32 I=0; I<Wheels.Num(); ++I)
  {
