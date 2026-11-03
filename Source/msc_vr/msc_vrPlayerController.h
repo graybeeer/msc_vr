@@ -42,6 +42,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bAIViewFirstPerson = true;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bAIViewMapLines = false;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bAIViewForkSide = false;
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bAIViewAccumulate = true;
 	UFUNCTION(BlueprintCallable, Category="Settings") void OpenAIViewSettings();
 	UFUNCTION(BlueprintCallable, Category="Settings") void ApplyAIViewSettings();
 	UFUNCTION(BlueprintCallable, Category="Settings") void ToggleWarehouseMenu();

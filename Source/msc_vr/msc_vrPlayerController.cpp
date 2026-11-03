@@ -691,6 +691,7 @@ void Amsc_vrPlayerController::ApplyAIViewSettings()
 	Views->SetPanel3D(bAIViewFirstPerson);
 	Views->SetPanelMap(bAIViewMapLines);
 	Views->SetPanelFront(bAIViewForkSide);
+	Views->SetPanelAccumulate(bAIViewAccumulate);
 }
 
 void Amsc_vrPlayerController::OpenAIViewSettings()
@@ -704,7 +705,7 @@ void Amsc_vrPlayerController::OpenAIViewSettings()
 	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::TitleSize,true))
 		.ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("지게차 AI 화면 설정")))];
 	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Text).AutoWrapText(true)
-		.Text(FText::FromString(TEXT("지게차의 LiDAR가 지금 보는 점과 계획한 경로를 화면 왼쪽 위에 표시합니다. 초록: 사전 지도와 맞는 점, 주황: 지도에 없는 물체, 파랑: 경로.")))];
+		.Text(FText::FromString(TEXT("지게차의 LiDAR가 보는 점과 계획한 경로를 화면 왼쪽 위에 표시합니다. 초록: 사전 지도와 맞는 점, 주황: 지도에 없는 물체, 파랑: 경로. 가까울수록 밝고 멀수록 어둡습니다. 평면 보기의 누적 미니맵은 지나온 곳을 쌓아 그리며, 레이저가 지나간 빈 곳은 회색, 움직여 사라진 물체는 지워집니다.")))];
 	auto Check=[&](const FString& Label,bool Amsc_vrPlayerController::* Field)
 	{
 		Panel->AddSlot().AutoHeight().Padding(8,6)[SNew(SCheckBox)
@@ -716,6 +717,7 @@ void Amsc_vrPlayerController::OpenAIViewSettings()
 	Check(TEXT("지게차 2호 AI 화면"),&Amsc_vrPlayerController::bShowForklift2AIView);
 	Check(TEXT("1인칭 시점 (끄면 위에서 본 평면)"),&Amsc_vrPlayerController::bAIViewFirstPerson);
 	Check(TEXT("1인칭을 포크 쪽(전면)에서 보기 (끄면 차체 뒤쪽)"),&Amsc_vrPlayerController::bAIViewForkSide);
+	Check(TEXT("평면 보기를 누적 미니맵으로 (끄면 지금 스캔만)"),&Amsc_vrPlayerController::bAIViewAccumulate);
 	Check(TEXT("사전 지도 선도 함께 표시 (비교용)"),&Amsc_vrPlayerController::bAIViewMapLines);
 	Panel->AddSlot().AutoHeight().Padding(8,4)[SNew(SButton).IsFocusable(false).ContentPadding(10).TextStyle(&ButtonText)
 		.Text(FText::FromString(TEXT("저장 · 닫기"))).OnClicked_Lambda([this]() { CloseWarehouseMenu();return FReply::Handled(); })];
