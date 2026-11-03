@@ -483,7 +483,9 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 
 	// A pallet about to be picked up may be out of the sensors' view. The job says where it stands: do not drive through it.
 	// Two rectangles in the plane: the vehicle body with 3cm to spare, not the 25cm travel margin, and the load's footprint.
-	const FBox TargetEnvelope = Query.Envelope.ExpandBy(FVector(-22.0, -22.0, 0.0));
+	// The planning envelope carries the travel margin (25cm, or 10/3cm when a narrow aisle is retried): take it off to get the body.
+	const double Margin = AIState == EWarehouseAIState::AlignVehicle ? 0.0 : PlanningClearanceCm;
+	const FBox TargetEnvelope = Query.Envelope.ExpandBy(FVector(3.0 - Margin, 3.0 - Margin, 0.0));
 	constexpr double TargetHalf = 95.0;
 	// The follower stops for a person inside a box swept ahead of the vehicle, far wider than the collision envelope, so a route that
 	// merely misses them would stop anyway. Keep well clear, but always allow moving away from where the vehicle stands now.
@@ -552,7 +554,7 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 	};
 	// A vehicle stopped close to something, as after a withdrawal, has to leave it: the first stretch only needs the real body clear.
 	FWarehouseNavigationQuery EscapeQuery = Query;
-	EscapeQuery.Envelope = Query.Envelope.ExpandBy(FVector(-20.0, -20.0, 0.0));
+	EscapeQuery.Envelope = Query.Envelope.ExpandBy(FVector(5.0 - Margin, 5.0 - Margin, 0.0));
 	const bool bStartBlocked = !NavigationClear(Start, &Query);
 	constexpr double EscapeCm = 90.0;
 	const auto FullyClear = [&](const FTransform& Pose)
