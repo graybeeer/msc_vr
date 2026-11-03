@@ -43,7 +43,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bAIViewMapLines = false;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bAIViewForkSide = false;
 	UFUNCTION(BlueprintCallable, Category="Settings") void OpenAIViewSettings();
-	void ApplyAIViewSettings();
+	UFUNCTION(BlueprintCallable, Category="Settings") void ApplyAIViewSettings();
 	UFUNCTION(BlueprintCallable, Category="Settings") void ToggleWarehouseMenu();
 	UFUNCTION(BlueprintCallable, Category="Play mode") bool OpenPlayMode(int32 StageIndex);
 	UFUNCTION(BlueprintPure, Category="Play mode") bool IsMainMenu() const;
