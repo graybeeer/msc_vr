@@ -67,6 +67,8 @@ public:
 	/** Last matched scan in 3D (map frame x, y; world height) and whether each point lies on the map. */
 	const TArray<FVector>& GetLastScan3D() const { return LastScan3D; }
 	const TArray<bool>& GetLastScan3DMapped() const { return LastScan3DMapped; }
+	/** Counts matched scans, so a viewer can tell a new one arrived. */
+	int32 GetScanSerial() const { return ScanSerial; }
 	UAgvShadowSensorsComponent* GetSensorKit() const { return SensorKit; }
 
 	UFUNCTION(BlueprintCallable, Category="AGV|Localization")
@@ -308,6 +310,7 @@ private:
 	TArray<FVector2D> LastScanInMap;
 	TArray<FVector> LastScan3D;
 	TArray<bool> LastScan3DMapped;
+	int32 ScanSerial = 0;
 	TArray<bool> LastScanMapped;
 
 	// Odometry: reference-point pose in the odometry frame (cm, rad).
@@ -340,6 +343,27 @@ private:
  * (AWarehouseForklift::bUseAgvLocalization, on by default), when -AgvLocShadow / -AgvLocDrive is given, or in play
  * with the console command agv.loc. Also keeps the distance maps so vehicles on the same floor share one.
  */
+/**
+ * What one vehicle's LiDAR has seen so far, for its top-view minimap: a 10cm occupancy grid. A cell a beam ends in gains
+ * evidence of being occupied, a cell a beam passes through loses it, so a person or pallet that moves away fades out again.
+ */
+struct FAgvPanelGrid
+{
+	FVector2D Origin = FVector2D::ZeroVector;
+	int32 Width = 0;
+	int32 Height = 0;
+	double CellCm = 10.0;
+	/** Above 0 occupied, below 0 free, 0 never seen. */
+	TArray<float> Evidence;
+	/** Where the vehicle stood at the last added scan; each cell is shaded by its distance from there. */
+	FVector2D Sensor = FVector2D::ZeroVector;
+	/** The last hit lay on the prior map (green) or not (orange). */
+	TArray<uint8> Mapped;
+	int32 Serial = -1;
+	double FloorZ = 0.0;
+	bool bDirty = false;
+};
+
 UCLASS()
 class MSC_VR_API UAgvLocalizationSubsystem : public UWorldSubsystem
 {
@@ -359,12 +383,22 @@ public:
 	/** A map for this key, building it when no vehicle has built it yet. */
 	TSharedPtr<const FAgvDistanceMap> FindOrBuildMap(uint64 Key, TFunctionRef<TSharedPtr<const FAgvDistanceMap>()> Build);
 
-	/** The top-left view of what forklift 1 believes (map, scan, route, estimated and actual outline). */
-	void SetPanelVisible(bool bVisible) { bShowPanel = bVisible; }
+	/** The top-left views of what forklifts 1 and 2 sense right now: their last scan and route. Number is 1 or 2. */
+	void SetVehiclePanelVisible(int32 Number, bool bVisible) { if (Number >= 1 && Number <= 2) bShowVehicle[Number - 1] = bVisible; }
+	bool IsVehiclePanelVisible(int32 Number) const { return Number >= 1 && Number <= 2 && bShowVehicle[Number - 1]; }
+	/** Console shortcut (agv.loc view): forklift 1's view. */
+	void SetPanelVisible(bool bVisible) { bShowVehicle[0] = bVisible; }
 	/** 3D = forklift 1's first-person view of what it believes (default); off = the 2D top view. */
 	void SetPanel3D(bool b3D) { bPanel3D = b3D; }
 	bool IsPanel3D() const { return bPanel3D; }
-	bool IsPanelVisible() const { return bShowPanel; }
+	bool IsPanelVisible() const { return bShowVehicle[0]; }
+	/** Off (default): sensor points only. On: also the prior map and the actual pose, for comparison. */
+	void SetPanelMap(bool bShow) { bPanelMap = bShow; }
+	bool IsPanelMap() const { return bPanelMap; }
+	/** First-person eye at the fork end looking ahead (true) or at the body end looking back (false, default). */
+	void SetPanelFront(bool bFront) { bPanelFront = bFront; }
+	/** Top view: accumulate everything the LiDAR has seen into a minimap (default), or show only the current scan. */
+	void SetPanelAccumulate(bool bAccumulate) { bPanelAccumulate = bAccumulate; }
 
 protected:
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
@@ -373,16 +407,26 @@ private:
 	void Attach(AActor* Actor);
 	void OnActorSpawned(AActor* Actor);
 	void DrawPanel(UCanvas* Canvas, APlayerController* Player);
-	void DrawFirstPersonPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle);
-	UAgvForkliftLocalizerComponent* FindPanelVehicle() const;
+	/** One vehicle's view with its top-left corner at Origin; returns the height it used, captions included. */
+	double DrawTopPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle, FVector2D Origin, double Size, int32 Number);
+	double DrawFirstPersonPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle, FVector2D Origin, double Width, int32 Number);
+	/** The localizer of forklift 1 or 2 by its name, else by actor name order. */
+	UAgvForkliftLocalizerComponent* FindPanelVehicle(int32 Number) const;
 	void UpdateMapTexture(const TSharedPtr<const FAgvDistanceMap>& Map);
+	/** Adds the vehicle's newest scan to its minimap grid and refreshes the grid's texture. */
+	void UpdatePanelGrid(int32 Number, UAgvForkliftLocalizerComponent* Vehicle);
 
 	bool bEnabled = false;
 	bool bDriveOnEstimate = false;
 	/** Set by -AgvLocDrive or agv.loc drive: applies bDriveOnEstimate to vehicles spawned later as well. */
 	bool bDriveOverride = false;
-	bool bShowPanel = false;
+	bool bShowVehicle[2] = { false, false };
 	bool bPanel3D = true;
+	bool bPanelMap = false;
+	bool bPanelFront = false;
+	bool bPanelAccumulate = true;
+	FAgvPanelGrid PanelGrids[2];
+	UPROPERTY(Transient) TArray<TObjectPtr<UTexture2D>> PanelGridTextures;
 	FDelegateHandle SpawnHandle;
 	FDelegateHandle DrawHandle;
 	TMap<uint64, TSharedPtr<const FAgvDistanceMap>> Maps;

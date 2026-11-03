@@ -18,6 +18,23 @@ void AWarehouseForklift::RecoveryFault(const TCHAR* Reason,const TCHAR* PlayerMe
  FaultAI(Reason);
 }
 
+bool AWarehouseForklift::TryHybridReplanHere(EWarehouseAIState From)
+{
+ if (!bRouteFromHybrid || (From!=EWarehouseAIState::NavigatePickup && From!=EWarehouseAIState::NavigateDelivery && From!=EWarehouseAIState::NavigateParking)) return false;
+ if (HybridRouteReplans==0 || FVector::Dist2D(GetActorLocation(),HybridReplanProgress)>=100.f)
+ { HybridRouteReplans=0;HybridReplanProgress=GetActorLocation(); }
+ if (HybridRouteReplans>=3 || (From==EWarehouseAIState::NavigatePickup && !IsValid(TargetPallet))) return false;
+ const FTransform Goal=From==EWarehouseAIState::NavigatePickup ? PalletApproach(TaskSourcePose(),220) :
+  From==EWarehouseAIState::NavigateDelivery ? PalletApproach(ActiveJob.Destination,220) : IdlePose;
+ if (!PlanAutonomousRoute(Goal)) return false;
+ ++HybridRouteReplans;++DetourCount;
+ ReportJob(TEXT("REPLANNED"),TEXT("SENSED OBSTACLE - NEW ROUTE FROM HERE"));
+ ProgressLocation=GetActorLocation();StalledSeconds=0;WaitSeconds=0;
+ TransitionAI(From,TEXT("SENSED OBSTACLE - NEW ROUTE FROM HERE"));
+ bRouteStarted=true;
+ return true;
+}
+
 bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Reason)
 {
  BrakeDrive();
@@ -25,6 +42,9 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  bObservedPickupEscape=false;
  if (bFloorTransfer || (bSupportingPallet && LiftOffset>20.f))
  { RecoveryFault(TEXT("RECOVERY REQUIRES SAFE FLOOR / LOW LOAD - OPERATOR REQUIRED"),TEXT("승강기 또는 높은 적재 상태에서 자동 탈출할 수 없습니다.")); return false; }
+ // A hybrid route is not tied to the lanes and can meet something the sensors could not see when it was planned.
+ // Route around it from where the vehicle stands: backing away blindly once ended up against a pallet behind it (2026-10-30).
+ if ((Reason==TEXT("OBSTACLE ON ROUTE") || Reason==TEXT("OBSTACLE / TURN CLEARANCE")) && TryHybridReplanHere(From)) return true;
  bool AlignmentRetry=false;
  if (From==EWarehouseAIState::AlignVehicle && IsValid(TargetPallet))
  {
@@ -167,6 +187,35 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  RecoveryDirection=bRetryInsertion || From==EWarehouseAIState::WithdrawFork || FailedDeliveryRoute || FloorAlignmentRetry ? -1.f : -LastDriveDirection;
  if (ChargerForwardRecovery) RecoveryDirection=1.f;
  RecoveryDistance=bSupportingPallet ? 150.f : 200.f;
+ // "Away from where it was driving" is not always away from what stopped it: a vehicle reversing past a pallet with its forks
+ // beside it pushed that pallet round while backing off forward (2026-10-31). Take the way that is actually free of what was sensed.
+ if (SensorMode==EWarehouseSensorMode::Autonomous && !bRetryInsertion && !ChargerForwardRecovery && !FloorAlignmentRetry && From!=EWarehouseAIState::WithdrawFork)
+ {
+  const FBox Body=NavigationEnvelope();
+  const TArray<AActor*> Loads=GetPhysicalLoads();
+  auto WayFree=[&](float Direction)
+  {
+   for (float Along : {RecoveryDistance*.25f,RecoveryDistance*.5f,RecoveryDistance*.75f,RecoveryDistance})
+   {
+    FTransform Pose=GetActorTransform();
+    Pose.AddToTranslation(GetActorForwardVector().GetSafeNormal2D()*Direction*Along);
+    if (!PerceivedBoxClear(Pose,Body,Loads)) return false;
+    if (FleetCoordinator)
+    {
+     const FBox World=Body.TransformBy(Pose.ToMatrixWithScale());
+     for (const auto& Pair : FleetCoordinator->SeenObstacles)
+      if (Pair.Key.IsValid() && GetWorld()->GetTimeSeconds()-Pair.Value.Seen<=90.f &&
+          !Loads.Contains(Pair.Key.Get()) && Pair.Value.Bounds.Intersect(World)) return false;
+    }
+   }
+   return true;
+  };
+  if (!WayFree(RecoveryDirection) && WayFree(-RecoveryDirection))
+  {
+   UE_LOG(LogTemp,Log,TEXT("AGV_RECOVERY_DIRECTION_SWAPPED %s to %.0f"),*VehicleName,-RecoveryDirection);
+   RecoveryDirection=-RecoveryDirection;
+  }
+ }
  if (bRetryInsertion)
  {
   // Leave enough steering distance for a new alignment after real contact drift.

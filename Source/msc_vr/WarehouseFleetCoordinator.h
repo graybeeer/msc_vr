@@ -18,6 +18,10 @@ public:
  bool Permit(AWarehouseForklift* Vehicle,const FTransform* PreciseGoal=nullptr);
  bool AdvanceYield(AWarehouseForklift* Vehicle,float Dt);
  bool PlanningClear(const AWarehouseForklift* Vehicle,const FBox& Box) const;
+ // Where the fleet's own sensors last saw things that are not on the map. The live scan only holds what is in view right now;
+ // routes are not tied to lanes, so they need this to keep off a pallet standing just out of sight.
+ struct FSeenObstacle { FBox Bounds; double Seen=0; };
+ TMap<TWeakObjectPtr<AActor>,FSeenObstacle> SeenObstacles;
  void Release(AWarehouseForklift* Vehicle);
  AWarehouseChargingStation* AllocateCharger(AWarehouseForklift* Vehicle);
  UFUNCTION(BlueprintCallable,Category="Traffic") void CloseSection(const FString& Id,FVector Min,FVector Max,const FString& Reason);

@@ -41,6 +41,7 @@
 #include "WarehouseSimulationClock.h"
 #include "WarehouseTransportVisualizer.h"
 #include "WarehouseObserverWallFade.h"
+#include "Agv/AgvForkliftLocalizer.h"
 #include "WarehousePerformance.h"
 #include "Misc/App.h"
 #include "HAL/PlatformTime.h"
@@ -214,6 +215,7 @@ Amsc_vrPlayerController::Amsc_vrPlayerController()
 void Amsc_vrPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
+	if (IsLocalPlayerController()) ApplyAIViewSettings();
 	if (IsLocalPlayerController()) { LayoutEditor=AWarehouseLayoutEditor::Find(this);SimulationClock=AWarehouseSimulationClock::Find(this);
 		ConstructionEditor=NewObject<UWarehouseConstructionEditor>(this);ConstructionEditor->Initialize(this); }
 	if (IsLocalPlayerController() && GetWorld()->GetGameViewport())
@@ -637,6 +639,7 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 	};
 	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::TitleSize,true))
 		.ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("물류창고 · 설정 / 관찰")))];
+	Button(TEXT("지게차 실시간 센서 화면"),[this]() { OpenAIViewSettings(); });
 	Text(TEXT("F1: 메뉴  |  Shift: 달리기  |  Ctrl: 앉기  |  E: 집기 / 적재\nG: 바라보는 지게차의 후방 3인칭 원격 조작 / 종료\n원격: W/S 전후진 · A/D 조향·자리 회전 · 좌클릭 포크 올림 · 우클릭 내림 · Space 제동\n마우스 이동: 지게차 주변 보기 · 종료하면 플레이어 1인칭 복귀\n관찰 진입 시 재배치 모드가 켜지며 시뮬레이션이 일시정지됩니다. 하단 버튼으로 재배치를 끄면 시뮬레이션이 재개됩니다."));
 	Button(bObserverView ? TEXT("1인칭 캐릭터로 돌아가기") : TEXT("전지적 관찰 시점으로 전환"),[this]() { ToggleObserverView(); CloseWarehouseMenu(); });
 	if(auto* Director=AWarehouseFocusDirector::Find(this))
@@ -675,6 +678,54 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 			[SNew(SBorder).Padding(WarehouseUIStyle::PanelPadding).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 				.BorderBackgroundColor(WarehouseUIStyle::Panel)
 				[SNew(SScrollBox)+SScrollBox::Slot()[Panel]]]];
+	GetWorld()->GetGameViewport()->AddViewportWidgetContent(MenuWidget.ToSharedRef(),100);
+	UpdateInputMode();
+}
+
+void Amsc_vrPlayerController::ApplyAIViewSettings()
+{
+	UAgvLocalizationSubsystem* Views=GetWorld() ? GetWorld()->GetSubsystem<UAgvLocalizationSubsystem>() : nullptr;
+	if (!Views) return;
+	Views->SetVehiclePanelVisible(1,bShowForklift1AIView);
+	Views->SetVehiclePanelVisible(2,bShowForklift2AIView);
+	Views->SetPanel3D(bAIViewFirstPerson);
+	Views->SetPanelMap(bAIViewMapLines);
+	Views->SetPanelFront(bAIViewForkSide);
+	Views->SetPanelAccumulate(bAIViewAccumulate);
+}
+
+void Amsc_vrPlayerController::OpenAIViewSettings()
+{
+	// A separate window in place of the F1 menu; closing it (button, F1 or Esc) goes through the same menu path and saves.
+	if (!IsLocalController() || !GetWorld()->GetGameViewport()) return;
+	if (MenuWidget.IsValid()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(MenuWidget.ToSharedRef());
+	static const FTextBlockStyle ButtonText=FTextBlockStyle(FCoreStyle::Get().GetWidgetStyle<FTextBlockStyle>("NormalText"))
+		.SetFont(WarehouseUIStyle::Font()).SetColorAndOpacity(WarehouseUIStyle::Text);
+	auto Panel=SNew(SVerticalBox);
+	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::TitleSize,true))
+		.ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("지게차 실시간 센서 화면 설정")))];
+	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Text).AutoWrapText(true)
+		.Text(FText::FromString(TEXT("지게차의 LiDAR가 보는 점과 계획한 경로를 화면 왼쪽 위에 표시합니다. 초록: 사전 지도와 맞는 점, 주황: 지도에 없는 물체, 파랑: 경로. 가까울수록 밝고 멀수록 어둡습니다. 평면 보기의 누적 미니맵은 지나온 곳을 쌓아 그리며, 레이저가 지나간 빈 곳은 회색, 움직여 사라진 물체는 지워집니다.")))];
+	auto Check=[&](const FString& Label,bool Amsc_vrPlayerController::* Field)
+	{
+		Panel->AddSlot().AutoHeight().Padding(8,6)[SNew(SCheckBox)
+			.IsChecked_Lambda([this,Field]() { return this->*Field ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+			.OnCheckStateChanged_Lambda([this,Field](ECheckBoxState State) { this->*Field=State==ECheckBoxState::Checked;ApplyAIViewSettings(); })
+			[SNew(STextBlock).Font(WarehouseUIStyle::Font(18)).ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(Label))]];
+	};
+	Check(TEXT("지게차 1호 실시간 센서 화면"),&Amsc_vrPlayerController::bShowForklift1AIView);
+	Check(TEXT("지게차 2호 실시간 센서 화면"),&Amsc_vrPlayerController::bShowForklift2AIView);
+	Check(TEXT("1인칭 시점 (끄면 위에서 본 평면)"),&Amsc_vrPlayerController::bAIViewFirstPerson);
+	Check(TEXT("1인칭을 포크 쪽(전면)에서 보기 (끄면 차체 뒤쪽)"),&Amsc_vrPlayerController::bAIViewForkSide);
+	Check(TEXT("평면 보기를 누적 미니맵으로 (끄면 지금 스캔만)"),&Amsc_vrPlayerController::bAIViewAccumulate);
+	Check(TEXT("사전 지도 선도 함께 표시 (비교용)"),&Amsc_vrPlayerController::bAIViewMapLines);
+	Panel->AddSlot().AutoHeight().Padding(8,4)[SNew(SButton).IsFocusable(false).ContentPadding(10).TextStyle(&ButtonText)
+		.Text(FText::FromString(TEXT("저장 · 닫기"))).OnClicked_Lambda([this]() { CloseWarehouseMenu();return FReply::Handled(); })];
+	MenuWidget=SNew(SBorder).HAlign(HAlign_Center).VAlign(VAlign_Center)
+		.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(0,0,0,.45f))
+		[SNew(SBox).WidthOverride(560)
+			[SNew(SBorder).Padding(WarehouseUIStyle::PanelPadding).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+				.BorderBackgroundColor(WarehouseUIStyle::Panel)[Panel]]];
 	GetWorld()->GetGameViewport()->AddViewportWidgetContent(MenuWidget.ToSharedRef(),100);
 	UpdateInputMode();
 }

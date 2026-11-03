@@ -36,6 +36,15 @@ public:
 	Amsc_vrPlayerController();
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") float MouseSensitivity = 1.f;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") float ViewFOV = 90.f;
+	// What forklifts 1 and 2 sense (LiDAR view), drawn top left. Chosen in the F1 menu's AI view settings and kept between sessions.
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bShowForklift1AIView = false;
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bShowForklift2AIView = false;
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bAIViewFirstPerson = true;
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bAIViewMapLines = false;
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bAIViewForkSide = false;
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bAIViewAccumulate = true;
+	UFUNCTION(BlueprintCallable, Category="Settings") void OpenAIViewSettings();
+	UFUNCTION(BlueprintCallable, Category="Settings") void ApplyAIViewSettings();
 	UFUNCTION(BlueprintCallable, Category="Settings") void ToggleWarehouseMenu();
 	UFUNCTION(BlueprintCallable, Category="Play mode") bool OpenPlayMode(int32 StageIndex);
 	UFUNCTION(BlueprintPure, Category="Play mode") bool IsMainMenu() const;

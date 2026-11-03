@@ -16,7 +16,7 @@
 
 namespace
 {
- constexpr double Radius=1.2,WallOffset=2.;
+ constexpr double WireRadius=1.2,WallOffset=2.;
  struct FWall { FVector A,B; };
  struct FPanel { AActor* Actor;UStaticMeshComponent* Mesh; };
  bool Active(const AActor* Actor)
@@ -38,7 +38,7 @@ namespace
   Params.AddIgnoredActor(Charger);Params.AddIgnoredActor(Panel);
   TArray<FHitResult> Hits;
   World->SweepMultiByObjectType(Hits,A,B,FQuat::Identity,FCollisionObjectQueryParams::AllObjects,
-   FCollisionShape::MakeSphere(float(Radius+.4)),Params);
+   FCollisionShape::MakeSphere(float(WireRadius+.4)),Params);
   for (const auto& Hit:Hits)
   {
    const auto* Part=Hit.GetComponent();const auto* Actor=Hit.GetActor();
@@ -59,7 +59,7 @@ namespace
   for (const auto* Part:Walls)
   {
    const FBox World=Part->Bounds.GetBox();
-   if (Z<World.Min.Z+Radius+.1 || Z>World.Max.Z-Radius-.1) continue;
+   if (Z<World.Min.Z+WireRadius+.1 || Z>World.Max.Z-WireRadius-.1) continue;
    FVector Min,Max;Part->GetLocalBounds(Min,Max);const auto& Pose=Part->GetComponentTransform();
    const FVector Size=(Max-Min)*Pose.GetScale3D().GetAbs();
    const bool AlongX=Size.X>=Size.Y;
@@ -139,14 +139,14 @@ namespace
   for (int32 I=0;I<8;++I) Local+=Charger->GetActorTransform().InverseTransformPosition(Pose.TransformPosition(
    FVector(I&1 ? Max.X:Min.X,I&2 ? Max.Y:Min.Y,I&4 ? Max.Z:Min.Z)));
   return Charger->GetActorTransform().TransformPosition(
-   FVector(Local.Min.X-Radius-.8,Local.GetCenter().Y,Local.Min.Z+10));
+   FVector(Local.Min.X-WireRadius-.8,Local.GetCenter().Y,Local.Min.Z+10));
  }
  bool SupportedFloor(UWorld* World,const FVector& Point,const AWarehouseChargingStation* Charger,const AActor* Panel)
  {
   FCollisionQueryParams Query(SCENE_QUERY_STAT(ChargerCableFloor),true);
   Query.AddIgnoredActor(Charger);Query.AddIgnoredActor(Panel);
   TArray<FHitResult> Hits;
-  World->LineTraceMultiByObjectType(Hits,Point+FVector(0,0,1),Point-FVector(0,0,Radius+2),FCollisionObjectQueryParams::AllObjects,Query);
+  World->LineTraceMultiByObjectType(Hits,Point+FVector(0,0,1),Point-FVector(0,0,WireRadius+2),FCollisionObjectQueryParams::AllObjects,Query);
   for (const auto& Hit:Hits)
    if (Hit.ImpactNormal.Z>.9 && WarehousePhysics::IsPhysicalContact(Hit.GetComponent()) &&
        !Hit.GetActor()->ActorHasTag(TEXT("ChargerSupplyCable"))) return true;
@@ -162,7 +162,7 @@ namespace
   for (bool InteriorSpan:{false,true})
   {
    const FVector Start=ChargerPort(Charger);
-   const double Z=Floor+Radius+.9;
+   const double Z=Floor+WireRadius+.9;
    FVector HighStart(Start.X,Start.Y,Z),HighEnd(End.X,End.Y,Z);
    if (!ClearSegment(World,Start,HighStart,Charger,Panel.Actor) || !ClearSegment(World,HighEnd,End,Charger,Panel.Actor)) continue;
    auto Faces=WallFaces(Walls,Interior,Z);TArray<FVector> Path;double Cost;
@@ -272,7 +272,7 @@ void UWarehouseChargerWiring::Rebuild()
    auto* Segment=NewObject<UStaticMeshComponent>(Cable,*FString::Printf(TEXT("Conduit%d"),I));Segment->SetupAttachment(Root);
    Segment->SetMobility(EComponentMobility::Movable);Segment->SetStaticMesh(CableMesh);
    if (CableMaterial) Segment->SetMaterial(0,CableMaterial);
-   Segment->SetWorldTransform(FTransform(FRotationMatrix::MakeFromZ(Delta).ToQuat(),(Points[I]+Points[I-1])*.5,FVector(Radius/50.,Radius/50.,Delta.Size()/100.)));
+   Segment->SetWorldTransform(FTransform(FRotationMatrix::MakeFromZ(Delta).ToQuat(),(Points[I]+Points[I-1])*.5,FVector(WireRadius/50.,WireRadius/50.,Delta.Size()/100.)));
    Segment->SetCollisionProfileName(TEXT("NoCollision"));Segment->SetCollisionResponseToAllChannels(ECR_Ignore);
    Segment->SetGenerateOverlapEvents(false);Segment->SetCanEverAffectNavigation(false);
    Segment->SetCastShadow(false);Segment->SetCullDistance(15000);Segment->RegisterComponent();

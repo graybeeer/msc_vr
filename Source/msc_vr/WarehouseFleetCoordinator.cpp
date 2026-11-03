@@ -105,8 +105,10 @@ bool AWarehouseFleetCoordinator::Retreat(AWarehouseForklift* V,AWarehouseForklif
  const auto Saved=V->PlannedRoute;const int32 SavedIndex=V->RouteIndex;
  const auto Start=V->GetActorTransform();
  TGuardValue<bool> Escape(V->bTrafficEscape,true);
- for (float Side : {0.f,-220.f,220.f}) for (float Back : {180.f,280.f,420.f,-180.f,-280.f,-420.f})
+ // Short lane moves first. Only with all of them blocked may the free-space planner find a way there, which takes a wider corridor.
+ for (bool Hybrid : {false,true}) for (float Side : {0.f,-220.f,220.f}) for (float Back : {180.f,280.f,420.f,-180.f,-280.f,-420.f})
  {
+  TGuardValue<bool> Free(V->bHybridRetreat,Hybrid);
   FVector P=Start.TransformPosition(FVector(-Back,Side,0));P.Z=V->FloorBase(Start.GetLocation().Z);
   const FTransform Goal(FRotator(0,Start.Rotator().Yaw,0),P);
   if (Intersects({Footprint(V,Goal).ExpandBy(FVector(20,20,0))},Passage) || !V->PlanAutonomousRoute(Goal)) continue;
@@ -152,6 +154,9 @@ bool AWarehouseFleetCoordinator::Permit(AWarehouseForklift* V,const FTransform* 
   if (!It.Key().IsValid() || !It.Key()->bPowered || It.Key()->IsRemoteControlled()) It.RemoveCurrent();
  for (const auto& Pair : Yields) if (Pair.Key.Get()!=V && Intersects(Request.Corridor,Pair.Value.Escape))
  {
+  // The vehicle this one gave way to may use the lane it backed along, once it stands clear of the leader's way.
+  if (Pair.Value.Arrived && Pair.Value.Leader.Get()==V && Pair.Key.IsValid() &&
+      !Intersects(Request.Corridor,{Footprint(Pair.Key.Get(),Pair.Key->GetActorTransform())})) continue;
   const double Now=GetWorld()->GetTimeSeconds();
   if (Pair.Value.Arrived && !PreciseGoal && Now-Request.LastDetour>5 && !V->PlannedRoute.IsEmpty())
   {

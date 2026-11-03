@@ -103,6 +103,8 @@ public:
  UFUNCTION(BlueprintPure, Category="Autonomy") bool IsFloorFootprintValid(AWarehousePallet* Pallet,const FTransform& Reference,bool Refresh=true) const;
  UFUNCTION(BlueprintPure, Category="Autonomy") bool IsFloorPlacementValid(AWarehousePallet* Pallet,const FTransform& Destination,bool bForksStillInserted=false,bool Refresh=true) const;
  UFUNCTION(BlueprintCallable, Category="Autonomy") bool PlanAutonomousRoute(const FTransform& Goal);
+ // Plans once with the given planner and restores the current route; for comparing planners.
+ UFUNCTION(BlueprintCallable, Category="Autonomy") FString BenchRoutePlan(const FTransform& Goal,bool bHybrid);
  UFUNCTION(BlueprintCallable, Category="Layout") void RefreshAfterLayout(bool PublishTaskLocation=true);
  // Administrative editing only: retain unrelated work; report cancellation for removed resources.
  void SuspendForBuildingEdit(const TArray<AActor*>& Removed);
@@ -205,7 +207,7 @@ private:
  TOptional<bool> PlanningSensorReadiness;
  bool bObservedPickupEscape=false;
  bool bEndpointDriving=false,bEndpointOrienting=false,bRouteTurning=false;
- int32 EndpointSegment=-1;
+ int32 EndpointSegment=-1; int32 EndpointCorrections=0;
  FBox NavigationEnvelope() const;
  // Commands are actuator targets. Telemetry and fork pose always come from Chaos.
  UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> ChassisBody;
@@ -261,6 +263,17 @@ private:
  mutable FString NavigationBlockDetail;
  bool ConnectPoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost,const FWarehouseNavigationQuery* Query=nullptr) const;
  bool ConnectLanePoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost,const FWarehouseNavigationQuery* Query=nullptr) const;
+ bool PlanHybridRoute(const FTransform& Start,const FTransform& FinalGoal,const FWarehouseNavigationQuery& InQuery,bool bStraightIn,TArray<FWarehouseRoutePoint>& OutRoute,FString* OutReport=nullptr) const;
+ float RouteTimeSeconds(const TArray<FWarehouseRoutePoint>& Route,const FTransform& Start,float* OutLength=nullptr,float* OutTurnDegrees=nullptr,int32* OutFlips=nullptr) const;
+ int32 PlannerOverride=-1;
+ bool bRouteFromHybrid=false;
+ bool bHybridRetreat=false;
+ bool TryHybridReplanHere(EWarehouseAIState From);
+ int32 HybridRouteReplans=0;
+ FVector HybridReplanProgress=FVector::ZeroVector;
+ mutable bool bHybridGoalBlocked=false;
+ int32 AlignRechecks=0;
+ FString LastPlanReport;
  bool FollowRoute(float Speed,float Dt);
  bool MovePrecise(FVector Destination,float Speed,float Dt);
  bool SeePallet(FTransform& Pose) const;
