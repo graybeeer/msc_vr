@@ -1,4 +1,5 @@
 #include "WarehouseLayoutInventory.h"
+#include "WarehousePhysics.h"
 #include "WarehousePlayMode.h"
 #include "WarehouseForklift.h"
 #include "WarehousePallet.h"
@@ -155,6 +156,54 @@ void AWarehouseLayoutInventory::Capture(EWarehouseLayoutCategory Category,const 
  }
  Prototypes.Add(MoveTemp(Prototype));
 }
+TArray<FWarehouseRackSlot> AWarehouseLayoutInventory::RackSlotsFor(const AActor* Rack) const
+{
+ TArray<FWarehouseRackSlot> Result;
+ auto Add=[&](const FWarehouseRackSlot& Slot)
+ {
+  if (!IsValid(Slot.Rack) || (Rack && Slot.Rack!=Rack &&
+      (GroupTag(Rack).IsNone() || GroupTag(Slot.Rack)!=GroupTag(Rack)))) return;
+  if (!Result.ContainsByPredicate([&](const auto& Existing) {return Existing.Rack==Slot.Rack && Existing.Name==Slot.Name;})) Result.Add(Slot);
+ };
+ for (TActorIterator<AWarehouseInboundZone> It(GetWorld());It;++It) for (const auto& Slot:It->RackSlots) Add(Slot);
+ for (auto Slot:RackCatalogue) if (IsValid(Slot.Rack))
+ { Slot.Pose=Slot.Pose*Slot.Rack->GetActorTransform();Add(Slot); }
+ // Older storage rows have physical rack profiles but no inbound slot list.
+ // Read their actual flat decks; do not invent positions from a rotated world AABB.
+ if (auto* Strength=AWarehouseDamageSystem::Find(this)) for (const auto& Profile:Strength->Objects)
+ {
+  if (Profile.Failure!=EWarehouseFailure::Rack || Profile.Members.IsEmpty()) continue;
+  AActor* Anchor=Profile.Members[0];if (!IsValid(Anchor)) continue;
+  const FName Group=GroupTag(Anchor);
+  if ((Rack && Anchor!=Rack && (Group.IsNone() || Group!=GroupTag(Rack))) ||
+      Result.ContainsByPredicate([&](const auto& Slot){return Slot.Rack==Anchor || (!Group.IsNone() && GroupTag(Slot.Rack)==Group);})) continue;
+  for (AActor* Member:Profile.Members) if (IsValid(Member))
+  {
+   TArray<UStaticMeshComponent*> Parts;Member->GetComponents(Parts);
+   for (auto* Part:Parts) if (WarehousePhysics::IsPhysicalContact(Part) && Part->GetStaticMesh())
+   {
+    const FBox Box=Part->GetStaticMesh()->GetBoundingBox();
+    const FVector Size=Box.GetSize()*Part->GetComponentScale().GetAbs();
+    if (Size.Z>4 || FMath::Min(Size.X,Size.Y)<95 || FMath::Abs(Part->GetComponentRotation().Pitch)>1 || FMath::Abs(Part->GetComponentRotation().Roll)>1) continue;
+    const bool AlongY=Size.Y>=Size.X;
+    const double Length=AlongY ? Size.Y : Size.X;
+    const int32 Count=FMath::FloorToInt(Length/(AWarehouseForklift::FloorSlotHalfExtentCm*2));
+    if (Count<=0) continue;
+    const FVector Center=Part->GetComponentTransform().TransformPosition(Box.GetCenter());
+    const FVector Axis=AlongY ? Part->GetRightVector() : Part->GetForwardVector();
+    for (int32 Index=0;Index<Count;++Index)
+    {
+     FWarehouseRackSlot Slot;Slot.Rack=Anchor;Slot.Name=Part->GetPathName()+FString::Printf(TEXT("/%d"),Index);
+     Slot.Pose=FTransform(FRotator(0,Part->GetComponentRotation().Yaw+(AlongY ? 0.f : 90.f),0),
+      Center+Axis*((Index+.5)*Length/Count-Length*.5)+FVector(0,0,Size.Z*.5));
+     Add(Slot);
+    }
+   }
+  }
+ }
+ return Result;
+}
+
 void AWarehouseLayoutInventory::CapturePrototypes(AWarehouseLayoutEditor* Layout)
 {
  if (bCaptured || !Layout) return;bCaptured=true;

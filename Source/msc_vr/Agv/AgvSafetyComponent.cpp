@@ -129,10 +129,6 @@ void UAgvSafetyComponent::Step(float Dt)
 	{
 		Limit = FMath::Min(Limit, ForksFirstMaxSpeedCm);
 	}
-	if (bApproachMode)
-	{
-		Limit = FMath::Min(Limit, ApproachMaxSpeedCm);
-	}
 	Drive->SetSafetySpeedLimit(Limit);
 
 	if (bDrawFields)
@@ -171,14 +167,6 @@ void UAgvSafetyComponent::BuildSweep()
 			FieldSet = TEXT("STANDSTILL");
 		}
 	}
-	else if (bFieldsFollowPath && !Navigator && ExternalPathAhead.Num() > 1 && FMath::Abs(Speed) <= 2.0 && FMath::Abs(Command) <= 0.5
-		&& FMath::Abs(Turn) <= 0.5)
-	{
-		// Stopped on another controller's route (a safety stop, about to start): the route's direction picks the set, so
-		// whatever stopped the vehicle keeps it stopped until it has gone.
-		const FVector2D Step = FVector2D(ExternalPathAhead.Last()) - FVector2D(ExternalPathAhead[0]);
-		FieldSet = FVector2D::DotProduct(Step, AgvMath::Dir(ExternalPathAhead[0].Z)) >= 0.0 ? TEXT("FORKS FIRST") : TEXT("BODY FIRST");
-	}
 	else if (FMath::Abs(Speed) > 2.0 || FMath::Abs(Command) > 0.5)
 	{
 		FieldSet = (FMath::Abs(Speed) > 2.0 ? Speed : Command) > 0.0 ? TEXT("FORKS FIRST") : TEXT("BODY FIRST");
@@ -192,10 +180,6 @@ void UAgvSafetyComponent::BuildSweep()
 		// Parked with nothing planned: no motion to guard (a new order switches the set before the vehicle moves).
 		FieldSet = TEXT("STANDSTILL");
 	}
-	if (bApproachMode)
-	{
-		FieldSet = TEXT("APPROACH");
-	}
 	bRotating = FieldSet.StartsWith(TEXT("ROTATE"));
 
 	const UAgvTricycleDriveComponent* Tricycle = Cast<UAgvTricycleDriveComponent>(Drive);
@@ -207,11 +191,6 @@ void UAgvSafetyComponent::BuildSweep()
 	Sweep.Reset();
 	if (FieldSet == TEXT("STANDSTILL"))
 	{
-		return;
-	}
-	if (FieldSet == TEXT("APPROACH"))
-	{
-		Sweep.Add({ FVector2D::ZeroVector, 0.0, 0.0 }); // the outline where it is now, as a bumper
 		return;
 	}
 	if (bRotating)
@@ -243,27 +222,7 @@ void UAgvSafetyComponent::BuildSweep()
 	TArray<FVector> Ahead;
 	FVector2D Here;
 	double HereYaw;
-	bool bHavePath = false;
-	if (bFieldsFollowPath && Localizer)
-	{
-		if (Navigator)
-		{
-			bHavePath = Navigator->GetPathAhead(WarningLengthCm, 10.0, Ahead) && Ahead.Num() > 0;
-		}
-		else if (ExternalPathAhead.Num() > 0 && FieldSet != TEXT("APPROACH"))
-		{
-			// Another controller's path: up to the warning length.
-			double Length = 0.0;
-			Ahead.Add(ExternalPathAhead[0]);
-			for (int32 Index = 1; Index < ExternalPathAhead.Num() && Length < WarningLengthCm; ++Index)
-			{
-				Length += FVector2D::Distance(FVector2D(ExternalPathAhead[Index]), FVector2D(ExternalPathAhead[Index - 1]));
-				Ahead.Add(ExternalPathAhead[Index]);
-			}
-			bHavePath = true;
-		}
-	}
-	if (bHavePath && Localizer->GetPose(Here, HereYaw))
+	if (bFieldsFollowPath && Navigator && Localizer && Navigator->GetPathAhead(WarningLengthCm, 10.0, Ahead) && Ahead.Num() > 0 && Localizer->GetPose(Here, HereYaw))
 	{
 		double Along = 0.0;
 		for (int32 Index = 0; Index < Ahead.Num(); ++Index)
@@ -304,30 +263,22 @@ void UAgvSafetyComponent::Evaluate()
 	// the vehicle's own outline right now are the vehicle or its load.
 	// Margins on the sides and the leading end only (all round when turning on the spot): what the vehicle has
 	// already passed must not stop it.
-	const FBox2D Outline = LoadBox.bIsValid ? Footprint + LoadBox : Footprint;
 	auto Grow = [&](double Margin)
 	{
-		FBox2D Box = Outline.ExpandBy(Margin);
+		FBox2D Box = Footprint.ExpandBy(Margin);
 		if (FieldSet == TEXT("BODY FIRST"))
 		{
-			Box.Max.X = Outline.Max.X;
+			Box.Max.X = Footprint.Max.X;
 		}
 		else if (FieldSet == TEXT("FORKS FIRST"))
 		{
-			Box.Min.X = Outline.Min.X;
+			Box.Min.X = Footprint.Min.X;
 		}
 		return Box;
 	};
-	const bool bApproach = FieldSet == TEXT("APPROACH");
-	// Approach: a bumper on the sides and the body end; the fork end is muted (the forks are meant to meet the pallet,
-	// rack or charger they are working on), as forklift AGVs mute the fork-side field for insertion.
-	FBox2D Protective = Grow(bApproach ? ApproachMarginCm : SideMarginCm);
-	if (bApproach)
-	{
-		Protective.Max.X = FMath::Min(Outline.Max.X, (double)ApproachMutedFromXCm);
-	}
-	const FBox2D Warning = bApproach ? FBox2D(ForceInit) : Grow(SideMarginCm + WarningExtraWidthCm);
-	const double ProtectiveReach = bRotating ? ProtectiveRotationDeg : bApproach ? 0.0 : ProtectiveLengthCm;
+	const FBox2D Protective = Grow(SideMarginCm);
+	const FBox2D Warning = Grow(SideMarginCm + WarningExtraWidthCm);
+	const double ProtectiveReach = bRotating ? ProtectiveRotationDeg : ProtectiveLengthCm;
 	int32 ProtectiveHits = 0, WarningHits = 0;
 	FVector FirstProtective = FVector::ZeroVector;
 	// Where the vehicle believes it is, to look warning points up in the map.
@@ -337,22 +288,14 @@ void UAgvSafetyComponent::Evaluate()
 	const FVector2D Origin = bMapFilter ? Reference - AgvMath::Dir(Yaw) * ReferenceX : FVector2D::ZeroVector;
 	MappedPointsIgnored = 0;
 	NearestObjectCm = -1.f;
-	// Beside the forks of the empty vehicle (outside the fork width grown by Margin): not part of the outline.
-	const bool bForkNotch = !LoadBox.bIsValid && ForkRootXCm < Outline.Max.X;
-	auto BesideForks = [&](const FVector2D& P, double Margin)
-	{
-		return bForkNotch && P.X > ForkRootXCm && FMath::Abs(P.Y) > ForkHalfWidthCm + Margin;
-	};
-	const double ProtectiveMargin = bApproach ? ApproachMarginCm : SideMarginCm;
-	const double WarningMargin = SideMarginCm + WarningExtraWidthCm;
 	for (const TArray<FVector>& Points : LatestPoints)
 	{
 		for (const FVector& Point : Points)
 		{
 			const FVector2D Vehicle(Point);
-			if (Outline.IsInside(Vehicle) && !BesideForks(Vehicle, 0.0) || (ApproachTargetBox.bIsValid && ApproachTargetBox.IsInside(Vehicle)))
+			if (Footprint.IsInside(Vehicle))
 			{
-				continue; // the vehicle itself, its load, or the pallet / slot / charger it is working on
+				continue;
 			}
 			// The two fields are judged separately: the wider warning outline reaches a point one pose earlier than the
 			// protective one, so stopping at the first warning pose would miss the protective field.
@@ -361,23 +304,16 @@ void UAgvSafetyComponent::Evaluate()
 			for (const FSweepPose& Pose : Sweep)
 			{
 				const FVector2D InPose = AgvMath::Rotate(-Pose.Yaw, FromReference - Pose.Position) + FVector2D(ReferenceX, 0.0);
-				if (!bInWarning && Warning.IsInside(InPose) && !BesideForks(InPose, WarningMargin))
+				if (!bInWarning && Warning.IsInside(InPose))
 				{
 					bInWarning = true;
 					NearestObjectCm = NearestObjectCm < 0.f ? (float)Pose.Along : FMath::Min(NearestObjectCm, (float)Pose.Along);
 				}
-				bInProtective = Pose.Along <= ProtectiveReach && Protective.IsInside(InPose) && !BesideForks(InPose, ProtectiveMargin);
+				bInProtective = Pose.Along <= ProtectiveReach && Protective.IsInside(InPose);
 				if (bInProtective || Pose.Along > ProtectiveReach && bInWarning)
 				{
 					break;
 				}
-			}
-			if (bInProtective && bMapFilter
-				&& (bPlannedPathIgnoresMappedStructure && !Navigator && ExternalPathAhead.Num() > 0 || bApproachIgnoresMappedStructure && bApproach)
-				&& Localizer->IsMappedStructure(Origin + AgvMath::Rotate(Yaw, Vehicle), MappedStructureToleranceCm))
-			{
-				bInProtective = bInWarning = false;
-				++MappedPointsIgnored;
 			}
 			if (bInWarning && !bInProtective && bMapFilter
 				&& Localizer->IsMappedStructure(Origin + AgvMath::Rotate(Yaw, Vehicle), MappedStructureToleranceCm))
@@ -393,10 +329,6 @@ void UAgvSafetyComponent::Evaluate()
 		}
 	}
 	bProtectiveHit = ProtectiveHits >= MinObjectPoints;
-	if (bProtectiveHit)
-	{
-		LastProtectiveHit = FirstProtective;
-	}
 	if (bProtectiveHit && State != EAgvSafetyState::Stop)
 	{
 		UE_LOG(LogAgvSafety, Verbose, TEXT("AGV_SAFETY %s: protective hit by %d points, first at vehicle (%.0f, %.0f, %.0f)"), *GetOwner()->GetName(), ProtectiveHits, FirstProtective.X, FirstProtective.Y, FirstProtective.Z);
@@ -426,7 +358,6 @@ void UAgvSafetyComponent::DrawFields() const
 	for (int32 Index = 0; Index < Sweep.Num(); Index += 6)
 	{
 		const bool bProtective = Sweep[Index].Along <= ProtectiveReach;
-		const FBox2D Shape = LoadBox.bIsValid ? Footprint + LoadBox : Footprint;
-		Outline(Sweep[Index], Shape.ExpandBy(FieldSet == TEXT("APPROACH") ? ApproachMarginCm : SideMarginCm + (bProtective ? 0.0 : WarningExtraWidthCm)), bProtective ? Red : Yellow);
+		Outline(Sweep[Index], Footprint.ExpandBy(SideMarginCm + (bProtective ? 0.0 : WarningExtraWidthCm)), bProtective ? Red : Yellow);
 	}
 }

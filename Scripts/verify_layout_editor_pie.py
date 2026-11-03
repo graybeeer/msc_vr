@@ -776,27 +776,49 @@ def marquee_checks(pair):
 
 def face_snap_checks():
     source = next(a for a in live if a.get_actor_label() == 'WH_InboundRack_00_A')
-    peer = next(a for a in live if a.get_actor_label() == 'WH_InboundRack_01_A')
     members = group_members(source)
     assert not goods_inside(*box_of(members)), 'Snap fixture rack is expected to be empty'
     layout.clear_selection()
     layout.set_editor_property('edge_snap_enabled', True)
-    state = capture(members)
-    point = source.get_actor_location()
+    # Chargers now start against this wall. A previously empty snap gap may
+    # contain a real parked forklift; try both faces and require a native-clear
+    # commit rather than weakening collision or moving the vehicle out of it.
+    committed = False
     own_low, own_high = box_of(members)
-    peer_low, _ = box_of(group_members(peer))
-    raw = unreal.Vector(0, peer_low[1] - own_high[1] - 10, 500)
-    assert layout.begin_drag(source, point)
-    layout.update_drag(point + raw)
-    actual_delta = source.get_actor_location() - point
-    disabled(state)
-    _, high = box_of(members)
-    assert abs(peer_low[1] - high[1] - .1) < .2, ('Peer rack face gap', peer_low[1] - high[1])
-    assert '랙 면에 맞춤' in str(layout.get_editor_property('status')), layout.get_editor_property('status')
-    assert layout.end_drag(True), ('Native collision rejected peer face snap', layout.get_editor_property('status'))
-    restored(state)
-    rollback_committed(source, point, actual_delta)
-    print('LAYOUT_PEER_RACK_FACE_SNAP_PASSED', actual_delta, '0.1cm gap, native clear commit')
+    for peer, _, peer_bounds in rack_records():
+        if group_key(peer)==group_key(source):
+            continue
+        peer_low, peer_high=peer_bounds
+        if min(own_high[0],peer_high[0])-max(own_low[0],peer_low[0])<50:
+            continue
+        for side in (-1,1):
+            state = capture(members)
+            point = source.get_actor_location()
+            offset=peer_low[1]-own_high[1]-10 if side<0 else peer_high[1]-own_low[1]+10
+            assert layout.begin_drag(source, point)
+            layout.update_drag(point + unreal.Vector(0,offset,500))
+            actual_delta = source.get_actor_location() - point
+            disabled(state)
+            low,high = box_of(members)
+            gap=peer_low[1]-high[1] if side<0 else low[1]-peer_high[1]
+            hinted='랙 면에 맞춤' in str(layout.get_editor_property('status'))
+            if not hinted or abs(gap-.1)>=.2:
+                layout.end_drag(False)
+                translated(state,unreal.Vector())
+                restored(state)
+                continue
+            if not layout.end_drag(True):
+                translated(state,unreal.Vector())
+                restored(state)
+                continue
+            restored(state)
+            rollback_committed(source, point, actual_delta)
+            print('LAYOUT_PEER_RACK_FACE_SNAP_PASSED', peer.get_actor_label(), actual_delta, '0.1cm gap, native clear commit')
+            committed=True
+            break
+        if committed:
+            break
+    assert committed,'No native-clear peer rack snap could be committed'
 
     # Try real cardinal walls while retaining the existing perpendicular
     # coordinate. No geometry or collision rules are changed for the test.

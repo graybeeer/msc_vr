@@ -4,7 +4,7 @@
 
 Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. 센서 인식 이상, 충돌, 포크와 팔레트/적재물 결합 실패 같은 상황을 재현하고, 창고 운영 조건별 효율을 비교하는 것이 목표다. 향후 물리 거동은 질량·관성·마찰·접촉·하중을 실제 장비에 맞춰 검증해야 한다.
 
-**현재 맵:** 3층 복층·승강기, 트럭 적재함과 외부 환경, 양손 화물 운반, 1층 지게차 2대의 자율 작업·G 스마트폰 원격 조작, 센서/충돌/하중 검사와 자동 충전이 있다. 지게차·작업자 NPC·일반 화물은 Chaos 강체와 유한 구동력을 사용한다. 플레이어는 즉시 반응하는 CharacterMovement와 질량 무제한 손 운반을 사용한다. 실행 검증·계수·한계는 `PHYSICS.md`, 맵은 `WAREHOUSE.md`, 장비 사양은 `VNSL14_SPEC.md`를 확인한다. 기존 `WarehouseForklift`에 `Agv`의 센서만 연결하며, 별도 타이어·주행 알고리즘은 연결하지 않는다.
+**현재 맵:** 3층 복층·승강기, 트럭 적재함과 외부 환경, 양손 화물 운반, 1층 지게차 2대의 자율 작업·G 스마트폰 원격 조작, 센서/충돌/하중 검사와 자동 충전이 있다. 지게차·작업자 NPC·일반 화물은 Chaos 강체와 유한 구동력을 사용한다. 플레이어는 즉시 반응하는 CharacterMovement와 질량 무제한 손 운반을 사용한다. 실행 검증·계수·한계는 `PHYSICS.md`, 맵은 `WAREHOUSE.md`, 장비 사양은 `VNSL14_SPEC.md`를 확인한다. 기존 `WarehouseForklift`에 `Agv`의 센서·위치 추정을 연결하며, 별도 타이어·내비게이터는 연결하지 않는다.
 
 ## 실행 구조 한눈에 보기
 
@@ -23,15 +23,22 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 배치 보관·반복 실험·성과 | `WarehouseExperimentStorage`, `WarehouseExperimentSubsystem`, `WarehouseExperimentMetrics`, `WarehouseExperimentUI` | 초기 배치 JSON 복원, 공통 주문·새 레벨 반복, 완료·대기 시간과 CSV/JSON 비교 |
 | 검증·모델·맵 | `Scripts/verify_*`, `Art/`, `Content/`, `Config/` | 회귀 검사·적용 도구, 자체 모델 원본, Unreal 에셋·맵, 실행 설정 |
 
-관제·차량·설비는 현재 같은 게임 프로세스 안에서 연결된다. `Source/msc_vr/Agv/` 중 센서만 운용 차량에 연결하며, 별도 주행·위치 추정은 독립 개발 영역이다. 자세한 상태 흐름과 정보 경계는 [알고리즘 도식](FLEET_ALGORITHM_COMPARISON.md)과 [자율 운반 기준](AUTONOMY.md)을 따른다.
+관제·차량·설비는 현재 같은 게임 프로세스 안에서 연결된다. `Source/msc_vr/Agv/`의 센서와 `AgvForkliftLocalizer` 위치 추정만 기존 운용 차량에 연결하며 독립 타이어·내비게이터·안전 제어는 활성화하지 않는다. 자세한 상태 흐름과 정보 경계는 [알고리즘 도식](FLEET_ALGORITHM_COMPARISON.md)과 [자율 운반 기준](AUTONOMY.md)을 따른다.
 
 ## 작업별 첫 탐색 경로
 
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
+| 추정 위치 주행·지도 변경/층간 이동 후 위치 초기화 | `Agv/AgvForkliftLocalizer.h/.cpp`, `Agv/AgvScanMatching.h/.cpp`, `WarehouseForkliftAI::PlanAutonomousRoute`/`FollowRoute`/`RefreshAfterLayout`, `Scripts/verify_estimated_navigation_pie.py`, `Scripts/verify_localization_improvements_pie.py` | 후자는 `-LocStages=0,1,2,3`로 같은 실제 운반의 보정·신뢰도·제한 재탐색을 비교하며 결과는 `Saved/Testing/LocalizationImprovements_20261031/`에 보관. 현재 통합 경계는 `AUTONOMY.md`. `-EstimatedCase=shipping/remote/layout/elevator`로 기존 실제 운행 검사를 재사용하며, 이동 추정에는 공통1초 스냅샷만 사용. 원격은 위치 추정도 중단. `Agv`의 인계·설계 문서는 개발 이력 |
+| 이동 예측 주기·프레임 상한·원격 중단과 렉 비교 | `Agv/AgvForkliftLocalizer::CaptureOdometry`/`StepOdometry`/`TickComponent`, `Scripts/verify_prediction_interval_pie.py`, `profile_periodic_hitches_pie.py` | `Warehouse.Localization.PredictionHz` 기본50Hz 목표(월드30Hz 상한), 센서 관측은 기존1초. `-PredictionRates=2,50 -PredictionCase=transport/remote/layout/elevator`; 렌더링은 `-HitchPredictionHz=2/50`. 현재 기준은 `AUTONOMY.md`, 성능 해석은 `PHYSICS.md`, 결과는 `Saved/Testing/PredictionRate_20261101/`. 이전0.5/1초 결과는 각각 `PredictionHalfSecond_20261101/`·`PredictionInterval_20261101/` |
+| 센서·오도메트리·리프트·하중 동시 계측 | `Scripts/verify_sensor_calibration_pie.py`, `verify_transport_benchmark_pie.py` | 운용 설정을 바꾸지 않고 광선/반환점/자체 가림·지도 매칭·바퀴 회전·기울기·화물 바닥 여유를 기록. `-BenchGroup=flat -BenchRepeats=2 -CalibrationRun=name`, 선택 하중은 `-CalibrationLoads=50`. 폐기 후보와 한계는 `AUTONOMY.md`, 실행 기록은 `Saved/Testing/SensorCalibration_20261031/` |
+| 접근·삽입·후진·회전 작업 속도 비교 | `WarehouseForkliftAI.cpp`의 `Warehouse.WorkSpeed`, `Scripts/verify_work_speed_pie.py` | 동일 형상/시드의 실제 Chaos 운반·손상·지지·최종 안착 검사 재사용. `-SpeedProfiles=0,6 -BenchGroup=flat -WorkLoads=50,100,200 -BenchRepeats=2 -WorkTopChannels=16,32 -WorkTopRangeCm=3000 -WorkGraceCm=0 -SpeedRun=name`; 차량 수/통로는 기존 `-StressCases`/`-NarrowWidth`. 센서 생성 전에 설정하며 관측 비용도 계측. 채택·폐기와 검증은 `AUTONOMY.md`, 결과는 `Saved/Testing/WorkSpeed_20261031/` |
+| 지도 측위를 유지한 빈 차량·적재 차량의 연속 층간 운반 | `Scripts/verify_mapped_elevator_transport_pie.py`, `verify_elevator_route_visuals_pie.py` | 실제 저장 차량 리그·공개 승강기 개구부 규격·고정 벽 지도에서1→3층 후37kg 적재3→2층·하역/포크 인출을 검사. `-SkipCapture -nullrhi`는 물리/API 전용. 현재 검증과 한계는 `AUTONOMY.md`, 출력은 `Saved/Testing/WorkSpeed_20261031/LoadedFloor32Final/` |
+| 실제 운반 속도·중량별/교통별 시간 측정·제조사 사양 비교 | `Scripts/verify_transport_benchmark_pie.py`, `verify_forklift_handling_pie.py` | 기존 실물 리그/Chaos 운반 검사를 재사용해 실제 경로 거리·주행/정렬/승강·대기·재시도와 속도를 기록. `-BenchGroup=flat -BenchSeed=202 -BenchRepeats=2`는 같은 형상의50/500/1000kg, `-StressCases`/`-NarrowWidth`는 다중 차량/문 폭. 결과 `Saved/Testing/TransportBenchmark_20261031/`, 운용 검증은 `AUTONOMY.md`, 사양은 `VNSL14_SPEC.md` |
+| 좁은 통로 계획 여유·실제 화물 기준 바닥 하역·운반 시간 비교 | `WarehouseForkliftAI::PlanAutonomousRoute`/`TryPlanAutonomousRoute`/`FollowRoute`/`AlignUnload`, `Scripts/verify_forklift_handling_pie.py` | 기본25cm 계획 실패 때10/3cm 재계획·좁은 구간 요청30cm/s, 실제 접촉/1초 관측/원격 제외 유지. 기준은 `AUTONOMY.md`, 같은 배치 A/B·좁은 문 검사는 `Saved/Testing/HandlingImprovements_20261031/` |
 | 작업 완전 중지·기존 짐 하역 후 새 지시·운반 불가 보류·입출고 탭/차량 스크롤 | `WarehouseForkliftWorkControl.cpp`, `WarehouseForkliftAI`, `WarehouseInboundZone`, `WarehouseShippingSystem`, `WarehouseFocusDirector`, `WarehouseFocusUI` | 중지/물리 정리와 보류 기준은 `AUTONOMY.md`, 조작은 `WAREHOUSE.md`; 검사 `verify_forklift_work_control_pie.py`(기본 바닥/원격, `-RetainedInsertOnly`, `-RetainedRackLoad`, `-RetainedBlockedDrop`), `verify_work_control_dispatch_pie.py`, `verify_focus_ui_pie.py` |
-| 랙 팔레트 즉시 집기·바닥/선반 즉시 안착·애니메이션 경로 오판 | `msc_vrCharacter::FindCarryTarget`/`CanPlaceHeldGroup`/`TryPlaceOnSurface`/`TryPlaceOnPallet`, `verify_instant_rack_carry_pie.py` | 플레이어만 최종 실형상·수평 받침을 검사해 즉시 이동. 보행 중 스윕과 놓은 뒤 물리는 유지. 기존 경계 검사는 `verify_arcade_carry_placement_pie.py`, 기준은 `PHYSICS.md` |
+| 랙 팔레트 즉시 집기·랙 E 즉시 적재·바닥/선반 즉시 안착 | `msc_vrCharacter::FindCarryTarget`/`CanPlaceHeldGroup`/`TryPlaceOnRack`/`TryPlaceOnSurface`/`TryPlaceOnPallet`, `WarehouseLayoutInventory::RackSlotsFor`, `verify_instant_rack_carry_pie.py` | 플레이어만 최종 실형상·수평 받침을 검사해 즉시 이동. 현재 적재 자리·미등록 랙의 실제 데크 형상을 사용하며 빈 공간이 없으면 손에 유지. `-RackGeometryOnly`는 후자의 검사. 보행 중 스윕과 놓은 뒤 물리는 유지. 기존 경계 검사는 `verify_arcade_carry_placement_pie.py`, 기준은 `PHYSICS.md` |
 | 바닥 비충돌 충전기 전선·실내 작업자 외부 배치 | `WarehouseChargerWiring`, `WarehouseWorker::RelocateIndoorWorkers`, `relocate_warehouse_workers_outside.py`, `verify_floor_wiring_workers_pie.py` | 전선 공통 기준은 `COLLISION_POLICY.md`, 배선은 `WAREHOUSE_SERVICES_MODEL.md`, 역할/배치는 `WAREHOUSE.md`; 시작·건물 편집 시 현재 외곽·실제 지지와 빈 공간을 확인 |
 | 기본 간소화·NPC 업무 자동 조정·수동 처리 옵션·지게차 전용 화면 | `WarehouseFocusDirector.h/.cpp`, `WarehouseOperationsSettings.h/.cpp`, `WarehouseFocusUI.h/.cpp`, `msc_vrGameMode`, `msc_vrPlayerController` | 기존 검수/배송편/운반 API만 호출. 정책은 `TRUCK_LOGISTICS_DESIGN.md`, 모드 경계는 `PLAY_MODE.md`, 조작은 `WAREHOUSE.md`. 검사 `Scripts/verify_forklift_focus_pie.py`, `verify_focus_ui_pie.py`; 새 공급은 최초 운행 전·편집/실험 중 대기. 설정은 로컬 Config이며 배치 스냅샷에서 업무 조정자는 제외 |
 | 로컬 용량·미사용 팩·생성 캐시 정리와 필수 에셋 재검사 | `Scripts/optimize_project_storage.py`, `Scripts/audit_runtime_assets.py`, `Scripts/verify_runtime_storage.py` | 정리·원본 복원은 `TEAM_ASSETS.md`의 로컬 용량 정리 절; 최신 참조·크기·경로 검증, 원본 ZIP 보관/무결성 검사, Git 추적 파일·사용자 저장·캡처 보존. 게임 사용 에셋 제거는 별도 Git 검토 |
@@ -56,10 +63,10 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 창고 천장·벽면 설비 조사·모델링 전 구상도 | `Art/Planning/WarehouseServices/CONCEPT.md`, 같은 폴더의 `warehouse_services_concept.png` | 현재 공간은 `WAREHOUSE.md`, 복층은 `MEZZANINE.md` |
 | 창고 설비 모듈·밀도/벽·천장 장착·장식 충돌·Blender/Unreal 렌더 | `WAREHOUSE_SERVICES_MODEL.md`, `Art/Environment/WarehouseServices/`, `Content/Warehouse/Services/`, `Scripts/configure_warehouse_services_collision.py` | 모델은 `build_warehouse_services.py`·`preview_warehouse_services.py`·`export_warehouse_services.py`, 최신 배치는 `refine_warehouse_services_layout.py`, 검증/캡처는 `capture_dense_warehouse_services.py` |
 | 고무 기둥 코너·평판·전체 보호대 모델·FBX | `WAREHOUSE_SERVICES_MODEL.md`의 추가 기둥 보호대, `Art/Environment/WarehouseServices/ColumnProtection/` | `Scripts/build_column_protectors.py` |
-| 기존 지게차 2대의 초기 위치를 연결 충전기로 통합 | `Scripts/configure_charger_start_positions.py`, `WarehouseChargingStation.h/.cpp` | 에디터에서 기존 차량과 분리된 부품까지 actor 기준 상대 자세·크기를 보존해 시작 위치를 저장. 실행 중 재배치는 `WarehouseLayoutEditor`, 사용·검증 범위는 `WAREHOUSE.md` |
+| 기존 지게차 2대·충전기 벽면 초기 배치 | `Scripts/configure_charger_start_positions.py`, `WarehouseChargingStation.h/.cpp` | 직접 실행 시 동쪽 벽 실제 면·캐비닛 뒤끝으로5cm 여유를 계산하고 랙 사이 빈자리에 배치. 차량과 분리된 부품까지 상대 자세·크기를 보존. 실행 중 재배치는 `WarehouseLayoutEditor`, 사용·검증 범위는 `WAREHOUSE.md` |
 | 옮긴 충전기로 실제 주행·도킹·배터리 증가·출차 검사 | `Scripts/verify_native_charger_layout_pie.py` | 저장 원본 리그·충전기를 복사한 미저장 Entry PIE. 실제 저장 맵의 선택·그룹/물리 복원은 `verify_layout_editor_pie.py`, 충전 정책은 `VNSL14_SPEC.md` |
 | 1/2/4배 시뮬레이션·같은 물리 간격·실효 배속 | `WarehouseSimulationClock.h/.cpp`, `msc_vrPlayerController`, `Scripts/verify_simulation_speed_pie.py` | 물리/시간 기준은 `PHYSICS.md`, 작업 시간 UI는 `WarehouseComputerUI.cpp` |
-| 창고 CPU/GPU 병목·native CSV 성능 측정·받침 스냅샷·경로 질의 최적화 | `WarehousePerformance.h`, `Scripts/profile_periodic_hitches_pie.py` (저장 맵 1인칭/관찰의 주기 지연), `Scripts/profile_warehouse_pie.py` (운반 회귀), `Scripts/analyze_warehouse_profile.py`, `Scripts/verify_support_snapshot_pie.py` | 하중/재고는 `WarehouseDamageSystem`·`WarehouseComputer`·`WarehouseInboundZone`, 계획은 `WarehouseForkliftAI`, 센서는 `AgvShadowSensors`, 측정값과 실행 기준은 `PHYSICS.md` |
+| 창고 CPU/GPU 병목·native CSV 성능 측정·받침 스냅샷·경로 질의 최적화 | `WarehousePerformance.h`, `Scripts/profile_periodic_hitches_pie.py` (저장 맵 1인칭/관찰의 주기 지연), `Scripts/profile_warehouse_pie.py` (운반 회귀), `Scripts/analyze_warehouse_profile.py`, `Scripts/compare_prediction_profiles.py`, `Scripts/verify_support_snapshot_pie.py` | 비교 분석은 기록된 구간으로 워밍업/시점 전환을 구분하고 FPS·p95/p99·최대 프레임·예측/센서 실제 빈도·호출당 예측 비용을 집계한다. 하중/재고는 `WarehouseDamageSystem`·`WarehouseComputer`·`WarehouseInboundZone`, 계획은 `WarehouseForkliftAI`, 센서는 `AgvShadowSensors`, 측정값과 실행 기준은 `PHYSICS.md` |
 | 트럭 3대 동시 접안·도크 확대 | `Scripts/configure_multi_truck_docks.py`, `Scripts/verify_multi_truck_docks.py` | 기존 트럭 내부·외부 설치는 `WAREHOUSE.md`, 자동 트럭 교대는 미구현 계획 |
 | 배송편 명세·출고 실제 인계·한 묶음씩 트럭 상차/입고 하역·출발 | `WarehouseShippingSystem.h/.cpp`, `WarehouseLogisticsTruck.h/.cpp`, `Scripts/configure_shipping_system.py`, `Scripts/verify_shipping_workflow_pie.py`, `Scripts/verify_shipping_saved_map_pie.py` | 관제 UI는 `WarehouseComputerUI.cpp`, 기존 운반 검증·지시는 `WarehouseComputer`; 운영 기준과 남은 계획은 `TRUCK_LOGISTICS_DESIGN.md`, 화면 사용은 `WAREHOUSE.md` |
 | 현재 이동 알고리즘 도식·실제 산업 AGV/FMS 비교 | `FLEET_ALGORITHM_COMPARISON.md` | 구현은 `WarehouseForkliftAI`, `WarehouseFleetCoordinator`, 실행 검증은 `AUTONOMY.md` |
@@ -192,6 +199,7 @@ msc_vr/
     capture_dense_warehouse_services.py
     capture_warehouse_play_ui.py
     capture_warehouse_services.py
+    compare_prediction_profiles.py
     configure_area_labels.py
     configure_cargo_variety.py
     configure_carryable_cargo.py
@@ -296,6 +304,7 @@ msc_vr/
     verify_elevator_model_layout_pie.py
     verify_elevator_route_visuals_pie.py
     verify_empty_storage_pie.py
+    verify_estimated_navigation_pie.py
     verify_first_person_warehouse.py
     verify_fleet_layout_stress_pie.py
     verify_fleet_traffic_pie.py
@@ -305,6 +314,7 @@ msc_vr/
     verify_forklift_autonomy.py
     verify_forklift_autonomy_pie.py
     verify_forklift_focus_pie.py
+    verify_forklift_handling_pie.py
     verify_forklift_recovery_pie.py
     verify_forklift_sensors_pie.py
     verify_forklift_training.py
@@ -321,6 +331,8 @@ msc_vr/
     verify_layout_editing_ui_pie.py
     verify_layout_editor_pie.py
     verify_layout_inventory_pie.py
+    verify_localization_improvements_pie.py
+    verify_mapped_elevator_transport_pie.py
     verify_mcp.py
     verify_mezzanine.py
     verify_mezzanine_pie.py
@@ -334,6 +346,7 @@ msc_vr/
     verify_observer_wall_fade_pie.py
     verify_obstacle_interval_pie.py
     verify_orange_agv_export.py
+    verify_prediction_interval_pie.py
     verify_real_world_scale.py
     verify_receiving_inspection_pie.py
     verify_refined_agv.py
@@ -342,6 +355,7 @@ msc_vr/
     verify_remote_floor_contact_pie.py
     verify_repeating_inbound_pie.py
     verify_runtime_storage.py
+    verify_sensor_calibration_pie.py
     verify_shared_charging_pie.py
     verify_shipping_saved_map_pie.py
     verify_shipping_staging_pie.py
@@ -350,6 +364,7 @@ msc_vr/
     verify_simulation_speed_pie.py
     verify_startup_rack_wrapping_pie.py
     verify_support_snapshot_pie.py
+    verify_transport_benchmark_pie.py
     verify_transport_visuals_pie.py
     verify_truck_driver_pie.py
     verify_truck_interior_pie.py
@@ -370,6 +385,7 @@ msc_vr/
     verify_warehouse_strength_pie.py
     verify_warehouse_workers.py
     verify_work_control_dispatch_pie.py
+    verify_work_speed_pie.py
     verify_wrapping_white_pie.py
     warehouse_staging_layout.py
     wrap_orange_agv_labels.py

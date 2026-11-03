@@ -65,17 +65,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
 	FBox2D Footprint = FBox2D(FVector2D(-94.0, -61.0), FVector2D(182.0, 61.0));
 
-	/**
-	 * Forks narrower than the chassis: beyond ForkRootXCm (actor frame) the empty vehicle is only +-ForkHalfWidthCm wide,
-	 * not the Footprint's full width (a rack deck or pallet beside the forks is not in the way). Ignored while carrying a
-	 * load (LoadBox covers the load's width). Unset (large) keeps the plain box.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
-	float ForkRootXCm = 1.0e6f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
-	float ForkHalfWidthCm = 34.f;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
 	float SideMarginCm = 10.f;
 
@@ -141,66 +130,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="1"))
 	float ForksFirstMaxSpeedCm = 50.f;
 
-	/**
-	 * Load carried on the forks, vehicle frame (cm); invalid = none. Its points are the load, not obstacles, and the
-	 * fields sweep the vehicle and load outline together (a loaded vehicle's field set, as real scanners switch).
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
-	FBox2D LoadBox = FBox2D(ForceInit);
-
-	/**
-	 * Docking / fork insertion / unloading at creep speed: the fields shrink to a bumper of ApproachMarginCm around the
-	 * outline (no look-ahead; the target the vehicle is meant to reach is not an obstacle), speed capped at
-	 * ApproachMaxSpeedCm. Real forklift AGVs switch to such a field set (or mute the fork-side field) for this.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
-	bool bApproachMode = false;
-
-	/**
-	 * The path ahead from a vehicle controller other than UAgvNavigatorComponent (world X, Y of the reference point and
-	 * vehicle yaw in radians as Z, from where the vehicle is now to its next stop). Used like the navigator's path for
-	 * bFieldsFollowPath while not empty.
-	 */
-	UPROPERTY(Transient, BlueprintReadWrite, Category="AGV|Safety")
-	TArray<FVector> ExternalPathAhead;
-
-	/**
-	 * While following ExternalPathAhead, the protective field also leaves out points on the mapped permanent structure
-	 * (columns, racks, walls), as field sets are shaped around fixed obstacles along a planned route: that controller's
-	 * planner has checked the route against the exact geometry. Anything not in the map (people, vehicles, cargo) still
-	 * stops the vehicle. Off by default (the protective field normally never trusts the map).
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
-	bool bPlannedPathIgnoresMappedStructure = false;
-
-	/**
-	 * In the approach field set (forks into a rack slot, withdrawing a pallet from it, docking), the bumper also leaves
-	 * out points on the mapped permanent structure: the load passes between rack uprights with a few centimetres to
-	 * spare, closer than ApproachMarginCm, and the task aligns to the slot itself. People, vehicles and cargo still stop.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
-	bool bApproachIgnoresMappedStructure = false;
-
-	/**
-	 * In the approach field set, the bumper ends at this vehicle-frame X (cm) on the fork side: the sides of the forks and
-	 * the load are muted too, as a forklift AGV mutes its load-handling area in a rack (the neighbouring pallets stand a
-	 * few centimetres beside the load). Only the chassis sides and the body end are watched. Unset (large) keeps the
-	 * whole outline.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
-	float ApproachMutedFromXCm = 1.0e6f;
-
-	/** The object being worked on (pallet to pick up, slot to unload into, charger), vehicle frame; its points are not
-	 * obstacles. Set by the vehicle's task while the job has a target, not only in approach. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
-	FBox2D ApproachTargetBox = FBox2D(ForceInit);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="0"))
-	float ApproachMarginCm = 10.f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety", meta=(ClampMin="1"))
-	float ApproachMaxSpeedCm = 30.f;
-
 	/** Points between these heights above the floor are obstacles (below: the floor; above: clears the vehicle). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AGV|Safety")
 	float MinObstacleHeightCm = 5.f;
@@ -245,10 +174,6 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Safety|Status")
 	int32 SafetyStops = 0;
-
-	/** First point in the protective field at the last evaluation (vehicle frame, cm), for diagnosis. */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Safety|Status")
-	FVector LastProtectiveHit = FVector::ZeroVector;
 
 	/** Warning-field points dropped in the last evaluation because they lie on mapped structure. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Safety|Status")

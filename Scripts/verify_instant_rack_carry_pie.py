@@ -22,11 +22,22 @@ positions={'ExportA':(1200,900,20.2),'ExportB':(1200,1025,140.2)}
 for prefix,(x,y,z) in positions.items():
     named[prefix+'Pallet'].set_actor_location(unreal.Vector(x,y,z),False,True)
     fixture['fit'](named[prefix+'Box'],(40,38,30),(x,y,z+30.1))
-out=Path(unreal.Paths.project_saved_dir())/'Testing/InstantRackCarry'
+named['OtherShipmentPallet'].set_actor_location(unreal.Vector(1200,760,.2),False,True)
+fixture['fit'](named['OtherShipmentBox'],(40,38,30),(1200,760,30.3))
+fixture['in_zone'].set_editor_property('rack_slots',[
+    unreal.WarehouseRackSlot(name='CarryLower',rack=fixture['rack'][0],pose=unreal.Transform(location=unreal.Vector(1200,900,20))),
+    unreal.WarehouseRackSlot(name='CarryUpper',rack=fixture['rack'][0],pose=unreal.Transform(location=unreal.Vector(1200,1025,140)))])
+geometry_only='-RackGeometryOnly' in unreal.SystemLibrary.get_command_line()
+if geometry_only:
+    fixture['in_zone'].set_editor_property('rack_slots',[])
+    fixture['spawn'](unreal.WarehousePallet,'GeometryLowerOccupied',(1200,1025,20.2))
+    fixture['spawn'](unreal.WarehousePallet,'GeometryUpperOccupied',(1200,900,140.2))
+out=Path(unreal.Paths.project_saved_dir())/('Testing/InstantRackCarryGeometry' if geometry_only else 'Testing/InstantRackCarry')
 out.mkdir(parents=True,exist_ok=True)
 phase='start';at=0;started=time.monotonic();live=None;index=0;original=None
 checks=[]
 report=dict(passed=False,checks=checks,savedMapWritten=False,osInputTested=False,
+            geometryOnly=geometry_only,
             scope='Actual project rack meshes and loaded pallet bodies; native immediate player carry APIs')
 
 def body(a):
@@ -59,7 +70,8 @@ def tick(dt):
             assert box in strength.get_supported_actors(pallet,True),('Fixture load lost support',prefix)
             original=pallet.get_actor_transform()
             x,y,z=positions[prefix]
-            pawn.set_actor_location(unreal.Vector(1020,y,100),False,True)
+            half=pawn.get_component_by_class(unreal.CapsuleComponent).get_scaled_capsule_half_height()
+            pawn.set_actor_location(unreal.Vector(1020,y,half+.2),False,True)
             pc.set_control_rotation(unreal.Rotator())
             at=now;phase='pickup';return
         if phase=='pickup' and now-at>=.15:
@@ -72,10 +84,27 @@ def tick(dt):
             assert (carried.translation-relative.translation).length()<.1,'Load shifted during instant pickup'
             assert (pallet.get_actor_location()-original.translation).length()>15,'Pickup did not move in its native call'
             checks.append(prefix+' lower/upper loaded rack pickup is immediate and preserves the complete unit')
-            # Return directly to the same real shelf. A visual path would sweep
-            # through the front beam or upper deck; only the supported final pose matters.
-            assert pawn.try_place_on_surface(original.translation),('Rack return rejected',prefix,str(original.translation))
-            assert pawn.get_held_cargo() is None and not pawn.is_placing_cargo()
+            # Aim at the vertical front beam, rather than its thin horizontal
+            # deck. E must choose the rack slot and snap the complete unit there.
+            aim=unreal.Vector(1145,positions[prefix][1],positions[prefix][2]-6)
+            eye=pawn.get_component_by_class(unreal.CameraComponent).get_world_transform().translation
+            pc.set_control_rotation(unreal.MathLibrary.find_look_at_rotation(eye,aim))
+            at=now;phase='rack_interact';return
+        if phase=='rack_interact' and now-at>=.15:
+            pawn.toggle_carry()
+            e_placed=pawn.get_held_cargo() is None and not pawn.is_placing_cargo()
+            if not e_placed:
+                camera=pawn.get_component_by_class(unreal.CameraComponent)
+                eye=camera.get_world_transform().translation
+                trace=unreal.SystemLibrary.line_trace_single(game,eye,eye+camera.get_forward_vector()*250,
+                    unreal.TraceTypeQuery.TRACE_TYPE_QUERY1,True,[pawn]+list(pawn.get_held_cargo_group()),unreal.DrawDebugTrace.NONE,False)
+                def detail(value):
+                    if isinstance(value,unreal.HitResult):return str(value.to_tuple())
+                    if isinstance(value,(list,tuple,unreal.Array)):return [detail(item) for item in value]
+                    return str(value)
+                report['failureDiagnostic']=dict(sight=detail(trace),eye=str(eye),cameraRotation=str(camera.get_world_rotation()),
+                    originalPallet=str(original),directRack=pawn.try_place_on_rack(live['ShippingRack0'],original.translation))
+            assert e_placed,('E did not snap',prefix,pawn.get_actor_location(),pc.get_control_rotation())
             assert body(pallet).is_simulating_physics() and body(box).is_simulating_physics()
             assert not pallet.actor_has_tag('PlayerHeldCargo') and not box.actor_has_tag('PlayerHeldCargo')
             assert abs(body(pallet).get_mass()-25)<.2
@@ -83,9 +112,22 @@ def tick(dt):
         if phase=='returned' and now-at>=.8:
             assert (pallet.get_actor_location()-original.translation).length()<4,('Returned pallet did not settle on its shelf',prefix)
             assert box in strength.get_supported_actors(pallet,True),'Returned loose/wrapped load lost support'
-            checks.append(prefix+' snaps onto the actual rack deck immediately and returns independent bodies to Chaos')
+            checks.append(prefix+' E on the rack front beam snaps the whole unit onto the registered shelf and restores Chaos')
             if index==0:index=1;phase='settle';return
-            finish(True,'Both actual rack shelf levels support immediate loaded pallet pickup/return without animation-path blockage')
+            half=pawn.get_component_by_class(unreal.CapsuleComponent).get_scaled_capsule_half_height()
+            pawn.set_actor_location(unreal.Vector(1020,900,half+.2),False,True)
+            pc.set_control_rotation(unreal.Rotator())
+            phase='full_rack';at=now;return
+        if phase=='full_rack' and now-at>=.15:
+            other=live['OtherShipmentPallet']
+            assert pawn.try_pickup_pallet(other)
+            held=other.get_actor_transform()
+            assert not pawn.try_place_on_rack(live['ShippingRack0'],unreal.Vector(1200,900,20)),'Full rack accepted an overlapping pallet'
+            assert pawn.get_held_cargo()==other and not pawn.is_placing_cargo()
+            assert (other.get_actor_location()-held.translation).length()<.01
+            checks.append('occupied rack refuses the snap and keeps the complete held unit without dropping or waiting for animation')
+            pawn.drop_cargo()
+            finish(True,'E on both shelf beams snaps loaded pallets immediately; a full rack retains the held unit')
     except Exception:
         finish(False,traceback.format_exc())
 

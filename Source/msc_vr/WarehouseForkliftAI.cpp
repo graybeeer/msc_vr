@@ -1,5 +1,6 @@
 #include "WarehouseForklift.h"
 #include "WarehouseForkliftNavQuery.h"
+#include "Agv/AgvForkliftLocalizer.h"
 #include "WarehousePerformance.h"
 #include "WarehouseExperimentMetrics.h"
 #include "WarehouseExperimentSubsystem.h"
@@ -38,6 +39,23 @@ static TAutoConsoleVariable<float> CVarOptArrivalTol(TEXT("Warehouse.Opt.Arrival
 static TAutoConsoleVariable<int32> CVarHybridPlanner(TEXT("Warehouse.Nav.HybridPlanner"),1,TEXT("1: time-optimal hybrid A* route search, falling back to the lane graph; 0: lane graph only."));
 static TAutoConsoleVariable<int32> CVarWarehouseGeometryPruning(TEXT("Warehouse.NavigationGeometryPruning"),1,
  TEXT("Reject unexecutable curves before native collision queries; 0 preserves the reference query order."));
+static TAutoConsoleVariable<int32> CVarWarehouseAdaptiveClearance(TEXT("Warehouse.AdaptiveClearance"),1,
+ TEXT("Retry failed autonomous travel plans with 10cm then 3cm padding; retain all actual contacts and slow in narrow space."));
+static TAutoConsoleVariable<int32> CVarWarehouseHandlingStage(TEXT("Warehouse.Handling.Stage"),1,
+ TEXT("Handling A/B: 0 original; 1 load-relative floor docking (default)."));
+static TAutoConsoleVariable<int32> CVarWarehouseWorkSpeed(TEXT("Warehouse.WorkSpeed"),6,
+ TEXT("Work speed comparison: 0 reference, 1 moderate, 2 moderate+turns, 3 fast, 4 aggressive, 5 maximum, 6 fast+floor tolerance, 7 aggressive+floor tolerance. Actual contacts/forces remain active."));
+static float WarehouseWorkSpeed(float Reference,float Moderate,float Fast,float Aggressive,float Maximum)
+{
+ const int32 Profile=FMath::Clamp(CVarWarehouseWorkSpeed.GetValueOnGameThread(),0,7);
+ if (Profile==6) return Fast;
+ if (Profile==7) return Aggressive;
+ return Profile==0 ? Reference : Profile<=2 ? Moderate : Profile==3 ? Fast : Profile==4 ? Aggressive : Maximum;
+}
+static float WarehouseWorkTurn(float Reference)
+{
+ return CVarWarehouseWorkSpeed.GetValueOnGameThread()>=2 ? .5f : Reference;
+}
 
 // Each synchronous plan owns its query setup; every native collision check stays live.
 
@@ -159,6 +177,7 @@ void AWarehouseForklift::RefreshAfterLayout(bool PublishTaskLocation)
  PlannedRoute.Reset();RouteIndex=0;bRouteStarted=false;
  LastObstacleCheckSeconds=-1;ObstacleCheckFrame=MAX_uint64;
  InvalidateSensorSnapshot(TEXT("LAYOUT MAP REVISION / FRESH SCAN REQUIRED"));
+ if (auto* Localizer=FindComponentByClass<UAgvForkliftLocalizerComponent>()) Localizer->InitializePose();
  ObservedRouteReplans=0;ObservedRouteProgress=GetActorLocation();
  ProgressLocation=GetActorLocation();StalledSeconds=0;WaitSeconds=0;
  if (PublishTaskLocation && IsValid(TargetPallet))
@@ -262,7 +281,7 @@ FWarehouseNavigationQuery AWarehouseForklift::BuildNavigationQuery() const
  // track an obstacle-hugging curve with zero clearance. Fork alignment keeps
  // its real insertion geometry, without this travel-only margin.
  if (bPlanningRoute && AIState!=EWarehouseAIState::AlignVehicle)
-  Query.Envelope=Query.Envelope.ExpandBy(FVector(25,25,0));
+  Query.Envelope=Query.Envelope.ExpandBy(FVector(PlanningClearanceCm,PlanningClearanceCm,0));
  if (Query.bHasPivot)
   Query.Pivot=GetActorTransform().InverseTransformPosition((Wheels[1]->GetComponentLocation()+Wheels[2]->GetComponentLocation())*.5);
  return Query;
@@ -484,6 +503,25 @@ FString AWarehouseForklift::BenchRoutePlan(const FTransform& Goal,bool bHybrid)
 }
 bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
 {
+ const bool Precision=AIState==EWarehouseAIState::AlignVehicle;
+ const bool Adaptive=CVarWarehouseAdaptiveClearance.GetValueOnGameThread()!=0 && !Precision &&
+  !IsRemoteControlled() && SensorMode==EWarehouseSensorMode::Autonomous;
+ for (float Margin : {25.f,10.f,3.f})
+ {
+  if (Margin<25.f && !Adaptive) break;
+  if (TryPlanAutonomousRoute(Goal,Margin))
+  {
+   RouteClearanceCm=Precision ? 0.f : Margin;
+   ClearanceSpeedSnapshot=INDEX_NONE;bNarrowSpeed=true;
+   if (Adaptive && Margin<25.f)
+    ReportJob(TEXT("CLEARANCE"),FString::Printf(TEXT("좁은 통로: 계획 여유 %.0fcm · 좁은 구간 0.3m/s 이하"),Margin));
+   return true;
+  }
+ }
+ return false;
+}
+bool AWarehouseForklift::TryPlanAutonomousRoute(const FTransform& Goal,float ClearanceCm)
+{
  RouteObstacleSnapshot=INDEX_NONE;
  if (IsRemoteControlled() || SensorMode!=EWarehouseSensorMode::Autonomous)
  {
@@ -496,6 +534,7 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
  ON_SCOPE_EXIT { CSV_CUSTOM_STAT(Warehouse,NavigationQueries,int32(WarehouseNavigationQueryCount-QueryStart),ECsvCustomStatOp::Accumulate); };
  if (!FleetCoordinator) FleetCoordinator=AWarehouseFleetCoordinator::Find(this);
  TGuardValue<bool> Planning(bPlanningRoute,true);
+ TGuardValue<float> Margin(PlanningClearanceCm,ClearanceCm);
  // No game-thread sensor/layout/time update can interleave this synchronous
  // search. Restore the optional on every exit; never reuse it in another tick.
  TGuardValue<TOptional<bool>> Readiness(PlanningSensorReadiness,TOptional<bool>(AutonomousSensorsReady()));
@@ -574,6 +613,9 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
   if (PlannerOverride>0 || bHybridGoalBlocked) return false;
   UE_LOG(LogTemp,Log,TEXT("AGV_PLAN_FALLBACK %s goal=%s %s"),*VehicleName,*Goal.GetLocation().ToString(),*HybridReport);
  }
+ // A blocked endpoint cannot be reached by this envelope. Preserve the
+ // existing short swept departure from a start that only its padding overlaps.
+ if (!NavigationClear(Goal,&Query)) return false;
  float DirectCost;
  if (ConnectLanePoses(StartPose,Goal,PlannedRoute,DirectCost,&Query)) { Found=true;return true; }
  // Pose graph: each edge is a swept, curvature-limited cubic. Anchors describe warehouse travel lanes.
@@ -695,13 +737,37 @@ bool AWarehouseForklift::PlanAutonomousRoute(const FTransform& Goal)
 bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
 {
  if (PlannedRoute.IsEmpty()) { BrakeDrive(); return true; }
+ if (RouteClearanceCm>0.f && RouteClearanceCm<25.f && SensorKit && !IsRemoteControlled())
+ {
+  if (ClearanceSpeedSnapshot!=SensorKit->SnapshotCount)
+  {
+   ClearanceSpeedSnapshot=SensorKit->SnapshotCount;
+   const auto Query=BuildNavigationQuery();
+   const FBox Wide=NavigationEnvelope().ExpandBy(FVector(25,25,0));
+   bNarrowSpeed=!PerceivedBoxClear(NavigationTransform(),Wide,Query.PerceptionIgnored);
+   const float Cruise=bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(180.f,EmptyTravelSpeedCm);
+   const float Forecast=Cruise*1.1f+Cruise*Cruise/100.f+20.f;
+   const FTransform CurrentPose=NavigationTransform();
+   FVector Previous=CurrentPose.GetLocation();float Covered=0;int32 Checks=0,I=FMath::Max(0,RouteIndex);
+   FTransform LastChecked=CurrentPose;
+   for (;!bNarrowSpeed && I<PlannedRoute.Num() && Covered<Forecast && Checks<80;++I)
+   {
+    Covered+=FVector::Dist2D(Previous,PlannedRoute[I].Pose.GetLocation());
+    Previous=PlannedRoute[I].Pose.GetLocation();
+    if (I+1<PlannedRoute.Num() && FVector::Dist2D(Previous,LastChecked.GetLocation())<10.f &&
+        FMath::Abs(FMath::FindDeltaAngleDegrees(LastChecked.Rotator().Yaw,PlannedRoute[I].Pose.Rotator().Yaw))<2.f) continue;
+    ++Checks;LastChecked=PlannedRoute[I].Pose;
+    bNarrowSpeed=!PerceivedBoxClear(LastChecked,Wide,Query.PerceptionIgnored);
+   }
+   if (Checks>=80 && Covered<Forecast && I<PlannedRoute.Num()) bNarrowSpeed=true;
+  }
+  if (bNarrowSpeed) Speed=FMath::Min(Speed,30.f);
+ }
  // A temporary traffic retreat is a normal lane stop, even when it interrupts
  // a charging trip. It must not use the electrical approach's precision phase.
  const bool ChargingAlignment=!bTrafficYielding &&
   (AIState==EWarehouseAIState::NavigateCharge || (AIState==EWarehouseAIState::DockCharge && bDockPullout));
- const float HeadingTolerance=FMath::DegreesToRadians(ChargingAlignment && RouteIndex>=PlannedRoute.Num()-1 ? .2f : AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::ElevatorApproach ? .5f : (CVarOptAlign.GetValueOnGameThread()!=0 && AIState==EWarehouseAIState::AlignVehicle) ? 1.5f : 1.f);
- auto PivotRate=[&](float Error,float OldCap) { const bool Fast=CVarOptPivotRate.GetValueOnGameThread()!=0 && HeadingTolerance>=FMath::DegreesToRadians(1.f)-1e-4f &&
-   (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery || AIState==EWarehouseAIState::NavigateParking); return FMath::Clamp(FMath::Abs(Error)*2.f,.02f,Fast ? (bSupportingPallet ? .3f : .4f) : OldCap); };
+ const float HeadingTolerance=FMath::DegreesToRadians(ChargingAlignment && RouteIndex>=PlannedRoute.Num()-1 ? .2f : AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::ElevatorApproach ? .5f : 1.f);
  if (FleetCoordinator && !FleetCoordinator->Permit(this)) return false;
  RouteIndex=FMath::Min(RouteIndex,PlannedRoute.Num()-1);
  // AGV localization: route travel decisions use NavigationTransform(). Alignment, docking, elevator approach and the
@@ -720,7 +786,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
   if (!bRouteTurning && FMath::Abs(CurrentSpeedCm)>1.f) return false;
   bRouteTurning=true;
   if (FMath::Abs(Angle)>HeadingTolerance)
-  { CommandTurn(FMath::Sign(Angle)*PivotRate(Angle,.15f),Dt);return false; }
+  { CommandTurn(FMath::Sign(Angle)*FMath::Clamp(FMath::Abs(Angle)*2.f,.02f,WarehouseWorkTurn(.15f)),Dt);return false; }
   if (FMath::Abs(CurrentSpeedCm)>1.f) return false;
   if (ChassisBody && FMath::Abs(ChassisBody->GetPhysicsAngularVelocityInDegrees().Z)>.5f) return false;
   bRouteTurning=false;
@@ -801,13 +867,13 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
    {
     BrakeDrive();
     if (FMath::Abs(Turn)>FMath::DegreesToRadians(3.f))
-     CommandTurn(FMath::Sign(Turn)*FMath::Clamp(FMath::Abs(Turn)*1.5f,.04f,.2f),Dt);
+     CommandTurn(FMath::Sign(Turn)*FMath::Clamp(FMath::Abs(Turn)*1.5f,.04f,WarehouseWorkTurn(.2f)),Dt);
     else if (ChassisBody && FMath::Abs(ChassisBody->GetPhysicsAngularVelocityInDegrees().Z)<.5f) bEndpointDriving=true;
    }
    else
    {
     const float Side=FVector::DotProduct(Offset,GetActorRightVector());
-    CommandDrive(Sign*FMath::Min3(Speed,20.f,Distance*1.5f),2.f*Side/FMath::Max(400.f,Offset.SizeSquared2D()),Dt);
+    CommandDrive(Sign*FMath::Min3(Speed,WarehouseWorkSpeed(20,30,40,60,80),Distance*1.5f),2.f*Side/FMath::Max(400.f,Offset.SizeSquared2D()),Dt);
    }
    return false;
   }
@@ -818,7 +884,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
   if (!bRouteTurning && FMath::Abs(CurrentSpeedCm)>=1.f) return false;
   bRouteTurning=true;
   if (FMath::Abs(HeadingError)>=HeadingTolerance)
-  { CommandTurn(FMath::Sign(HeadingError)*PivotRate(HeadingError,.2f),Dt);return false; }
+  { CommandTurn(FMath::Sign(HeadingError)*FMath::Clamp(FMath::Abs(HeadingError)*2.f,.02f,WarehouseWorkTurn(.2f)),Dt);return false; }
   if (FMath::Abs(CurrentSpeedCm)>=1.f) return false;
   if (ChassisBody && FMath::Abs(ChassisBody->GetPhysicsAngularVelocityInDegrees().Z)>=.5f) return false;
   bRouteTurning=false;
@@ -843,7 +909,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
    if (SegmentEnd==PlannedRoute.Num()-1) return true;
    RouteIndex=SegmentEnd+1;return false;
   }
-  CommandTurn(FMath::Sign(HeadingError)*PivotRate(HeadingError,.15f),Dt);
+  CommandTurn(FMath::Sign(HeadingError)*FMath::Clamp(FMath::Abs(HeadingError)*2.f,.02f,WarehouseWorkTurn(.15f)),Dt);
   return false;
  }
  // A force-driven vehicle can overshoot. Brake and plan a short reverse
@@ -1434,10 +1500,10 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
     BrakeDrive();
     if (FMath::Abs(CurrentSpeedCm)<1.f) Next(EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"));
    }
-   else if (MovePrecise(AlignmentPose.GetLocation(),15,Dt)) Next(EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"));
+   else if (MovePrecise(AlignmentPose.GetLocation(),WarehouseWorkSpeed(15,30,45,60,90),Dt)) Next(EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"));
   }
-  else if (OptAlign && AlignRechecks<3) { if (!bRouteStarted) ++AlignRechecks;Route(AlignmentPose,EWarehouseAIState::AlignVehicle,TEXT("ALIGN VEHICLE TO PALLET"),15); }
-  else Route(AlignmentPose,EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"),15);
+  else if (OptAlign && AlignRechecks<3) { if (!bRouteStarted) ++AlignRechecks;Route(AlignmentPose,EWarehouseAIState::AlignVehicle,TEXT("ALIGN VEHICLE TO PALLET"),WarehouseWorkSpeed(15,30,45,60,90)); }
+  else Route(AlignmentPose,EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"),WarehouseWorkSpeed(15,30,45,60,90));
   break;
  }
  case EWarehouseAIState::CorrectFork:
@@ -1445,7 +1511,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   break;
  case EWarehouseAIState::InsertFork:
   // Fully insert both tines with 5 cm end clearance for native tyre settling.
-  if (MovePrecise(PalletApproach(ObservedPallet,65).GetLocation(),10,Dt)) Next(EWarehouseAIState::VerifyInsertion,TEXT("VERIFY BOTH TINES INSERTED"));
+  if (MovePrecise(PalletApproach(ObservedPallet,65).GetLocation(),WarehouseWorkSpeed(10,25,45,70,100),Dt)) Next(EWarehouseAIState::VerifyInsertion,TEXT("VERIFY BOTH TINES INSERTED"));
   break;
  case EWarehouseAIState::VerifyInsertion:
   if (!TargetPallet->CanEngage(Carriage->GetComponentTransform())) { BeginRecovery(AIState,TEXT("FORK INSERTION FAILED")); break; }
@@ -1496,7 +1562,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   Next(EWarehouseAIState::DepartPickup,TEXT("WITHDRAW LOADED PALLET"));
   break;
  case EWarehouseAIState::DepartPickup:
-  if (MovePrecise(RetractLocation,20,Dt)) Next(EWarehouseAIState::TravelHeight,TEXT("LOWER TO TRAVEL HEIGHT"));
+  if (MovePrecise(RetractLocation,WarehouseWorkSpeed(20,45,75,100,100),Dt)) Next(EWarehouseAIState::TravelHeight,TEXT("LOWER TO TRAVEL HEIGHT"));
   break;
  case EWarehouseAIState::TravelHeight:
   if (LiftTo(10.5f)) Next(EWarehouseAIState::PlanDelivery,TEXT("PLAN LOADED ROUTE"));
@@ -1529,10 +1595,13 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   TArray<AActor*> FloorLoads{TargetPallet};
   for (AActor* Cargo : CarriedCargo) FloorLoads.Add(Cargo);
   // Accept the actual load, rather than chasing a stale relative-pose target.
-  // Leave 2cm inside the reserved footprint for native contact settling below.
-  const bool FloorInner=DropHeight<=5.f && FloorFootprintFits(FloorLoads,ActiveJob.Destination,2.f);
+  // Keep a settling inset inside the same reserved footprint; accelerated work
+  // permits a small orientation error but never bypasses physical containment.
+  const bool RelaxedFloor=CVarWarehouseWorkSpeed.GetValueOnGameThread()>=6;
+  const float FloorMargin=RelaxedFloor ? 1.5f : 2.f;
+  const bool FloorInner=DropHeight<=5.f && FloorFootprintFits(FloorLoads,ActiveJob.Destination,FloorMargin);
   const bool FloorAligned=FloorInner &&
-   FMath::Abs(FMath::FindDeltaAngleDegrees(TargetPallet->GetActorRotation().Yaw,ActiveJob.Destination.Rotator().Yaw))<1.f;
+   FMath::Abs(FMath::FindDeltaAngleDegrees(TargetPallet->GetActorRotation().Yaw,ActiveJob.Destination.Rotator().Yaw))<(RelaxedFloor ? 2.f : 1.f);
   if (DropHeight<=5.f && FParse::Param(FCommandLine::Get(),TEXT("DriveDiagnostics")) &&
       FMath::FloorToInt(AIElapsed)>FMath::FloorToInt(FMath::Max(0.f,AIElapsed-Dt)))
   {
@@ -1559,6 +1628,48 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    }
    break;
   }
+  if (CVarWarehouseHandlingStage.GetValueOnGameThread()>=1 && DropHeight<=5.f && Wheels.Num()>=3)
+  {
+   // The existing precision sensor proxy measures load-to-truck pose. Follow a fixed
+   // docking heading while correcting the sensed load shift, rather than pivoting a
+   // loose pallet back and forth at the last centimetre of an old vehicle-only goal.
+   const FTransform Relative=TargetPallet->GetActorTransform().GetRelativeTransform(GetActorTransform());
+   const FRotator Heading(0,ActiveJob.Destination.Rotator().Yaw-Relative.Rotator().Yaw,0);
+   FVector Point=ActiveJob.Destination.GetLocation()-Heading.RotateVector(Relative.GetLocation());Point.Z=Ground;
+   const FTransform Goal(Heading,Point);
+   const FVector Error=Point-GetActorLocation();
+   const float Along=FVector::DotProduct(Error,Heading.Vector());
+   const float Side=FVector::DotProduct(Error,Goal.GetUnitAxis(EAxis::Y));
+   const float YawError=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,Heading.Yaw));
+   if (FMath::Abs(Side)<=(RelaxedFloor ? 12.f : 8.f) && FMath::Abs(YawError)<=FMath::DegreesToRadians(RelaxedFloor ? 8.f : 3.f) && Along>=-15.f && Along<=(RelaxedFloor ? 320.f : 200.f))
+   {
+    bRouteStarted=false;
+    if (FleetCoordinator && !FleetCoordinator->Permit(this,&Goal)) break;
+    if (FMath::Abs(Along)<.7f)
+    {
+     BrakeDrive();
+     if (FMath::Abs(CurrentSpeedCm)<1.f && ChassisBody->GetPhysicsAngularVelocityInDegrees().Size()<.5f)
+     {
+      if (FMath::Abs(YawError)>FMath::DegreesToRadians(.35f))
+       CommandTurn(FMath::Sign(YawError)*FMath::Clamp(FMath::Abs(YawError),.015f,.08f),Dt);
+      else BeginRecovery(EWarehouseAIState::AlignUnload,TEXT("FLOOR LOAD ALIGNMENT OUTSIDE SLOT"));
+     }
+     break;
+    }
+    const FVector Axle=(Wheels[1]->GetComponentLocation()+Wheels[2]->GetComponentLocation())*.5f;
+    const FVector LocalAxle=GetActorTransform().InverseTransformPosition(Axle);
+    const float Cross=FVector::DotProduct(Goal.TransformPosition(LocalAxle)-Axle,Goal.GetUnitAxis(EAxis::Y));
+    const float Sign=Along<0.f ? -1.f : 1.f;
+    constexpr float LookAhead=35.f;
+    const float DesiredYaw=Heading.Yaw+FMath::RadiansToDegrees(FMath::Atan(Sign*Cross/LookAhead));
+    const float Turn=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,DesiredYaw));
+    const float Curvature=Sign*FMath::Clamp(Turn/LookAhead,-1.f/FMath::Max(117.3f,MinimumTurningRadiusCm),1.f/FMath::Max(117.3f,MinimumTurningRadiusCm));
+    TGuardValue<float> Precision(SensorPrecisionDistanceCm,FMath::Abs(Along));
+    const float ApproachGain=CVarWarehouseWorkSpeed.GetValueOnGameThread()==5 ? 1.8f : 1.2f;
+    CommandDrive(Sign*FMath::Min(WarehouseWorkSpeed(10,25,40,60,100),FMath::Abs(Along)*ApproachGain),Curvature,Dt);
+    break;
+   }
+  }
   if (ActiveJob.bRackDestination && DropHeight>5 && RackLoadAligned() &&
       FVector::Dist2D(TargetPallet->GetActorLocation(),ActiveJob.Destination.GetLocation())<=2.f)
   {
@@ -1577,11 +1688,11 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    { FaultAI(TEXT("NO CLEAR PRECISE RACK APPROACH"));break; }
    RouteIndex=0;bRouteStarted=true;
   }
-  if (FollowRoute(CVarOptUnloadSpeed.GetValueOnGameThread()!=0 ? 22.f : 10.f,Dt))
+  if (FollowRoute(WarehouseWorkSpeed(10,20,30,40,50),Dt))
   {
    // Loose loads can shift during the final pivot after the relative pose was
    // measured. Reapproach before lowering; never release outside the slot.
-   if (DropHeight<=5.f && (!FloorFootprintFits(FloorLoads,ActiveJob.Destination,2.f) ||
+   if (DropHeight<=5.f && (!FloorFootprintFits(FloorLoads,ActiveJob.Destination,FloorMargin) ||
        !IsFloorFootprintValid(TargetPallet,ActiveJob.Destination)))
    {
     BeginRecovery(EWarehouseAIState::AlignUnload,TEXT("FLOOR LOAD ALIGNMENT OUTSIDE SLOT"));
@@ -1652,7 +1763,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   }
   break;
  case EWarehouseAIState::WithdrawFork:
-  if (MovePrecise(RetractLocation,CVarOptUnloadSpeed.GetValueOnGameThread()!=0 ? 30.f : 15.f,Dt))
+  if (MovePrecise(RetractLocation,WarehouseWorkSpeed(15,40,70,100,160),Dt))
   {
    Next(EWarehouseAIState::VerifyUnload,TEXT("VERIFY UNLOAD COMPLETE"));
   }

@@ -17,11 +17,13 @@ SCOPES = {
     "DamageTick", "LoadGraph", "SupportGeometry", "SupportedActors", "SupportTraversal", "RoutePlanning", "TrafficPermit",
     "InventoryRefresh", "InboundScan", "ForkliftTick", "ForkliftMotors",
     "SensorSnapshot", "KnownMapBuild", "ObserverVisibility", "ObserverWallFade", "TransportVisuals", "ChargerWiring",
+    "LocalizationTick", "MotionPrediction", "LocalizationScanMatch",
 }
 COUNTERS = {
     "LoadGraphBuilds", "SupportTraceCount", "SupportRelationsReused", "SupportRelationsTraced", "SupportedActorQueries",
     "NavigationQueries", "RoutePlans", "PlanningReadinessChecks", "GeometryRejectedCandidates", "SupportSnapshotReuses",
     "SensorSnapshots", "SensorBeams", "KnownMapBuilds", "KnownMapComponents",
+    "PredictionUpdates",
 }
 NATIVE_TIMINGS = {
     "gamethread", "renderthread", "rhithread", "physics", "physicsthread", "physicstime",

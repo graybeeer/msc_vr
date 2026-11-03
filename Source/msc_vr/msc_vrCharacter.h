@@ -156,6 +156,7 @@ public:
 	bool TryPickupCargo(AWarehouseCargo* Cargo);
 	UFUNCTION(BlueprintCallable, Category="Carry") bool TryPickupPallet(AWarehousePallet* Pallet);
 	UFUNCTION(BlueprintCallable, Category="Carry") bool TryPlaceOnSurface(FVector Aim);
+	UFUNCTION(BlueprintCallable, Category="Carry") bool TryPlaceOnRack(AActor* Rack,FVector Aim);
 	UFUNCTION(BlueprintCallable, Category="Carry")
 	void DropCargo();
 	UFUNCTION(BlueprintCallable, Category="Carry")

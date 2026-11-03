@@ -22,6 +22,10 @@
 
 namespace
 {
+static TAutoConsoleVariable<float> WorkTopRangeCm(TEXT("Warehouse.WorkTopRangeCm"),3000.f,
+ TEXT("Upper warehouse localization LiDAR range in cm; read before sensor creation. Safety/fork sensors and 1Hz sampling are unchanged."));
+static TAutoConsoleVariable<int32> WorkTopChannels(TEXT("Warehouse.WorkTopChannels"),32,
+ TEXT("Upper warehouse LiDAR vertical channels; read before sensor creation. The common observation interval remains 1s."));
 TAutoConsoleVariable<int32> CVarWarehousePerceptionSpatialIndex(
 	TEXT("wh.PerceptionSpatialIndex"),1,
 	TEXT("Use the published sensor/map broad phase. 0 retains the exhaustive reference path for diagnostics."));
@@ -148,6 +152,8 @@ bool UAgvShadowSensorsComponent::BuildSensors()
 	// Same real model mounts and fields of view as the reviewed sensor branch. Sampling is one full snapshot/sec.
 	auto* Top = Add(TEXT("AgvShadowTopLidar"), AAgvTestVehicle::Refined(-36,-10,272), FRotator::ZeroRotator);
 	Top->HorizontalResolutionDeg = .8f;
+	Top->MaxRangeCm=FMath::Clamp(WorkTopRangeCm.GetValueOnGameThread(),500.f,7500.f);
+	Top->Channels=FMath::Clamp(WorkTopChannels.GetValueOnGameThread(),8,64);
 	for (double Side : {1.,-1.})
 	{
 		auto* Sensor = Add(Side > 0 ? TEXT("AgvShadowScannerL") : TEXT("AgvShadowScannerR"),

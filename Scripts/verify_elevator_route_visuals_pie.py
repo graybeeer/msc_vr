@@ -49,10 +49,19 @@ def spawn(cls, label, point, yaw=0):
     return actor
 
 
+lift_defaults = unreal.get_default_object(unreal.WarehouseElevator)
 for floor in range(TOP_FLOOR + 1):
+    # Match the production shaft, including its longer/offset upper opening.
+    # The old symmetric 282x352 hole clipped the platform at an intermediate floor.
+    size = lift_defaults.get_editor_property('upper_opening_size_cm' if floor else 'ground_opening_size_cm')
+    offset = lift_defaults.get_editor_property('upper_opening_offset_cm') if floor else unreal.Vector2D()
+    low_x, high_x = 1000 + offset.x - size.x / 2, 1000 + offset.x + size.x / 2
+    low_y, high_y = 1600 + offset.y - size.y / 2, 1600 + offset.y + size.y / 2
     for name, x, y, width, depth in (
-        ('South', 0, -288, 4000, 3424), ('West', -570.5, 1712, 2859, 576),
-        ('East', 1570.5, 1712, 859, 576), ('North', 1000, 1888, 282, 224),
+        ('South', 0, (low_y - 2000) / 2, 4000, low_y + 2000),
+        ('West', (low_x - 2000) / 2, (low_y + 2000) / 2, low_x + 2000, 2000 - low_y),
+        ('East', (high_x + 2000) / 2, (low_y + 2000) / 2, 2000 - high_x, 2000 - low_y),
+        ('North', (low_x + high_x) / 2, (high_y + 2000) / 2, size.x, 2000 - high_y),
     ):
         deck = spawn(unreal.StaticMeshActor, f'ArrowL{floor + 1}{name}', (x, y, floor * 400 - 10))
         deck.static_mesh_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Cube'))
@@ -369,7 +378,10 @@ def _tick_impl(dt):
         part = arrows()
         route = vehicle.get_display_route()
         key = (trip, stage)
-        if stage and wall - state_at > .25 and key not in seen:
+        # The controller refreshes transport visuals every .2 wall seconds.
+        # Allow two refresh cycles after a floor/state change, rather than
+        # testing the previous (ride/hidden-layer) component on a fast host.
+        if stage and wall - state_at > .5 and key not in seen:
             if stage == 'ride':
                 assert not route and (not part or part.get_instance_count() == 0), 'Stale floor arrows during vertical ride'
             else:
@@ -379,7 +391,10 @@ def _tick_impl(dt):
                 if stage in ('approach', 'board', 'exit'):
                     end = (lift.boarding_pose(floor) if stage == 'board' else lift.waiting_pose(floor)).translation
                     assert (unreal.Vector(route[-1].x, route[-1].y, end.z) - end).length() < .5, ('Wrong elevator endpoint', stage, route[-1], end)
-                assert part and part.is_visible() and part.get_instance_count() >= 2, ('Missing rendered chevrons', stage)
+                assert part and part.is_visible() and part.get_instance_count() >= 2, (
+                    'Missing rendered chevrons', stage, 'visible', part.is_visible() if part else None,
+                    'bars', part.get_instance_count() if part else 0, 'vehicle_hidden', vehicle.is_hidden(),
+                    'floor', floor, 'route', [[p.x,p.y,p.z] for p in route])
                 assert part.get_collision_enabled() == unreal.CollisionEnabled.NO_COLLISION
                 assert not unreal.WarehouseDamageSystem.is_physical_contact(part)
                 assert part.get_editor_property('custom_depth_stencil_value') == 128

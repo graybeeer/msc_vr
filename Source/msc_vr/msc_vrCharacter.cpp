@@ -31,6 +31,7 @@
 #include "WarehouseCarryAnimInstance.h"
 #include "WarehousePlayerMovement.h"
 #include "WarehousePhysics.h"
+#include "WarehouseLayoutInventory.h"
 #include "PhysicsEngine/PhysicsConstraintComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/OverlapResult.h"
@@ -229,7 +230,34 @@ void Amsc_vrCharacter::ToggleCarry()
 		FHitResult Hit;
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(PlaceAim),true,this);
 		Params.AddIgnoredActors(GetHeldCargoGroup());
-		if (GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+FirstPersonCameraComponent->GetForwardVector()*250.f,ECC_Visibility,Params))
+		const FVector AimEnd=Eye+FirstPersonCameraComponent->GetForwardVector()*250.f;
+		const bool HitSurface=GetWorld()->LineTraceSingleByChannel(Hit,Eye,AimEnd,ECC_Visibility,Params);
+		if (Cast<AWarehousePallet>(HeldCargo))
+		{
+			AActor* Rack=HitSurface && IsValid(Hit.GetActor()) && Hit.GetActor()->ActorHasTag(TEXT("LayoutType:Rack")) ? Hit.GetActor() : nullptr;
+			FVector RackAim=Hit.ImpactPoint;
+			if (!Rack) if (auto* Store=AWarehouseLayoutInventory::Find(this))
+			{
+				float Nearest=HitSurface ? Hit.Time : 1.f;
+				// Empty rack openings are selectable without adding any physical collider.
+				for (const auto& Slot:Store->RackSlotsFor())
+				{
+					const FVector Start=Slot.Pose.InverseTransformPosition(Eye),End=Slot.Pose.InverseTransformPosition(AimEnd);
+					FVector Point,Normal;float Time;
+					// Include the front beam below its support plane. Looking at
+					// that beam must select the shelf even through mesh triangle gaps.
+					if (FMath::LineExtentBoxIntersection(FBox(FVector(-60,-60,-15),FVector(60,60,Slot.ClearHeightCm)),Start,End,FVector::ZeroVector,Point,Normal,Time) && Time<Nearest)
+					{ Nearest=Time;Rack=Slot.Rack;RackAim=Slot.Pose.TransformPosition(Point); }
+				}
+			}
+			if (Rack)
+			{
+				if (!TryPlaceOnRack(Rack,RackAim) && GEngine)
+					GEngine->AddOnScreenDebugMessage(41,2.f,FColor::Yellow,TEXT("이 랙에 팔레트가 들어갈 빈 적재 공간이 없습니다."));
+				return;
+			}
+		}
+		if (HitSurface)
 		{
 			if (Hit.ImpactNormal.Z>.95f) SurfaceAim=Hit.ImpactPoint;
 			AWarehousePallet* TargetPallet=Cast<AWarehousePallet>(Hit.GetActor());
@@ -904,6 +932,40 @@ bool Amsc_vrCharacter::FindPlacement(AWarehousePallet* Pallet, const FVector& Ai
 	if (GetWorld()->OverlapBlockingTestByChannel(Center,Rotation,ECC_Visibility,FCollisionShape::MakeBox(Extent-FVector(.3f)),Params)) { UE_LOG(Logmsc_vr,Verbose,TEXT("Placement: occupied destination %s extent %s"),*Center.ToString(),*Extent.ToString()); return false; }
 	Target=FTransform(Rotation,Center-Rotation.RotateVector(Bounds.Origin*Scale),Scale);
 	return true;
+}
+
+bool Amsc_vrCharacter::TryPlaceOnRack(AActor* Rack,FVector Aim)
+{
+ if (!IsValid(Rack) || !Rack->ActorHasTag(TEXT("LayoutType:Rack")) || !Cast<AWarehousePallet>(HeldCargo)) return false;
+ auto* Store=AWarehouseLayoutInventory::Find(this);if (!Store) return false;
+ auto Slots=Store->RackSlotsFor(Rack);
+ Slots.Sort([&](const auto& A,const auto& B) {return FVector::DistSquared(A.Pose.GetLocation(),Aim)<FVector::DistSquared(B.Pose.GetLocation(),Aim);});
+ auto SameRack=[&](AActor* Actor)
+ {
+  if (Actor==Rack) return true;
+  if (!IsValid(Actor) || !Actor->ActorHasTag(TEXT("LayoutType:Rack"))) return false;
+  for (FName Tag:Rack->Tags) if (Tag.ToString().StartsWith(TEXT("LayoutGroup:")) && Actor->ActorHasTag(Tag)) return true;
+  return false;
+ };
+ FCollisionQueryParams Params(SCENE_QUERY_STAT(PlayerRackSnap),true,this);Params.AddIgnoredActors(GetHeldCargoGroup());
+ auto* Strength=AWarehouseDamageSystem::Find(this);
+ for (const auto& Slot:Slots)
+ {
+  if (FVector::Dist(Slot.Pose.GetLocation(),FirstPersonCameraComponent->GetComponentLocation())>300.f ||
+      (Strength && Strength->HasFailed(Slot.Rack))) continue;
+  bool Supported=true;
+  for (float X:{-40.f,40.f}) for (float Y:{-40.f,40.f})
+  {
+   const FVector Point=Slot.Pose.TransformPosition(FVector(X,Y,0));FHitResult Surface;
+   Supported &= GetWorld()->LineTraceSingleByChannel(Surface,Point+FVector(0,0,4),Point-FVector(0,0,4),ECC_Visibility,Params) &&
+    Surface.ImpactNormal.Z>.98f && SameRack(Surface.GetActor()) && WarehousePhysics::IsPhysicalContact(Surface.GetComponent());
+  }
+  if (!Supported) continue;
+  FTransform Pose=Slot.Pose;Pose.SetScale3D(HeldCargo->GetActorScale3D());Pose.AddToTranslation(FVector(0,0,1));
+  if (!MoveHeldGroup(Pose,true)) continue;
+  DropCargo();return true;
+ }
+ return false; // A full/unsupported rack never falls back to dropping on the floor.
 }
 
 bool Amsc_vrCharacter::TryPlaceOnSurface(FVector Aim)

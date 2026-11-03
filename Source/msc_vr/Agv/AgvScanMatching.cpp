@@ -91,7 +91,15 @@ namespace AgvScanMatch
 					}
 				}
 			}
-			// Light damping keeps a poorly constrained direction (a long featureless wall) from running away.
+			const double PriorWeights[3] = { Params.TranslationWeight, Params.TranslationWeight, Params.RotationWeight };
+			const double PriorResidual[3] = { Tx - Params.PriorPosition.X, Ty - Params.PriorPosition.Y, AgvMath::Wrap(Th - Params.PriorYaw) };
+			for (int32 I = 0; I < 3; ++I)
+			{
+				const double Weight = Points.Num() * PriorWeights[I];
+				H[I][I] += Weight;
+				G[I] += Weight * PriorResidual[I];
+			}
+			// Numerical damping is separate from the odometry prior above.
 			for (int32 I = 0; I < 3; ++I)
 			{
 				H[I][I] += 1e-3 * (1.0 + H[I][I]);
@@ -117,6 +125,17 @@ namespace AgvScanMatch
 			Inliers += Map.Sample(FVector2D(C * P.X - S * P.Y + Tx, S * P.X + C * P.Y + Ty)) <= Params.InlierDistanceCm;
 		}
 		return (double)Inliers / Points.Num();
+	}
+
+	bool AcceptInnovation(const FVector2D& Delta, double DeltaYaw, double PositionSigmaCm, double YawSigmaRad)
+	{
+		if (Delta.ContainsNaN() || !FMath::IsFinite(DeltaYaw) || !FMath::IsFinite(PositionSigmaCm)
+			|| !FMath::IsFinite(YawSigmaRad) || PositionSigmaCm <= 0.0 || YawSigmaRad <= 0.0)
+		{
+			return false;
+		}
+		return Delta.SizeSquared() / FMath::Square(PositionSigmaCm)
+			+ FMath::Square(AgvMath::Wrap(DeltaYaw) / YawSigmaRad) <= 16.0;
 	}
 }
 
@@ -176,3 +195,44 @@ void FAgvDistanceMap::BuildFromOccupancy(const TArray<bool>& Occupied)
 	}
 	OccupiedCells = Occupied.FilterByPredicate([](bool B) { return B; }).Num();
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+#include <limits>
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgvLocalizationPriorTest, "Warehouse.Localization.MotionPrior",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAgvLocalizationPriorTest::RunTest(const FString& Parameters)
+{
+	// A single long wall constrains its normal, but cannot reveal travel along it.
+	FAgvDistanceMap Map;
+	Map.Origin = FVector2D(-500, -1000);
+	Map.Width = 200; Map.Height = 400;
+	TArray<bool> Occupied;
+	Occupied.Init(false, Map.Width * Map.Height);
+	for (int32 Y = 0; Y < Map.Height; ++Y) Occupied[Y * Map.Width + 100] = true;
+	Map.BuildFromOccupancy(Occupied);
+	TArray<FVector2D> Points;
+	for (int32 Y = -600; Y <= 600; Y += 10) Points.Add(FVector2D(2.5, Y));
+	AgvScanMatch::FParams Params;
+	Params.PriorPosition = FVector2D(12, 40);
+	Params.TranslationWeight = 0.04;
+	Params.RotationWeight = 10000.0;
+	double X = 12, Y = 40, Yaw = 0;
+	const double Ratio = AgvScanMatch::Refine(Map, Points, Params, X, Y, Yaw);
+	TestTrue(TEXT("Wall normal is corrected"), FMath::Abs(X) < 6.0 && Ratio > 0.95);
+	TestTrue(TEXT("Unobservable along-wall travel retains the prediction"), FMath::Abs(Y - 40) < 0.01);
+	// Translating the entire known map cannot change a local-frame solution.
+	Map.Origin += FVector2D(100000, -200000);
+	Params.PriorPosition += FVector2D(100000, -200000);
+	double FarX = 100012, FarY = -199960, FarYaw = 0;
+	AgvScanMatch::Refine(Map, Points, Params, FarX, FarY, FarYaw);
+	TestTrue(TEXT("Fit independent of global map origin"), FMath::Abs(FarX - 100000 - X) < 0.001
+		&& FMath::Abs(FarY + 200000 - Y) < 0.001 && FMath::Abs(FarYaw - Yaw) < 1e-6);
+	TestFalse(TEXT("85cm jump contradicts a recent stationary prediction"), AgvScanMatch::AcceptInnovation(FVector2D(0, 85), 0, 6, 0.01));
+	TestTrue(TEXT("Legitimate larger recovery with grown uncertainty is allowed"), AgvScanMatch::AcceptInnovation(FVector2D(35, 0), 0, 15, 0.01));
+	TestTrue(TEXT("Yaw comparison wraps across pi"), AgvScanMatch::AcceptInnovation(FVector2D::ZeroVector, 2 * PI - 0.001, 6, 0.01));
+	TestFalse(TEXT("Invalid sensor estimate is rejected"), AgvScanMatch::AcceptInnovation(FVector2D::ZeroVector, std::numeric_limits<double>::infinity(), 6, 0.01));
+	return true;
+}
+#endif
