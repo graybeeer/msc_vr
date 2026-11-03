@@ -1533,7 +1533,8 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    TrackCargo();
    bSupportingPallet=true;
   }
-  const float GoalHeight=SourceHeight+10.5f;
+  // A pallet on the top rack level leaves less than 10.5cm of stroke: lift what the mast allows.
+  const float GoalHeight=FMath::Min(SourceHeight+10.5f,FMath::Clamp(MaxForkHeightCm,10.f,160.f)-9.5f);
   if (LiftTo(GoalHeight)) Next(EWarehouseAIState::VerifyLoad,TEXT("VERIFY LOAD PRESENT / MASS"));
   else if (bPowered && AIState==EWarehouseAIState::LiftLoad)
   {

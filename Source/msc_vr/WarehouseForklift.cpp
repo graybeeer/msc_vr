@@ -1,4 +1,5 @@
 #include "WarehouseForklift.h"
+#include "HAL/IConsoleManager.h"
 #include "WarehousePhysics.h"
 #include "WarehousePerformance.h"
 #include "WarehouseExperimentMetrics.h"
@@ -20,6 +21,9 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "UObject/ConstructorHelpers.h"
+
+// Ported from the navigation branch (1 = on); switchable to bisect a regression without a rebuild.
+static TAutoConsoleVariable<int32> CVarOptWheelNormal(TEXT("Warehouse.Opt.WheelNormal"),1,TEXT("1: a rolling tyre contact up to ~25 degrees off the floor normal still counts as rolling; 0: the old 11.5 degrees."));
 
 void AWarehouseForklift::RebuildEditedMesh(UStaticMesh* Mesh)
 {
@@ -411,7 +415,10 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
    // A rolling tyre's convex sweep can return a slightly tilted wheel normal
    // against a flat floor. Confirm its actual bearing surface instead of
    // treating that ordinary rolling contact as an inward obstacle.
-   if (!LiftOnly && Wheels.Contains(Part) && Hit.Normal.Z>.98f &&
+   // Observed on the warehouse map: tyre sweeps against flat floor returned normal Z 0.925-0.957 and were reported as
+   // OBSTACLE / CONTACT, sending the forklift into a ~30s withdraw-and-replan. The bearing checks below still require
+   // a flat supporting surface under the wheel.
+   if (!LiftOnly && Wheels.Contains(Part) && Hit.Normal.Z>(CVarOptWheelNormal.GetValueOnGameThread()!=0 ? .9f : .98f) &&
        Hit.PenetrationDepth<.5f && PartDelta.Z>=-.001f)
    {
     FCollisionQueryParams Bearing(SCENE_QUERY_STAT(RollingTyreSupport),false,this);

@@ -355,8 +355,8 @@ struct FAgvPanelGrid
 	double CellCm = 10.0;
 	/** Above 0 occupied, below 0 free, 0 never seen. */
 	TArray<float> Evidence;
-	/** Sensor-to-hit range (cm) of the last hit in the cell, for its brightness. */
-	TArray<float> HitRange;
+	/** Where the vehicle stood at the last added scan; each cell is shaded by its distance from there. */
+	FVector2D Sensor = FVector2D::ZeroVector;
 	/** The last hit lay on the prior map (green) or not (orange). */
 	TArray<uint8> Mapped;
 	int32 Serial = -1;

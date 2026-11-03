@@ -1267,7 +1267,7 @@ namespace AgvForkliftLoc
 	/** Green for points on the prior map, orange for things not on it; near bright, far dark (depth). */
 	FLinearColor DepthColor(bool bMapped, double RangeCm)
 	{
-		const float Brightness = (float)FMath::Lerp(1.0, 0.3, FMath::Clamp(RangeCm / 2000.0, 0.0, 1.0));
+		const float Brightness = (float)FMath::Lerp(1.0, 0.18, FMath::Clamp(RangeCm / 1500.0, 0.0, 1.0));
 		const FLinearColor Base = bMapped ? FLinearColor(0.3f, 1.f, 0.4f) : FLinearColor(1.f, 0.55f, 0.1f);
 		return FLinearColor(Base.R * Brightness, Base.G * Brightness, Base.B * Brightness, 1.f);
 	}
@@ -1293,7 +1293,6 @@ void UAgvLocalizationSubsystem::UpdatePanelGrid(int32 Number, UAgvForkliftLocali
 		Grid.Height = Height;
 		Grid.FloorZ = Floor;
 		Grid.Evidence.Init(0.f, Width * Height);
-		Grid.HitRange.Init(0.f, Width * Height);
 		Grid.Mapped.Init(0, Width * Height);
 		Grid.bDirty = true;
 	}
@@ -1338,10 +1337,10 @@ void UAgvLocalizationSubsystem::UpdatePanelGrid(int32 Number, UAgvForkliftLocali
 				{
 					const int32 Cell = Y1 * Grid.Width + X1;
 					Grid.Evidence[Cell] = FMath::Min(MaxEvidence, FMath::Max(0.f, Grid.Evidence[Cell]) + Hit);
-					Grid.HitRange[Cell] = (float)FVector2D::Distance(Sensor, Point);
 					Grid.Mapped[Cell] = OnMap.IsValidIndex(Index) && OnMap[Index] ? 1 : 0;
 				}
 			}
+			Grid.Sensor = Sensor;
 			Grid.bDirty = true;
 		}
 	}
@@ -1373,13 +1372,15 @@ void UAgvLocalizationSubsystem::UpdatePanelGrid(int32 Number, UAgvForkliftLocali
 	for (int32 Index = 0; Index < Grid.Width * Grid.Height; ++Index)
 	{
 		const float Evidence = Grid.Evidence[Index];
+		// Depth from where the vehicle is now: what it has passed fades as it drives away.
+		const FVector2D Cell = Grid.Origin + FVector2D(Index % Grid.Width + 0.5, Index / Grid.Width + 0.5) * Grid.CellCm;
 		if (Evidence > 0.5f)
 		{
-			Pixels[Index] = AgvForkliftLoc::DepthColor(Grid.Mapped[Index] != 0, Grid.HitRange[Index]).ToFColor(true);
+			Pixels[Index] = AgvForkliftLoc::DepthColor(Grid.Mapped[Index] != 0, FVector2D::Distance(Cell, Grid.Sensor)).ToFColor(true);
 		}
 		else if (Evidence < -0.3f)
 		{
-			Pixels[Index] = FColor(120, 125, 130, 70); // seen empty
+			Pixels[Index] = FColor(150, 155, 160, 105); // seen empty
 		}
 		else
 		{
