@@ -1207,11 +1207,10 @@ namespace AgvForkliftLoc
 	}
 }
 
-UAgvForkliftLocalizerComponent* UAgvLocalizationSubsystem::FindPanelVehicle() const
+UAgvForkliftLocalizerComponent* UAgvLocalizationSubsystem::FindPanelVehicle(int32 Number) const
 {
-	// Forklift 1: the vehicle named with "1", otherwise the first by name.
-	UAgvForkliftLocalizerComponent* Best = nullptr;
-	FString BestName;
+	// "지게차 1호" / "지게차 2호" by name; a scene without those names takes the vehicles in actor name order.
+	TArray<TPair<FString, UAgvForkliftLocalizerComponent*>> Ordered;
 	for (TActorIterator<AWarehouseForklift> It(GetWorld()); It; ++It)
 	{
 		UAgvForkliftLocalizerComponent* Localizer = It->FindComponentByClass<UAgvForkliftLocalizerComponent>();
@@ -1219,18 +1218,14 @@ UAgvForkliftLocalizerComponent* UAgvLocalizationSubsystem::FindPanelVehicle() co
 		{
 			continue;
 		}
-		if (It->VehicleName.Contains(TEXT("1")))
+		if (It->VehicleName.Contains(FString::FromInt(Number)))
 		{
 			return Localizer;
 		}
-		const FString Name = It->GetActorNameOrLabel();
-		if (!Best || Name < BestName)
-		{
-			Best = Localizer;
-			BestName = Name;
-		}
+		Ordered.Add({ It->GetActorNameOrLabel(), Localizer });
 	}
-	return Best;
+	Ordered.Sort([](const auto& A, const auto& B) { return A.Key < B.Key; });
+	return Ordered.IsValidIndex(Number - 1) ? Ordered[Number - 1].Value : nullptr;
 }
 
 void UAgvLocalizationSubsystem::UpdateMapTexture(const TSharedPtr<const FAgvDistanceMap>& Map)
@@ -1268,25 +1263,34 @@ void UAgvLocalizationSubsystem::UpdateMapTexture(const TSharedPtr<const FAgvDist
 
 void UAgvLocalizationSubsystem::DrawPanel(UCanvas* Canvas, APlayerController* Player)
 {
-	if (!bShowPanel || !Canvas || !Canvas->Canvas || !Player || Player->GetWorld() != GetWorld())
+	if ((!bShowVehicle[0] && !bShowVehicle[1]) || !Canvas || !Canvas->Canvas || !Player || Player->GetWorld() != GetWorld())
 	{
 		return;
 	}
-	UAgvForkliftLocalizerComponent* Vehicle = FindPanelVehicle();
-	AWarehouseForklift* Forklift = Vehicle ? Vehicle->GetForklift() : nullptr;
-	if (!Forklift)
+	// Stacked down the left edge; with both shown each one is sized to leave room for the other.
+	const int32 Shown = int32(bShowVehicle[0]) + int32(bShowVehicle[1]);
+	constexpr double Captions = 44.0;
+	const double Room = (Canvas->ClipY - 32.0) / Shown - Captions;
+	FVector2D Origin(16.0, 16.0);
+	for (int32 Number = 1; Number <= 2; ++Number)
 	{
-		return;
+		UAgvForkliftLocalizerComponent* Vehicle = bShowVehicle[Number - 1] ? FindPanelVehicle(Number) : nullptr;
+		if (!Vehicle || !Vehicle->GetForklift())
+		{
+			continue;
+		}
+		const double Used = bPanel3D
+			? DrawFirstPersonPanel(Canvas, Vehicle, Origin, FMath::Clamp(FMath::Min(Canvas->ClipX * 0.32, Room * 16.0 / 9.0), 200.0, 640.0), Number)
+			: DrawTopPanel(Canvas, Vehicle, Origin, FMath::Clamp(FMath::Min(Canvas->ClipY * 0.36, Room), 160.0, 420.0), Number);
+		Origin.Y += Used + 12.0;
 	}
-	if (bPanel3D)
-	{
-		DrawFirstPersonPanel(Canvas, Vehicle);
-		return;
-	}
+}
 
+double UAgvLocalizationSubsystem::DrawTopPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle, FVector2D Origin, double Size, int32 Number)
+{
+	AWarehouseForklift* Forklift = Vehicle->GetForklift();
 	// A top view (world X right, Y down, as in the editor top view) centred on where the vehicle believes it is.
-	const double Size = FMath::Clamp(Canvas->ClipY * 0.36, 220.0, 420.0);
-	const FVector2D Panel(16.0, 16.0);
+	const FVector2D Panel = Origin;
 	const FVector2D PanelMax = Panel + FVector2D(Size);
 	const double SpanCm = 2400.0, Scale = Size / SpanCm;
 	FTransform Estimated;
@@ -1380,23 +1384,24 @@ void UAgvLocalizationSubsystem::DrawPanel(UCanvas* Canvas, APlayerController* Pl
 			Item.EnableShadow(FLinearColor::Black);
 			Canvas->DrawItem(Item);
 		};
-		Text(TEXT("FORKLIFT 1 - AI WORLD (24 m)"), Panel.Y + 4.0, FLinearColor::White);
+		Text(FString::Printf(TEXT("FORKLIFT %d - AI WORLD (24 m)"), Number), Panel.Y + 4.0, FLinearColor::White);
 		Text(FString::Printf(TEXT("%s  err %.1f cm  match %.2f  pts %d"), *Vehicle->StatusText, Vehicle->ErrorCm, Vehicle->LastInlierRatio, Vehicle->LastMatchPoints),
 			PanelMax.Y + 4.0, FLinearColor::White);
 		Text(bPanelMap ? TEXT("map grey | scan on map green | unmapped orange | route blue | estimate yellow | actual white")
 			: TEXT("current scan only: on map green | unmapped orange | route blue | estimate yellow"), PanelMax.Y + 20.0, FLinearColor(0.75f, 0.78f, 0.8f, 1.f));
 	}
+	return Size + 44.0;
 }
 
-void UAgvLocalizationSubsystem::DrawFirstPersonPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle)
+double UAgvLocalizationSubsystem::DrawFirstPersonPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle, FVector2D Origin, double PanelWidth, int32 Number)
 {
 	AWarehouseForklift* Forklift = Vehicle->GetForklift();
 	const UAgvShadowSensorsComponent* Kit = Vehicle->GetSensorKit();
 
 	// The view from an eye on the body end (away from the forks), where the vehicle believes it is: everything drawn is
 	// what it knows (map structure, its scan, its route), placed with its own estimate.
-	const double Width = FMath::Clamp(Canvas->ClipX * 0.32, 320.0, 640.0), Height = Width * 9.0 / 16.0;
-	const FVector2D Panel(16.0, 16.0);
+	const double Width = PanelWidth, Height = Width * 9.0 / 16.0;
+	const FVector2D Panel = Origin;
 	const FVector2D PanelMax = Panel + FVector2D(Width, Height);
 	const FVector2D Centre = Panel + FVector2D(Width, Height) * 0.5;
 	const double Focal = Width * 0.5; // 90 degree horizontal field of view
@@ -1406,9 +1411,10 @@ void UAgvLocalizationSubsystem::DrawFirstPersonPanel(UCanvas* Canvas, UAgvForkli
 		Pose = Forklift->GetActorTransform();
 	}
 	const double Floor = Kit ? Kit->SnapshotFloorZCm : Pose.GetLocation().Z;
-	FVector Eye = Pose.TransformPosition(FVector(Vehicle->GetVehicleBox().Min.X - 10.0, 0.0, 0.0));
+	// Body end looking back along the body, or the fork end looking ahead over the tines.
+	FVector Eye = Pose.TransformPosition(FVector(bPanelFront ? Vehicle->GetVehicleBox().Max.X + 10.0 : Vehicle->GetVehicleBox().Min.X - 10.0, 0.0, 0.0));
 	Eye.Z = Floor + 210.0;
-	const FTransform Camera(FRotator(-12.0, Pose.Rotator().Yaw + 180.0, 0.0), Eye);
+	const FTransform Camera(FRotator(-12.0, Pose.Rotator().Yaw + (bPanelFront ? 0.0 : 180.0), 0.0), Eye);
 	constexpr double Near = 20.0;
 
 	auto Project = [&](const FVector& Local) { return Centre + FVector2D(Local.Y, -Local.Z) * (Focal / Local.X); };
@@ -1520,12 +1526,13 @@ void UAgvLocalizationSubsystem::DrawFirstPersonPanel(UCanvas* Canvas, UAgvForkli
 			Item.EnableShadow(FLinearColor::Black);
 			Canvas->DrawItem(Item);
 		};
-		Text(TEXT("FORKLIFT 1 - AI VIEW (body side, on its LiDAR estimate)"), Panel.Y + 4.0, FLinearColor::White);
+		Text(FString::Printf(TEXT("FORKLIFT %d - AI VIEW (%s side, on its LiDAR estimate)"), Number, bPanelFront ? TEXT("fork") : TEXT("body")), Panel.Y + 4.0, FLinearColor::White);
 		Text(FString::Printf(TEXT("%s  err %.1f cm  match %.2f  pts %d"), *Vehicle->StatusText, Vehicle->ErrorCm, Vehicle->LastInlierRatio, Vehicle->LastMatchPoints),
 			PanelMax.Y + 4.0, FLinearColor::White);
 		Text(bPanelMap ? TEXT("map structure blue | scan on map green | unmapped orange | route blue")
 			: TEXT("current scan only: on map green | unmapped orange | route blue"), PanelMax.Y + 20.0, FLinearColor(0.75f, 0.78f, 0.8f, 1.f));
 	}
+	return Height + 44.0;
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
