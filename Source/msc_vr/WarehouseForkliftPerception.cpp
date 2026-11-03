@@ -208,7 +208,8 @@ bool AWarehouseForklift::GetPerceivedActorBounds(const AActor* Actor,FBox& Bound
 bool AWarehouseForklift::PerceivedBoxClear(const FTransform& Pose,const FBox& LocalBox,
  const TArray<AActor*>& Ignored,bool PeopleOnly) const
 {
- if (!SensorKit || !AutonomousSensorsReady()) return false;
+ if (!SensorKit || !AutonomousSensorsReady())
+ { NavigationBlockDetail=TEXT("새 센서 관측 필요");return false; }
  auto Ignore=[&](const FAgvObservedObstacle& Obstacle)
  {
   return Obstacle.Actor.Get()==this || Ignored.Contains(Obstacle.Actor.Get()) ||
@@ -216,6 +217,12 @@ bool AWarehouseForklift::PerceivedBoxClear(const FTransform& Pose,const FBox& Lo
  };
  auto LogBlock=[&](const FAgvObservedObstacle& Obstacle,const TCHAR* Kind,FVector MeasuredPoint)
  {
+  // Explain only the published map / actual measured blocker used by this
+  // query. Never fetch another object's unseen current shape or position.
+  const TCHAR* Category=FCString::Strcmp(Kind,TEXT("published-building"))==0 ? TEXT("고정 구조물") :
+   FCString::Strcmp(Kind,TEXT("recognized-target-catalog"))==0 ? TEXT("대상 팔레트") : TEXT("센서에 감지된 물체");
+  NavigationBlockDetail=FString::Printf(TEXT("%s: %s"),Category,
+   Obstacle.Actor.IsValid() ? *Obstacle.Actor->GetActorNameOrLabel() : TEXT("지도에서 제거된 구조물"));
   if (bPlanningRoute) return;
   UE_LOG(LogTemp,Log,TEXT("AGV_PERCEIVED_BOX_BLOCK %s kind=%s actor=%s component=%s candidate=%s box=%s savedPoint=%s savedBounds=%s mapRevision=%d snapshot=%d taskSource=%s observedTargetValid=%d observedTarget=%s routeGoal=%s"),
    *VehicleName,Kind,*GetNameSafe(Obstacle.Actor.Get()),*GetNameSafe(Obstacle.Component.Get()),*Pose.ToString(),*LocalBox.ToString(),
@@ -252,7 +259,8 @@ bool AWarehouseForklift::PerceivedBoxClear(const FTransform& Pose,const FBox& Lo
     return false;
    }
   }
-  else return false; // Published geometry stays conservative until the next revision.
+  else
+  { NavigationBlockDetail=TEXT("사전 지도 구조물의 갱신 필요");return false; }
  }
  SensorKit->FindObservedCandidates(Broad,Candidates);
  for (int32 Index : Candidates)
@@ -362,7 +370,15 @@ bool AWarehouseForklift::PerceivedMotionClear(UStaticMeshComponent* Part,FVector
 bool AWarehouseForklift::NavigationClearForDiagnostics(const FTransform& Pose) const
 {
  if (IsRemoteControlled()) return true;
- return NavigationClear(Pose);
+ const bool Clear=NavigationClear(Pose);
+ if (!Clear)
+ {
+  const FString Detail=NavigationBlockDetail;
+  const bool PartsClear=PhysicalPoseClear(Pose,true);
+  UE_LOG(LogTemp,Log,TEXT("AGV_DIAGNOSTIC_POSE %s pose=%s envelope_clear=0 physical_parts_clear=%d blocker=%s"),
+   *VehicleName,*Pose.ToString(),PartsClear,*Detail);
+ }
+ return Clear;
 }
 
 bool AWarehouseForklift::PerceivedFloorSupport(FVector Point,FHitResult* Surface) const

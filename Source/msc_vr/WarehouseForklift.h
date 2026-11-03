@@ -258,6 +258,7 @@ private:
  FWarehouseNavigationQuery BuildNavigationQuery() const;
  bool bUseCurrentRackWaypoints=false;
  bool NavigationClear(const FTransform& Pose,const FWarehouseNavigationQuery* Query=nullptr) const;
+ mutable FString NavigationBlockDetail;
  bool ConnectPoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost,const FWarehouseNavigationQuery* Query=nullptr) const;
  bool ConnectLanePoses(const FTransform& From,const FTransform& To,TArray<FWarehouseRoutePoint>& Route,float& Cost,const FWarehouseNavigationQuery* Query=nullptr) const;
  bool FollowRoute(float Speed,float Dt);
@@ -271,6 +272,8 @@ private:
  float LostSupportSeconds = 0;
  float LiftInitialHeight=0,LiftProgressHeight=0,LiftProgressAt=0;
  FTransform PalletApproach(const FTransform& PalletPose,float Distance) const;
+ bool PlanPickupApproach();
+ float PickupApproachDistanceCm=220.f;
  EWarehouseAIState ResumeAI = EWarehouseAIState::Ready;
  EWarehouseAIState WaitResumeAI = EWarehouseAIState::Ready;
  UPROPERTY(Transient) TArray<TObjectPtr<AActor>> CarriedCargo;

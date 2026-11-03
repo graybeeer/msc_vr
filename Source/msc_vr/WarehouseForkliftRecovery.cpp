@@ -64,7 +64,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
   // most 60cm of exact own-part checks from this fixed starting position.
   RecoveryStart=GetActorLocation();
   bObservedPickupEscape=bHasRecognizedTargetPose && FVector::Dist2D(RecoveryStart,TaskSourcePose().GetLocation())<=260.f;
-  if (PlanRecoveryDetour(PalletApproach(TaskSourcePose(),220)))
+  if (PlanRecoveryDetour(PalletApproach(TaskSourcePose(),PickupApproachDistanceCm)))
   {
    ++RecoveryCount;++ObservedRouteReplans;
    UE_LOG(LogTemp,Log,TEXT("AGV_OBSERVED_REPLAN %s observed=%d/3 mechanical=%d/3 insertion=%d/3 progress_cm=%.2f"),
@@ -102,7 +102,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  case EWarehouseAIState::NavigatePickup:
  case EWarehouseAIState::AlignVehicle:
   if (!IsValid(TargetPallet)) { FaultAI(TEXT("TARGET LOST")); return false; }
-  RecoveryGoal=PalletApproach(TaskSourcePose(),220);
+  RecoveryGoal=PalletApproach(TaskSourcePose(),PickupApproachDistanceCm);
   RecoveryResume=EWarehouseAIState::NavigatePickup; break;
  case EWarehouseAIState::PlanDelivery:
  case EWarehouseAIState::NavigateDelivery:
@@ -148,11 +148,15 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  if ((FailedPickupRoute || FailedDeliveryRoute) && !ChargerForwardRecovery && NavigationClear(GetActorTransform()))
  {
   TGuardValue<bool> Planning(bPlanningRoute,true);
-  const FTransform Goal=PalletApproach(FailedPickupRoute ? TaskSourcePose() : ActiveJob.Destination,220);
+  const FTransform Goal=PalletApproach(FailedPickupRoute ? TaskSourcePose() : ActiveJob.Destination,
+   FailedPickupRoute ? PickupApproachDistanceCm : 220.f);
   const bool GoalClear=NavigationClear(Goal);
+  const FString Detail=GoalClear ? TEXT("현재 배치에서 연결 가능한 경로를 찾지 못했습니다. 통로 폭과 랙 배치를 확인한 뒤 E로 재시도하세요.") :
+   FString(TEXT("팔레트 접근 공간이 막혀 있습니다. "))+NavigationBlockDetail+TEXT(". 랙 앞 작업 공간과 팔레트 방향을 확인한 뒤 E로 재시도하세요.");
+  if (!GoalClear) UE_LOG(LogTemp,Warning,TEXT("AGV_PICKUP_GOAL_BLOCKED %s goal=%s blocker=%s"),
+   *VehicleName,*Goal.ToString(),*NavigationBlockDetail);
   RecoveryFault(GoalClear ? TEXT("NO CONNECTED ROUTE AFTER LAYOUT CHANGE") : TEXT("PALLET APPROACH SPACE BLOCKED"),
-   GoalClear ? TEXT("현재 배치에서 연결 가능한 경로를 찾지 못했습니다. 통로 폭과 랙 배치를 확인한 뒤 E로 재시도하세요.") :
-    TEXT("팔레트 접근 공간이 막혀 있습니다. 랙 앞 작업 공간과 팔레트 방향을 확인한 뒤 E로 재시도하세요."));
+   *Detail);
   return false;
  }
  ++RecoveryCount; ++RecoveryAttempts;
@@ -162,7 +166,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  // Keep clearing the source rack instead of undoing the last reverse into it.
  RecoveryDirection=bRetryInsertion || From==EWarehouseAIState::WithdrawFork || FailedDeliveryRoute || FloorAlignmentRetry ? -1.f : -LastDriveDirection;
  if (ChargerForwardRecovery) RecoveryDirection=1.f;
- RecoveryDistance=150.f;
+ RecoveryDistance=bSupportingPallet ? 150.f : 200.f;
  if (bRetryInsertion)
  {
   // Leave enough steering distance for a new alignment after real contact drift.
@@ -197,8 +201,9 @@ bool AWarehouseForklift::PlanRecoveryDetour(const FTransform& Goal)
   for (float DistanceCm : {-120.f,-60.f,60.f,120.f})
    Candidates.Add(FTransform(From.GetRotation(),From.GetLocation()+From.GetUnitAxis(EAxis::X)*DistanceCm));
  // ponytail: two local side lanes; this is bounded recovery, not a global free-space planner.
- if (Distance>250.f) for (float Side : {-220.f,220.f,-330.f,330.f})
+ if (Distance>150.f) for (float Side : {-160.f,160.f,-220.f,220.f,-330.f,330.f})
  {
+  if (Distance>350.f && FMath::Abs(Side)<200.f) continue;
   const float Fraction=FMath::Clamp(300.f/Distance,.25f,.4f);
   Candidates.Add(FTransform(FRotator(0,From.Rotator().Yaw,0),From.GetLocation()+Delta*Fraction+Across*Side));
   Candidates.Add(FTransform(FRotator(0,Goal.Rotator().Yaw,0),From.GetLocation()+Delta*(1.f-Fraction)+Across*Side));
