@@ -23,13 +23,16 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 배치 보관·반복 실험·성과 | `WarehouseExperimentStorage`, `WarehouseExperimentSubsystem`, `WarehouseExperimentMetrics`, `WarehouseExperimentUI` | 초기 배치 JSON 복원, 공통 주문·새 레벨 반복, 완료·대기 시간과 CSV/JSON 비교 |
 | 검증·모델·맵 | `Scripts/verify_*`, `Art/`, `Content/`, `Config/` | 회귀 검사·적용 도구, 자체 모델 원본, Unreal 에셋·맵, 실행 설정 |
 
-관제·차량·설비는 현재 같은 게임 프로세스 안에서 연결된다. `Source/msc_vr/Agv/`의 센서와 `AgvForkliftLocalizer` 위치 추정만 기존 운용 차량에 연결하며 독립 타이어·내비게이터·안전 제어는 활성화하지 않는다. 자세한 상태 흐름과 정보 경계는 [알고리즘 도식](FLEET_ALGORITHM_COMPARISON.md)과 [자율 운반 기준](AUTONOMY.md)을 따른다.
+관제·차량·설비는 현재 같은 게임 프로세스 안에서 연결된다. `Source/msc_vr/Agv/`의 센서·위치 추정과 `AgvHybridPlanner.cpp`의 경로 검색을 기존 운용 차량에 연결하며 독립 타이어·내비게이터·안전 제어는 활성화하지 않는다. 자세한 상태 흐름과 정보 경계는 [알고리즘 도식](FLEET_ALGORITHM_COMPARISON.md)과 [자율 운반 기준](AUTONOMY.md)을 따른다.
 
 ## 작업별 첫 탐색 경로
 
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
+| 하중별 위치 추정 신뢰도·LiDAR 보정과 오차 비교 | `AgvForkliftLocalizer::StepOdometry`/`CollectAndMatchScan`, `Scripts/verify_load_aware_localization_pie.py` | `Warehouse.Localization.LoadAware`로 실제 지지 하중의 반영을 비교. `-LoadAwareModes=0,1 -WorkLoads=50,200,500 -BenchRepeats=2 -LoadRun=name`; 실제 바퀴 거리·물리·센서 주기·원격 제외 유지. 기준·검증은 `AUTONOMY.md`, 결과는 `Saved/Testing/LoadAwareLocalization_20261103/` |
+| Hybrid A* 경로·기존 차선 대체·관측 장애물 기억 | `Agv/AgvHybridPlanner.cpp`, `WarehouseForkliftNavQuery.h`, `WarehouseForkliftAI::TryPlanAutonomousRoute`/`BenchRoutePlan`, `WarehouseFleetCoordinator::SeenObstacles` | `Warehouse.Nav.HybridPlanner`로 비교하며 고정 지도·실제 관측·관제 최근 관측만 사용. 작업 지시는 미관측 물류의 실제 충돌 형상을 제공하지 않는다. 병합 경계·검증은 `AUTONOMY.md` |
+| 옵션 맨 위 실시간 센서 화면·차량별 표시·평면/1인칭/누적 지도 | `msc_vrPlayerController::ToggleWarehouseMenu`/`OpenAIViewSettings`/`ApplyAIViewSettings`, `AgvForkliftLocalizer`의 `UAgvLocalizationSubsystem::DrawPanel`, `Scripts/verify_sensor_view_ui_pie.py` | 기존 스냅샷·경로 표시만 사용하고 별도 스캔을 만들지 않는다. 조작은 `WAREHOUSE.md`, 센서 정보 경계는 `AUTONOMY.md` |
 | 추정 위치 주행·지도 변경/층간 이동 후 위치 초기화 | `Agv/AgvForkliftLocalizer.h/.cpp`, `Agv/AgvScanMatching.h/.cpp`, `WarehouseForkliftAI::PlanAutonomousRoute`/`FollowRoute`/`RefreshAfterLayout`, `Scripts/verify_estimated_navigation_pie.py`, `Scripts/verify_localization_improvements_pie.py` | 후자는 `-LocStages=0,1,2,3`로 같은 실제 운반의 보정·신뢰도·제한 재탐색을 비교하며 결과는 `Saved/Testing/LocalizationImprovements_20261031/`에 보관. 현재 통합 경계는 `AUTONOMY.md`. `-EstimatedCase=shipping/remote/layout/elevator`로 기존 실제 운행 검사를 재사용하며, 이동 추정에는 공통1초 스냅샷만 사용. 원격은 위치 추정도 중단. `Agv`의 인계·설계 문서는 개발 이력 |
 | 이동 예측 주기·프레임 상한·원격 중단과 렉 비교 | `Agv/AgvForkliftLocalizer::CaptureOdometry`/`StepOdometry`/`TickComponent`, `Scripts/verify_prediction_interval_pie.py`, `profile_periodic_hitches_pie.py` | `Warehouse.Localization.PredictionHz` 기본50Hz 목표(월드30Hz 상한), 센서 관측은 기존1초. `-PredictionRates=2,50 -PredictionCase=transport/remote/layout/elevator`; 렌더링은 `-HitchPredictionHz=2/50`. 현재 기준은 `AUTONOMY.md`, 성능 해석은 `PHYSICS.md`, 결과는 `Saved/Testing/PredictionRate_20261101/`. 이전0.5/1초 결과는 각각 `PredictionHalfSecond_20261101/`·`PredictionInterval_20261101/` |
 | 센서·오도메트리·리프트·하중 동시 계측 | `Scripts/verify_sensor_calibration_pie.py`, `verify_transport_benchmark_pie.py` | 운용 설정을 바꾸지 않고 광선/반환점/자체 가림·지도 매칭·바퀴 회전·기울기·화물 바닥 여유를 기록. `-BenchGroup=flat -BenchRepeats=2 -CalibrationRun=name`, 선택 하중은 `-CalibrationLoads=50`. 폐기 후보와 한계는 `AUTONOMY.md`, 실행 기록은 `Saved/Testing/SensorCalibration_20261031/` |
@@ -124,7 +127,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 정적 삼각형·동적 볼록 충돌 에셋 | `Scripts/prepare_warehouse_assets.py`, `Source/msc_vr/WarehouseCargo.cpp` | `Content/Warehouse/Collision/`, `Content/Warehouse/Physics/` (사용 파생 에셋 Git 포함) |
 | 물리 실측·LiDAR·경로 계획 확장 | `PHYSICS.md`의 실측 전 가정, `AUTONOMY.md`의 경로·인식 범위 | `WarehouseForkliftPhysics.cpp`, `Config/DefaultEngine.ini`, 관련 레벨/블루프린트 |
 | 별도 Agv 동역학·LiDAR·내비게이션 모듈 | `Source/msc_vr/Agv/FORKLIFT_NAVIGATION.md`, 같은 폴더의 관련 컴포넌트 | `Scripts/verify_agv_*.py`; 현재 맵 지게차의 자율 작업은 `WarehouseForkliftAI.cpp` |
-| 센서·고정 건물 지도·관측 정보 경계·1초 검사·원격 분리 | `AUTONOMY.md`, `WarehouseForkliftPerception.cpp`, `Agv/AgvShadowSensors.h/.cpp`, `Scripts/verify_forklift_sensors_pie.py` | 지도 태그·독립 시험 차량의 운용 맵 제외는 `Scripts/configure_sensor_structure_tags.py`, 경로 연결은 `WarehouseForkliftAI`, 원격은 `WarehouseForkliftRemote`. 별도 타이어/주행 AI는 연결하지 않음 |
+| 센서·고정 건물 지도·관측 정보 경계·1초 검사·원격 분리 | `AUTONOMY.md`, `WarehouseForkliftPerception.cpp`, `Agv/AgvShadowSensors.h/.cpp`, `Scripts/verify_forklift_sensors_pie.py` | `-HybridKnowledgeChecks`는 입고 등록만 된 미관측 팔레트가 Hybrid 경로를 막지 않는지도 검사한다. 지도 태그·독립 시험 차량의 운용 맵 제외는 `Scripts/configure_sensor_structure_tags.py`, 경로 연결은 `WarehouseForkliftAI`, 원격은 `WarehouseForkliftRemote`. 별도 타이어/주행 AI는 연결하지 않음 |
 | 즉시 이동·카메라 동기화·무게 제한 없는 집기·팔레트 적재 | `Source/msc_vr/WarehousePlayerMovement.h/.cpp`, `msc_vrCharacter.h/.cpp`, `WarehouseCargo.h/.cpp`, `Scripts/verify_arcade_player_pie.py` | `WAREHOUSE.md`의 플레이어 조작, 기존 운반/파손 검사 |
 | 설정 메뉴·전지적 관찰 카메라·지붕 숨김·F1 와이어프레임 충돌 | `Source/msc_vr/msc_vrPlayerController.h/.cpp`, `Config/DefaultInput.ini`의 `DebugExecBindings`, `Scripts/configure_observer_view.py` | `Scripts/verify_view_and_wheel_fixes_pie.py`, `Scripts/verify_observer_view_pie.py`, `Scripts/verify_warehouse_interaction_pie.py`, `Saved/Config/WindowsEditor/Game.ini` (로컬 설정) |
 | 전지적 카메라 앞 가까운 벽 페이드·원본 재질 복원 | `WarehouseObserverWallFade.h/.cpp`, `msc_vrPlayerController::PlayerTick`, `Scripts/prepare_observer_wall_fade.py`, `Scripts/verify_observer_wall_fade_pie.py` | 대상 `ObserverFadeWall` 태그도 준비 스크립트가 저장. 로컬 팔레트·파생 재질은 `Content/Warehouse/Materials/ObserverWalls/`, 설치는 `TEAM_ASSETS.md`, 동작은 `WAREHOUSE.md` |
@@ -335,6 +338,7 @@ msc_vr/
     verify_layout_editing_ui_pie.py
     verify_layout_editor_pie.py
     verify_layout_inventory_pie.py
+    verify_load_aware_localization_pie.py
     verify_localization_improvements_pie.py
     verify_mapped_elevator_transport_pie.py
     verify_mcp.py
@@ -361,6 +365,7 @@ msc_vr/
     verify_repeating_inbound_pie.py
     verify_runtime_storage.py
     verify_sensor_calibration_pie.py
+    verify_sensor_view_ui_pie.py
     verify_shared_charging_pie.py
     verify_shipping_saved_map_pie.py
     verify_shipping_staging_pie.py
@@ -455,6 +460,7 @@ msc_vr/
       WarehouseForklift.cpp
       WarehouseForklift.h
       WarehouseForkliftAI.cpp
+      WarehouseForkliftNavQuery.h
       WarehouseForkliftParking.cpp
       WarehouseForkliftPerception.cpp
       WarehouseForkliftPhysics.cpp

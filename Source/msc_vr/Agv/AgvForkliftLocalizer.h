@@ -192,6 +192,14 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
 	float LastCorrectionCm = 0.f;
 
+	/** Supported pallet+payload, sampled from the existing load measurement once per localization snapshot. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
+	float SampledLoadKg = 0.f;
+
+	/** Bounded load/slip model for translation uncertainty; never scales measured travel or gyro uncertainty. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
+	float LoadUncertaintyScale = 1.f;
+
 	/** Scan correction rejected for contradicting the wheel/gyro prediction. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="AGV|Localization|Status")
 	int32 InnovationRejections = 0;
@@ -301,6 +309,7 @@ private:
 	double PendingOdometrySeconds = 0.0;
 	double PredictionClockSeconds = 0.0;
 	double WheelRadiusCm = 15.f;
+	double WheelDisagreementCm = 0.0;
 
 	/** Fixed load-wheel axle middle in the actor frame (cm): the point that moves without side slip. */
 	FVector2D ReferenceOffset = FVector2D::ZeroVector;

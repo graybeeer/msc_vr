@@ -34,6 +34,18 @@ namespace AgvForkliftLoc
 		TEXT("Localization A/B: 0 original, 1 motion prior/gate, 2 geometry confidence, 3 bounded recovery."), ECVF_Default);
 	static TAutoConsoleVariable<float> PriorWeight(TEXT("Warehouse.Localization.PriorWeight"), 0.001f,
 		TEXT("Odometry regularization scale for measured localization tuning; independent of the innovation gate."), ECVF_Default);
+	static TAutoConsoleVariable<int32> LoadAware(TEXT("Warehouse.Localization.LoadAware"),1,
+		TEXT("1: supported load and drive/load encoder disagreement increase bounded translation uncertainty; 0: reference model. Measured travel, gyro and scan cadence are unchanged."));
+
+	// Training uncertainty model, not tire-deflection calibration. Load alone
+	// does not imply slip: require actual disagreement between independent encoders.
+	static double LoadScale(double PayloadKg,double EmptyKg,double DisagreementCm,double PositionSigmaCm)
+	{
+		if (!FMath::IsFinite(PayloadKg) || !FMath::IsFinite(EmptyKg) || EmptyKg<=0.0 ||
+			!FMath::IsFinite(DisagreementCm) || !FMath::IsFinite(PositionSigmaCm)) return 1.0;
+		const double Slip=FMath::Clamp(DisagreementCm/FMath::Max(1.0,PositionSigmaCm),0.0,1.0);
+		return FMath::Sqrt(1.0+FMath::Clamp(PayloadKg/EmptyKg,0.0,1.4)*Slip*Slip);
+	}
 	static TAutoConsoleVariable<float> StraightGraceCm(TEXT("Warehouse.Localization.StraightGraceCm"),0.f,
 		TEXT("Optional odometry allowance, cm (maximum 2000); accumulated gyro turns of 60 degrees retain the normal loss limit. 0 is reference."));
 
@@ -252,6 +264,9 @@ void UAgvForkliftLocalizerComponent::InitializePose()
 	CorrectionYaw = DrivingYaw = 0.0;
 	TravelSinceMatchCm = 0.f;
 	TurnSinceMatchRad = 0.0;
+	SampledLoadKg = 0.f;
+	LoadUncertaintyScale = 1.f;
+	WheelDisagreementCm = 0.0;
 	PendingOdometry.Reset();
 	PendingOdometrySeconds = 0.0;
 	PredictionClockSeconds = 0.0;
@@ -501,7 +516,11 @@ void UAgvForkliftLocalizerComponent::StepOdometry(const FOdometrySample& Sample)
 	const double Rim=Sample.RimRate*Dt*(1.0+WheelRadiusErrorPercent/100.0)*(1.0+Gauss()*EncoderNoisePercent/100.0);
 	double Measured=Rim*FMath::Cos(Steer);
 	if (bLoadWheelEncoders && LoadWheels.Num()==2 && LoadWheels[0] && LoadWheels[1])
+	{
 		Measured=Sample.LoadRate*Dt*(1.0+WheelRadiusErrorPercent/100.0)*(1.0+Gauss()*EncoderNoisePercent/100.0);
+		// Both inputs are measured rotations, never the true chassis travel.
+		WheelDisagreementCm+=FMath::Abs(Sample.RimRate*FMath::Cos(Steer)-Sample.LoadRate)*Dt;
+	}
 
 	// Yaw-rate gyro with bias and angle random walk; held at standstill (zero-velocity update).
 	const double Rate = Sample.GyroRate + FMath::DegreesToRadians((double)GyroBiasDegS);
@@ -607,14 +626,6 @@ bool UAgvForkliftLocalizerComponent::EnsureMap()
 			Built->Width = Built->Height = 0;
 			return Built;
 		}
-		// A handful of parts, as in a small test scene, gives scan matching too little to lock on: the estimate could only
-		// drift until it counts as lost. Treat it as no map, so travel uses the exact pose. The warehouse has over 300 parts.
-		constexpr int32 MinMapParts = 20;
-		if (Parts.Num() < MinMapParts)
-		{
-			Built->Width = Built->Height = 0;
-			return Built;
-		}
 		// Occupancy: a cell is occupied when a cell-sized column over the band overlaps the part.
 		TArray<bool> Occupied;
 		Occupied.Init(false, Built->Width * Built->Height);
@@ -696,6 +707,11 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 
 	// The snapshot was taken in the vehicle's tick this frame, at the pose the odometry has now. Only range, beam
 	// angle and the fixed mount are used; the height band uses the floor the vehicle stands on.
+	// Read the existing cached support/load measurement once per common snapshot,
+	// only for cargo actually supported by the forks, never a future job's target.
+	SampledLoadKg = Forklift->GetSupportedPallet() && Forklift->bLoadSensorHealthy ? FMath::Max(0.f,Forklift->GetLoadMassKg()) : 0.f;
+	LoadUncertaintyScale = AgvForkliftLoc::LoadAware.GetValueOnGameThread()!=0 ?
+		AgvForkliftLoc::LoadScale(SampledLoadKg,Forklift->VehicleMassKg,WheelDisagreementCm,6.0+0.04*TravelSinceMatchCm) : 1.0;
 	const FTransform Actor = Forklift->GetActorTransform();
 	// Points from low on the structure count too (the side scanners sweep 27 cm above the floor across rack posts).
 	const bool bMotionPrior = AgvForkliftLoc::FilterLevel.GetValueOnGameThread() >= 1;
@@ -765,7 +781,7 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	Params.Iterations = MatchIterations;
 	// Uncertainty grows with sensor-integrated travel/turn, including rejected scans. These are model bounds,
 	// not a full covariance filter. The real engine position/error is used only in diagnostics below.
-	const double PositionSigma = 6.0 + 0.04 * TravelSinceMatchCm;
+	const double PositionSigma = (6.0 + 0.04 * TravelSinceMatchCm) * LoadUncertaintyScale;
 	const double YawSigma = FMath::DegreesToRadians(0.35 + 0.015 * FMath::RadiansToDegrees(TurnSinceMatchRad) + 0.0005 * TravelSinceMatchCm);
 	if (bMotionPrior)
 	{
@@ -854,6 +870,7 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 		LastCorrectionCm = (float)FVector2D::Distance(Before, After);
 		TravelSinceMatchCm = 0.f;
 		TurnSinceMatchRad = 0.0;
+		WheelDisagreementCm = 0.0;
 		++AcceptedMatches;
 		if (bLost)
 		{
@@ -1686,6 +1703,24 @@ double UAgvLocalizationSubsystem::DrawFirstPersonPanel(UCanvas* Canvas, UAgvFork
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgvLoadAwareOdometryTest, "Warehouse.Localization.LoadAwareOdometry",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAgvLoadAwareOdometryTest::RunTest(const FString& Parameters)
+{
+    using AgvForkliftLoc::LoadScale;
+    TestEqual(TEXT("Empty forklift retains the reference"),LoadScale(0,1000,6,6),1.0);
+    TestEqual(TEXT("Load without encoder disagreement retains the reference"),LoadScale(500,1000,0,6),1.0);
+    TestEqual(TEXT("Negative payload does not reduce uncertainty"),LoadScale(-50,1000,6,6),1.0);
+    TestTrue(TEXT("500kg with measured slip increases translation variance"),FMath::IsNearlyEqual(FMath::Square(LoadScale(500,1000,6,6)),1.5));
+    TestTrue(TEXT("Less disagreement means less additional uncertainty"),LoadScale(500,1000,1,6)<LoadScale(500,1000,6,6));
+    TestTrue(TEXT("Heavier load increases uncertainty for the same encoder disagreement"),LoadScale(500,1000,6,6)>LoadScale(50,1000,6,6));
+    TestEqual(TEXT("Overload extrapolation is bounded"),LoadScale(10000,1000,60,6),LoadScale(1400,1000,6,6));
+    TestEqual(TEXT("Invalid empty mass stays finite"),LoadScale(500,0,6,6),1.0);
+    const double Scale=LoadScale(1400,1000,6,6);
+    TestFalse(TEXT("Maximum load still rejects an 85cm stationary jump"),AgvScanMatch::AcceptInnovation(FVector2D(0,85),0,6*Scale,0.01*Scale));
+    return true;
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgvLocalizationConfidenceTest, "Warehouse.Localization.GeometryConfidence",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

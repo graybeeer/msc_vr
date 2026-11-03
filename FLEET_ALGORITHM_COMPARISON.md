@@ -1,6 +1,6 @@
 # 지게차 이동 알고리즘과 실제 관제 시스템 비교
 
-도식 정리 기준은 **2026-10-20**, 위치 추정 연결은 **2026-10-31**에 갱신했다. 현재 맵에서 실행되는 `WarehouseForklift`와 `WarehouseFleetCoordinator`의 코드를 읽어 도식화했다. 아래의 실제 시스템 설명은 제조사·표준 작성자·Open-RMF의 공개 자료에 근거하며, 비공개 제조사 알고리즘까지 같다고 가정하지 않는다. 센서·추정 위치 통합의 진행 상태·정보 경계·실행 검사와 운반 시간의 확인 범위는 [AUTONOMY.md](AUTONOMY.md), 물리 계수·실측 전 가정은 [PHYSICS.md](PHYSICS.md)를 따른다.
+도식 정리 기준은 **2026-10-20**, 위치 추정 연결은 **2026-10-31**, Hybrid A* 경로 검색은 **2026-11-03**에 갱신했다. 현재 맵에서 실행되는 `WarehouseForklift`와 `WarehouseFleetCoordinator`의 코드를 읽어 도식화했다. 아래의 실제 시스템 설명은 제조사·표준 작성자·Open-RMF의 공개 자료에 근거하며, 비공개 제조사 알고리즘까지 같다고 가정하지 않는다. 센서·추정 위치 통합의 진행 상태·정보 경계·실행 검사와 운반 시간의 확인 범위는 [AUTONOMY.md](AUTONOMY.md), 물리 계수·실측 전 가정은 [PHYSICS.md](PHYSICS.md)를 따른다.
 
 ## 1. 전체 담당 관계
 
@@ -28,7 +28,7 @@ flowchart LR
     Report --> User
 ```
 
-차량 AI와 중앙 교통 관리자가 별도 위치에 있어도, 현재 둘은 같은 게임 프로세스의 객체 호출로 연결된다. 실제 WMS/MES 서버, MQTT 브로커, 네트워크 지연·통신 끊김 처리는 아직 연결되어 있지 않다. `Source/msc_vr/Agv/`의 LiDAR 센서와 위치 추정을 기존 경로 추종에 선별 연결하며, 독립 내비게이터·타이어 구동·안전 모듈은 분리한다. 정밀 접근·추정 상실·지도 변경 경계는 [AUTONOMY.md](AUTONOMY.md)의 추정 위치 주행 통합 절을 따른다. 원격 조작은 센서·AI·위치 추정을 거치지 않고 기존 물리 구동에 입력한다.
+차량 AI와 중앙 교통 관리자가 별도 위치에 있어도, 현재 둘은 같은 게임 프로세스의 객체 호출로 연결된다. 실제 WMS/MES 서버, MQTT 브로커, 네트워크 지연·통신 끊김 처리는 아직 연결되어 있지 않다. `Source/msc_vr/Agv/`의 LiDAR 센서·위치 추정과 Hybrid A* 경로 검색을 기존 차량에 연결하며, 독립 내비게이터·타이어 구동·안전 모듈은 분리한다. 정밀 접근·추정 상실·지도 변경 경계는 [AUTONOMY.md](AUTONOMY.md)의 추정 위치 주행 통합 절을 따른다. 원격 조작은 센서·AI·위치 추정을 거치지 않고 기존 물리 구동에 입력한다.
 
 ## 2. 차량의 작업 상태 흐름
 
@@ -96,10 +96,15 @@ flowchart TD
 
 ## 3. 경로 계산과 실제 이동
 
+2026-11-03 병합 후 일반 자율 주행은 제한된 Hybrid A*를 먼저 사용하고, 아래 차로 앵커 방식은 실패 시 대체 경로와 정밀 접근에 남긴다. 관측되지 않은 이동 물체는 입고 구역에 등록되어 있어도 실제 위치·형상을 검색하지 않는다. 자세한 통합 기준과 시험 결과는 [AUTONOMY.md](AUTONOMY.md)의 최신 주행 브랜치 병합 절을 따른다.
+
 ```mermaid
 flowchart TD
-    Pose["현재 강체 위치·방향 + 목표 위치·방향"] --> Envelope["차체와 실제 화물의 통과 범위 계산"]
-    Envelope --> Direct{"직결 경로가 가능한가?<br/>전후진 곡선 또는 회전→직선→회전"}
+    Pose["일반 주행의 추정 위치·방향 + 목표 자세"] --> Envelope["차체와 실제 화물의 통과 범위 계산"]
+    Envelope --> Hybrid["일반 자율 주행: Hybrid A*<br/>호·직진·자리 회전의 예상 시간 비용"]
+    Hybrid --> HybridFound{"관측·지도·바닥·예약 검증 통과?"}
+    HybridFound -- 예 --> Permit
+    HybridFound -- 실패 또는 정밀 작업 --> Direct{"기존 연결 경로가 가능한가?<br/>전후진 곡선 또는 회전→직선→회전"}
     Direct -- 아니오 --> Graph["같은 층의 차로 앵커 검색<br/>A* 비용 = 이동 비용 + 목표까지 거리"]
     Graph --> Geometry["곡률·방향·연결 비용 검사<br/>실행 불가능한 곡선 후보 제외"]
     Geometry --> Edge["유효 후보의 모든 자세에서<br/>회전 공간·장애물·관제 예약·바닥 검사"]
@@ -191,7 +196,7 @@ flowchart TD
 | 작업과 관제 분담 | 로컬 컴퓨터/입고 구역이 지시하고 차량 상태 머신이 실행·보고 | VisionNav 사례는 WMS→중앙 관제→차량 운반이며 RCS는 차량·작업·이상·실시간 경로를 관리한다. [제조사 운용 사례](https://www.visionnav.com/application/vnsl14productionlinemanufacturingindustry), [RCS](https://www.visionnav.com/product/robot-control-system.php) | 작업 단계와 병목 위치는 비교할 수 있다. 실제 IT 연동 시간은 포함되지 않는다. |
 | 관제 통신 | 같은 프로세스의 함수·이벤트, 작업 큐 | VDA5050은 MQTT/JSON의 지시·상태·접속·차량 정보 교환을 정의한다. [공식 명세4·5절](https://github.com/VDA5050/VDA5050/blob/main/VDA5050_EN.md#4-transport-protocol) | 무선 지연·손실·끊김·재접속은 아직 시험할 수 없다. |
 | 위치와 팔레트 인식 | 바퀴/자이로 오도메트리와 공통1초 LiDAR 스냅샷의 지도 매칭을 기존 경로 추종에 연결. 관측 후 팔레트 모델 자세와 오차 주입 | VisionNav VNSL14 공개 사례는3D laser SLAM과3D 센서 기반 팔레트 자세·포크 구멍 인식을 설명한다. [제조사 사례](https://www.visionnav.com/application/vnsl14productionlinemanufacturingindustry) | 완전한3D SLAM이나 영상/점군 기반 팔레트 ML 인식기는 아니다. 정밀 접근은 기존 정확한 자세를 유지한다. |
-| 경로 계획 | 차량별 차로 앵커 A*와 곡선/자리 회전 연결 | VDA5050은 선로 추종과 차량 자체 계획을 구분하지만 특정 계획 알고리즘을 지정하지 않는다. [공식 명세2·3·5절](https://github.com/VDA5050/VDA5050/blob/main/VDA5050_EN.md#2-scope) | 현재 A*가 제조사와 동일하거나 표준이 요구하는 알고리즘이라고 말할 수 없다. |
+| 경로 계획 | 일반 주행 Hybrid A*·정밀/실패 대체용 차로 앵커 A*와 곡선/자리 회전 연결 | VDA5050은 선로 추종과 차량 자체 계획을 구분하지만 특정 계획 알고리즘을 지정하지 않는다. [공식 명세2·3·5절](https://github.com/VDA5050/VDA5050/blob/main/VDA5050_EN.md#2-scope) | 현재 A*가 제조사와 동일하거나 표준이 요구하는 알고리즘이라고 말할 수 없다. |
 | 교통 승인 | 남은 경로 외곽 예약, 진입 차량 우선·신규 요청 순서 | VDA5050의 실행 허가와 요청/응답은 승인 교환을 표현한다. Open-RMF는 시간 정보를 가진 궤적·계획을 제안·거절·대안 협상한다. [VDA5050 6.9절](https://github.com/VDA5050/VDA5050/blob/main/VDA5050_EN.md#69-requestresponse-mechanism), [RMF 협상 코드](https://github.com/open-rmf/rmf_traffic/blob/main/rmf_traffic/include/rmf_traffic/schedule/Negotiation.hpp), [RMF 궤적 코드](https://github.com/open-rmf/rmf_traffic/blob/main/rmf_traffic/include/rmf_traffic/Trajectory.hpp) | 현재 예약은 시간 슬롯 최적화·도착시각 기반 협상보다 보수적이며 처리량이 달라질 수 있다. |
 | 정체와 복구 | 우회·퇴로 확보·실제 후퇴·접촉 분리·재개·안전 공간 없으면 작업자 요청 | VDA5050은 관제의 막힘 해소 역할과 실행 허가 상실 시 대응을 설명하되, 상세 교통 해법은 범위 밖이다. [공식 명세5.3·6.6.10절](https://github.com/VDA5050/VDA5050/blob/main/VDA5050_EN.md#53-functions-of-the-fleet-control) | 이 게임의60cm 분리·후퇴 후보·횟수 제한은 프로젝트 구현이며 제조사 복구 절차로 일반화하지 않는다. |
 | 안전 정지 | 주기적 주변 검사·고장 플래그·유한 제동·Chaos 충돌 | VDA5050은 안전 표준이 아니며 기능·운영·시스템 안전 요구를 정의하지 않는다고 명시한다. [공식 명세2절](https://github.com/VDA5050/VDA5050/blob/main/VDA5050_EN.md#2-scope) | 현재1초 검사를 실제 안전 스캐너 응답이나 안전 인증에 해당한다고 취급하지 않는다. |

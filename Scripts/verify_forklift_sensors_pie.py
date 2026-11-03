@@ -4,6 +4,8 @@ The production rig, actuators, clock and perception/query entry points are used.
 Obstacle moves below are explicit visibility stimuli, not transport successes.
 No AGV body pose/velocity, AI state or completion record is changed during play.
 Transport, contact, layout and elevator regressions run separately.
+-HybridKnowledgeChecks additionally plans to an occluded receiving pallet's
+location before any scanner has seen it; receiving records must not reveal it.
 """
 import json
 import math
@@ -13,6 +15,8 @@ import time
 import traceback
 import unreal
 
+unreal.EditorPythonScripting.set_keep_python_script_alive(True)
+hybrid_checks = '-hybridknowledgechecks' in unreal.SystemLibrary.get_command_line().lower()
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
@@ -126,6 +130,22 @@ spawn(unreal.WarehouseWaitingBay, 'SensorSelectionOnlyBay', (550, -900, 0))
 vehicles = [rig('SensorVehicleA', (0, 0, .1)), rig('SensorVehicleB', (0, 1600, .1)),
             rig('SensorVehicleUpper', (0, 3200, 400.1)), rig('SensorVehicleD', (-2200, -1200, .1))]
 vehicles[0].set_editor_property('target_pallet', pallet)
+if hybrid_checks:
+    # The mapped-drive regression needs observable enclosing walls at its remote
+    # starting corner, rather than relying on a small-scene exact-pose fallback.
+    for name, point, size in (
+        ('W', (-2985, 1200, 250), (30, 6400, 500)),
+        ('E', (2985, 1200, 250), (30, 6400, 500)),
+        ('S', (0, -1985, 250), (6000, 30, 500)),
+        ('N', (0, 4385, 250), (6000, 30, 500))):
+        block('HybridPerimeter' + name, point, size, ('WarehouseMapStructure',))
+    vehicles[1].set_actor_rotation(unreal.Rotator(yaw=180), True)
+    block('HybridKnownOccluder', (-700, 1600, 250), (30, 800, 500), ('WarehouseMapStructure',))
+    hidden = spawn(unreal.WarehousePallet, 'HybridUnseenInbound', (-1400, 1600, .1))
+    # Disabled until the query stimulus: no other vehicle may publish it to fleet memory first.
+    hidden.set_actor_enable_collision(False)
+    zone = spawn(unreal.WarehouseInboundZone, 'HybridInboundRecords', (-1400, 1600, 0))
+    zone.set_actor_tick_enabled(False)
 spawn(unreal.WarehousePallet, 'SensorDrivePallet', (1400, -1200, .1))
 native_obstacle = block('SensorNativeDriveObstacle', (-400, -1200, 100), (50, 180, 200), movable=True)
 native_obstacle.set_actor_enable_collision(False)
@@ -134,6 +154,8 @@ spawn(unreal.TargetPoint, 'SensorRemoteOperator', (0, -220, 75))
 spawn(unreal.WarehouseLayoutEditor, 'SensorLayoutEditor', (0, -1800, 0))
 
 out = Path(unreal.Paths.project_saved_dir()) / 'Testing/ForkliftSensors'
+if hybrid_checks:
+    out = out / 'Merge_20261103'
 out.mkdir(parents=True, exist_ok=True)
 started = time.monotonic()
 phase = 'start'
@@ -349,6 +371,22 @@ def tick(dt):
             if index < len(cases):
                 begin_case(now)
                 return
+            if hybrid_checks:
+                probe, hidden = vehicles[1], live['HybridUnseenInbound']
+                assert not kit(probe).has_observed_actor(hidden)
+                # Place an obstacle stimulus before the next scan, never a transported load.
+                # Its disabled contacts during cadence may have let gravity move it away.
+                hidden.set_actor_location(unreal.Vector(-1400, 1600, .1), False, True)
+                hidden.set_actor_enable_collision(True)
+                try:
+                    assert live['HybridInboundRecords'].contains_pallet(hidden)
+                    goal = unreal.Transform(location=unreal.Vector(-1400, 1600, .1), rotation=unreal.Rotator(yaw=180))
+                    plan = probe.bench_route_plan(goal, True)
+                    assert plan.startswith('found=1'), ('Unobserved inbound data changed the Hybrid route', plan)
+                    assert not kit(probe).has_observed_actor(hidden)
+                    check('hybrid_ignores_unobserved_inbound_physical_pallet', report=plan)
+                finally:
+                    hidden.set_actor_enable_collision(False)
             for i, v in enumerate(vehicles):
                 powered(v, i == 0)
             assert pc.set_simulation_speed(1)
