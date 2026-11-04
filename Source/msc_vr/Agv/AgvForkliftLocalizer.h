@@ -356,8 +356,9 @@ private:
  * with the console command agv.loc. Also keeps the distance maps so vehicles on the same floor share one.
  */
 /**
- * What one vehicle's LiDAR has seen so far, for its top-view minimap: a 10cm occupancy grid. A cell a beam ends in gains
- * evidence of being occupied, a cell a beam passes through loses it, so a person or pallet that moves away fades out again.
+ * What one vehicle's LiDAR has seen so far, for its AI views: a 10cm occupancy grid with the height band of the hits. A cell a
+ * beam ends in gains evidence of being occupied; a beam crossing the cell at a height where something was hit takes it away,
+ * so a person or pallet that moves off fades out, while a rack hidden behind the pallet the vehicle is docked at stays.
  */
 struct FAgvPanelGrid
 {
@@ -371,6 +372,11 @@ struct FAgvPanelGrid
 	FVector2D Sensor = FVector2D::ZeroVector;
 	/** The last hit lay on the prior map (green) or not (orange). */
 	TArray<uint8> Mapped;
+	/** Lowest and highest hit above the floor (cm). */
+	TArray<float> MinZ;
+	TArray<float> MaxZ;
+	/** Occupied cells, refreshed with each scan, for the first-person view. */
+	TArray<int32> Occupied;
 	int32 Serial = -1;
 	double FloorZ = 0.0;
 	bool bDirty = false;
@@ -429,7 +435,7 @@ public:
 	bool IsPanelMap() const { return bPanelMap; }
 	/** First-person eye at the fork end looking ahead (true) or at the body end looking back (false, default). */
 	void SetPanelFront(bool bFront) { bPanelFront = bFront; }
-	/** Top view: accumulate everything the LiDAR has seen into a minimap (default), or show only the current scan. */
+	/** Accumulate what the LiDAR has seen into the AI views (default; both top and first-person), or show only the current scan. */
 	void SetPanelAccumulate(bool bAccumulate) { bPanelAccumulate = bAccumulate; }
 
 	/** Adds the vehicle's newest matched scan to the fleet's obstacle memory of its floor. */

@@ -1506,6 +1506,9 @@ void UAgvLocalizationSubsystem::UpdatePanelGrid(int32 Number, UAgvForkliftLocali
 		Grid.FloorZ = Floor;
 		Grid.Evidence.Init(0.f, Width * Height);
 		Grid.Mapped.Init(0, Width * Height);
+		Grid.MinZ.Init(0.f, Width * Height);
+		Grid.MaxZ.Init(0.f, Width * Height);
+		Grid.Occupied.Reset();
 		Grid.bDirty = true;
 	}
 	if (Grid.Serial != Vehicle->GetScanSerial())
@@ -1514,12 +1517,11 @@ void UAgvLocalizationSubsystem::UpdatePanelGrid(int32 Number, UAgvForkliftLocali
 		FTransform Pose;
 		if (Vehicle->GetEstimatedActorTransform(Pose, true))
 		{
-			constexpr float Hit = 0.9f, Pass = 0.4f, MaxEvidence = 3.5f, MinEvidence = -2.f;
+			constexpr float Hit = 0.9f, Pass = 0.4f, MaxEvidence = 3.5f, MinEvidence = -2.f, BandCm = 10.f;
 			const FVector2D Sensor(Pose.GetLocation());
-			const int32 X0 = FMath::FloorToInt32((Sensor.X - Grid.Origin.X) / Grid.CellCm);
-			const int32 Y0 = FMath::FloorToInt32((Sensor.Y - Grid.Origin.Y) / Grid.CellCm);
 			const TArray<FVector>& Scan = Vehicle->GetLastScan3D();
 			const TArray<bool>& OnMap = Vehicle->GetLastScan3DMapped();
+			const TArray<FVector>& Origins = Vehicle->GetLastScan3DOrigins();
 			for (int32 Index = 0; Index < Scan.Num(); ++Index)
 			{
 				// Returns off the floor itself say nothing about obstacles.
@@ -1528,26 +1530,47 @@ void UAgvLocalizationSubsystem::UpdatePanelGrid(int32 Number, UAgvForkliftLocali
 					continue;
 				}
 				const FVector2D Point(Scan[Index]);
+				const FVector From = Origins.IsValidIndex(Index) ? Origins[Index] : FVector(Sensor, Scan[Index].Z);
+				const float PointZ = (float)(Scan[Index].Z - Floor), FromZ = (float)(From.Z - Floor);
+				const int32 X0 = FMath::FloorToInt32((From.X - Grid.Origin.X) / Grid.CellCm);
+				const int32 Y0 = FMath::FloorToInt32((From.Y - Grid.Origin.Y) / Grid.CellCm);
 				const int32 X1 = FMath::FloorToInt32((Point.X - Grid.Origin.X) / Grid.CellCm);
 				const int32 Y1 = FMath::FloorToInt32((Point.Y - Grid.Origin.Y) / Grid.CellCm);
-				// Bresenham from the vehicle to the hit: every cell on the way was seen empty.
+				// Bresenham from the scanner to the hit. An empty cell on the way is seen empty; an occupied one only loses
+				// evidence where the beam crosses it at the height of what was hit there (a beam over a pallet leaves it).
 				int32 X = X0, Y = Y0;
 				const int32 DX = FMath::Abs(X1 - X0), DY = -FMath::Abs(Y1 - Y0), SX = X0 < X1 ? 1 : -1, SY = Y0 < Y1 ? 1 : -1;
-				int32 Error = DX + DY;
+				const int32 Steps = FMath::Max(DX, -DY);
+				int32 Error = DX + DY, Step = 0;
 				while (X != X1 || Y != Y1)
 				{
 					if (X >= 0 && Y >= 0 && X < Grid.Width && Y < Grid.Height)
 					{
-						float& Cell = Grid.Evidence[Y * Grid.Width + X];
-						Cell = FMath::Max(MinEvidence, Cell - Pass);
+						const int32 Cell = Y * Grid.Width + X;
+						float& Evidence = Grid.Evidence[Cell];
+						const float BeamZ = FMath::Lerp(FromZ, PointZ, Steps > 0 ? float(Step) / Steps : 1.f);
+						if (Evidence <= 0.f || (BeamZ >= Grid.MinZ[Cell] - BandCm && BeamZ <= Grid.MaxZ[Cell] + BandCm))
+						{
+							Evidence = FMath::Max(MinEvidence, Evidence - Pass);
+						}
 					}
 					const int32 Twice = 2 * Error;
 					if (Twice >= DY) { Error += DY; X += SX; }
 					if (Twice <= DX) { Error += DX; Y += SY; }
+					++Step;
 				}
 				if (X1 >= 0 && Y1 >= 0 && X1 < Grid.Width && Y1 < Grid.Height)
 				{
 					const int32 Cell = Y1 * Grid.Width + X1;
+					if (Grid.Evidence[Cell] <= 0.f)
+					{
+						Grid.MinZ[Cell] = Grid.MaxZ[Cell] = PointZ;
+					}
+					else
+					{
+						Grid.MinZ[Cell] = FMath::Min(Grid.MinZ[Cell], PointZ);
+						Grid.MaxZ[Cell] = FMath::Max(Grid.MaxZ[Cell], PointZ);
+					}
 					Grid.Evidence[Cell] = FMath::Min(MaxEvidence, FMath::Max(0.f, Grid.Evidence[Cell]) + Hit);
 					Grid.Mapped[Cell] = OnMap.IsValidIndex(Index) && OnMap[Index] ? 1 : 0;
 				}
@@ -1586,6 +1609,7 @@ void UAgvLocalizationSubsystem::UpdatePanelGrid(int32 Number, UAgvForkliftLocali
 	const FAgvObstacleMemory* Memory = ObstacleMemory.Find(FMath::RoundToInt32(Grid.FloorZ / 100.0));
 	const bool bShared = Memory && Memory->Width == Grid.Width && Memory->Height == Grid.Height && Memory->Origin.Equals(Grid.Origin);
 	const float Now = (float)GetWorld()->GetTimeSeconds();
+	Grid.Occupied.Reset();
 	for (int32 Index = 0; Index < Grid.Width * Grid.Height; ++Index)
 	{
 		const float Evidence = Grid.Evidence[Index];
@@ -1596,6 +1620,11 @@ void UAgvLocalizationSubsystem::UpdatePanelGrid(int32 Number, UAgvForkliftLocali
 		{
 			const bool bMapped = !bRemembered && (bShared || Grid.Mapped[Index] != 0);
 			Pixels[Index] = AgvForkliftLoc::DepthColor(bMapped, FVector2D::Distance(Cell, Grid.Sensor)).ToFColor(true);
+			// This vehicle's own hits, for its first-person view; a remembered cell it never hit has no height of its own.
+			if (Evidence > 0.5f && (!bShared || bMapped || bRemembered))
+			{
+				Grid.Occupied.Add(Index);
+			}
 		}
 		else if (Evidence < -0.3f)
 		{
@@ -1628,7 +1657,7 @@ void UAgvLocalizationSubsystem::DrawPanel(UCanvas* Canvas, APlayerController* Pl
 		{
 			continue;
 		}
-		if (bPanelAccumulate && !bPanel3D)
+		if (bPanelAccumulate)
 		{
 			UpdatePanelGrid(Number, Vehicle);
 		}
@@ -1858,6 +1887,47 @@ double UAgvLocalizationSubsystem::DrawFirstPersonPanel(UCanvas* Canvas, UAgvFork
 		Previous = Next;
 	}
 
+	// What it has seen before and no beam has seen gone since, under the current scan: a rack behind the pallet the vehicle is
+	// docked at stays in view. Columns of points over the height band of the hits, nearest 30 m in front, at most 6000 points.
+	if (bPanelAccumulate)
+	{
+		const FAgvPanelGrid& Memory = PanelGrids[Number - 1];
+		constexpr int32 MaxPoints = 6000;
+		constexpr double ColumnStepCm = 30.0, RangeCm = 3000.0;
+		int32 Drawn = 0;
+		for (const int32 Cell : Memory.Occupied)
+		{
+			if (Drawn >= MaxPoints || !Memory.Evidence.IsValidIndex(Cell))
+			{
+				break;
+			}
+			const FVector2D Where = Memory.Origin + FVector2D(Cell % Memory.Width + 0.5, Cell / Memory.Width + 0.5) * Memory.CellCm;
+			const FVector Base = Camera.InverseTransformPosition(FVector(Where, Floor));
+			if (Base.X < Near || Base.X > RangeCm || FMath::Abs(Base.Y) > Base.X * 1.1)
+			{
+				continue;
+			}
+			const int32 Levels = FMath::Clamp(FMath::FloorToInt32((Memory.MaxZ[Cell] - Memory.MinZ[Cell]) / ColumnStepCm) + 1, 1, 8);
+			for (int32 Level = 0; Level < Levels && Drawn < MaxPoints; ++Level)
+			{
+				const double Z = Levels > 1 ? FMath::Lerp((double)Memory.MinZ[Cell], (double)Memory.MaxZ[Cell], double(Level) / (Levels - 1)) : Memory.MinZ[Cell];
+				const FVector Local = Camera.InverseTransformPosition(FVector(Where, Floor + Z));
+				if (Local.X < Near)
+				{
+					continue;
+				}
+				const FVector2D Screen = Project(Local);
+				if (Screen.X < Panel.X || Screen.Y < Panel.Y || Screen.X > PanelMax.X - 2.0 || Screen.Y > PanelMax.Y - 2.0)
+				{
+					continue;
+				}
+				FCanvasTileItem Item(Screen - FVector2D(1.0), FVector2D(2.0), AgvForkliftLoc::DepthColor(Memory.Mapped[Cell] != 0, Local.X));
+				Canvas->DrawItem(Item);
+				++Drawn;
+			}
+		}
+	}
+
 	// Its last scan where it believes the points are: on the map (green) or unmapped things (orange).
 	const TArray<FVector>& Scan = Vehicle->GetLastScan3D();
 	const TArray<bool>& Mapped = Vehicle->GetLastScan3DMapped();
@@ -1898,7 +1968,8 @@ double UAgvLocalizationSubsystem::DrawFirstPersonPanel(UCanvas* Canvas, UAgvFork
 		Text(FString::Printf(TEXT("%s  err %.1f cm  match %.2f  pts %d"), *Vehicle->StatusText, Vehicle->ErrorCm, Vehicle->LastInlierRatio, Vehicle->LastMatchPoints),
 			PanelMax.Y + 4.0, FLinearColor::White);
 		Text(bPanelMap ? TEXT("map structure blue | scan on map green | unmapped orange | route blue")
-			: TEXT("current scan: on map green | unmapped orange | route blue | near bright, far dark"), PanelMax.Y + 20.0, FLinearColor(0.75f, 0.78f, 0.8f, 1.f));
+			: (bPanelAccumulate ? TEXT("accumulated + current scan: on map green | unmapped orange | route blue | near bright, far dark")
+			: TEXT("current scan: on map green | unmapped orange | route blue | near bright, far dark")), PanelMax.Y + 20.0, FLinearColor(0.75f, 0.78f, 0.8f, 1.f));
 	}
 	return Height + 44.0;
 }
