@@ -30,6 +30,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
+| 고장 차량 E 수리·처음 위치 복귀·부품/관절 복원 | `WarehouseForkliftWorkControl::RepairAndReset`/`RepairPlacementClear`/`GetInteractionText`, `WarehouseForkliftPhysics::CaptureRepairPose`, `Scripts/verify_forklift_repair_pie.py` | 선택·E 연결은 `msc_vrCharacter`/`msc_vrPlayerController`, 차량 손상만 `WarehouseDamageSystem::RepairMachine`, 승강기 예약 해제는 `WarehouseElevator::ReleaseRecoveredVehicle`. 정책·검증은 `AUTONOMY.md`, 조작은 `WAREHOUSE.md` |
 | 하중별 위치 추정 신뢰도·LiDAR 보정과 오차 비교 | `AgvForkliftLocalizer::StepOdometry`/`CollectAndMatchScan`, `Scripts/verify_load_aware_localization_pie.py` | `Warehouse.Localization.LoadAware`로 실제 지지 하중의 반영을 비교. `-LoadAwareModes=0,1 -WorkLoads=50,200,500 -BenchRepeats=2 -LoadRun=name`; 실제 바퀴 거리·물리·센서 주기·원격 제외 유지. 기준·검증은 `AUTONOMY.md`, 결과는 `Saved/Testing/LoadAwareLocalization_20261103/` |
 | Hybrid A* 경로·기존 차선 대체·관측 장애물 기억 | `Agv/AgvHybridPlanner.cpp`, `WarehouseForkliftNavQuery.h`, `WarehouseForkliftAI::TryPlanAutonomousRoute`/`BenchRoutePlan`, `WarehouseFleetCoordinator::SeenObstacles` | `Warehouse.Nav.HybridPlanner`로 비교하며 고정 지도·실제 관측·관제 최근 관측만 사용. 작업 지시는 미관측 물류의 실제 충돌 형상을 제공하지 않는다. 병합 경계·검증은 `AUTONOMY.md` |
 | 옵션 맨 위 실시간 센서 화면·차량별 표시·평면/1인칭/누적 지도 | `msc_vrPlayerController::ToggleWarehouseMenu`/`OpenAIViewSettings`/`ApplyAIViewSettings`, `AgvForkliftLocalizer`의 `UAgvLocalizationSubsystem::DrawPanel`, `Scripts/verify_sensor_view_ui_pie.py` | 기존 스냅샷·경로 표시만 사용하고 별도 스캔을 만들지 않는다. 조작은 `WAREHOUSE.md`, 센서 정보 경계는 `AUTONOMY.md` |
@@ -323,6 +324,7 @@ msc_vr/
     verify_forklift_focus_pie.py
     verify_forklift_handling_pie.py
     verify_forklift_recovery_pie.py
+    verify_forklift_repair_pie.py
     verify_forklift_sensors_pie.py
     verify_forklift_training.py
     verify_forklift_work_control_pie.py

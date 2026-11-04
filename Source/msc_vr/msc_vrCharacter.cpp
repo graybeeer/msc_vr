@@ -288,7 +288,8 @@ void Amsc_vrCharacter::ToggleCarry()
 	}
 	if (AWarehouseForklift* Forklift = Cast<AWarehouseForklift>(Target))
 	{
-		Forklift->TogglePower();
+		if (Forklift->bMechanicalFailure) Forklift->RepairAndReset();
+		else Forklift->TogglePower();
 		return;
 	}
 	if (auto* Station=Cast<AWarehouseChargingStation>(Target))

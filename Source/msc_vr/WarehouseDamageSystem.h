@@ -55,6 +55,8 @@ public:
  UFUNCTION(BlueprintCallable, Category="Strength") void ApplyImpact(AActor* Object, float EnergyJ);
  UFUNCTION(BlueprintPure, Category="Strength") float GetSupportedMass(AActor* Object) const;
  UFUNCTION(BlueprintPure, Category="Strength") bool HasFailed(AActor* Object) const;
+ // Repair one machine profile without resetting other objects' damage or physics.
+ void RepairMachine(AActor* Object);
  // Actual native collision bounds, including every skeletal body and each welded body once.
  // Returns an invalid box when the actor has no live collidable physics representation.
  UFUNCTION(BlueprintPure, Category="Physics") static FBox GetPhysicalBounds(AActor* Actor);

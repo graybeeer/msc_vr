@@ -5,11 +5,112 @@
 #include "WarehouseWaitingBay.h"
 #include "WarehouseElevator.h"
 #include "WarehouseDamageSystem.h"
+#include "WarehousePhysics.h"
 #include "Agv/AgvShadowSensors.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/PointLightComponent.h"
 #include "Engine/World.h"
 #include "Engine/OverlapResult.h"
+#include "PhysicsEngine/PhysicsConstraintComponent.h"
+#include "PhysicsEngine/BodyInstance.h"
+
+FText AWarehouseForklift::GetInteractionText() const
+{
+ const FString Heading=VehicleName+TEXT("\n");
+ if (bMechanicalFailure)
+  return FText::FromString(Heading+TEXT("상태:고장, E:수리 후 재배치")+
+   (LastErrorCode==TEXT("REPAIR_LOCATION_BLOCKED") ? TEXT("\n")+LastErrorMessage : FString()));
+ return FText::FromString(Heading+FString::Printf(TEXT("E : %s  |  G : 스마트폰 원격 조작\n%s\n속도 %.2f m/s · 배터리 %.0f%% · 적재 %.0f / %.0f kg"),
+  bPowered ? TEXT("자율 운행 일시정지") : TEXT("자율 운행 시작 / 재개"),
+  *Status,FMath::Abs(CurrentSpeedCm)*.01f,BatteryPercent,GetLoadMassKg(),RatedLoadKg));
+}
+
+bool AWarehouseForklift::RepairPlacementClear(FString& Reason) const
+{
+ // This is an explicit administrative reset. Use real geometry here only;
+ // do not publish unseen objects to the autonomous map or obstacle memory.
+ const FVector P=InitialPlacement.GetLocation();
+ FCollisionQueryParams FloorParams(SCENE_QUERY_STAT(RepairFloor),false,this);
+ FHitResult Floor;
+ if (!GetWorld()->LineTraceSingleByChannel(Floor,P+FVector(0,0,3),P-FVector(0,0,5),ECC_Visibility,FloorParams) ||
+     Floor.ImpactNormal.Z<.98f || !WarehousePhysics::IsPhysicalContact(Floor.GetComponent()) || Floor.GetComponent()->IsSimulatingPhysics())
+ { Reason=TEXT("처음 위치에 안전한 바닥이 없습니다. 바닥을 복원한 뒤 다시 수리하세요.");return false; }
+ FComponentQueryParams Params(SCENE_QUERY_STAT(RepairPlacement),this);
+ for (const auto& Saved:RepairParts)
+ {
+  auto* Part=Cast<UStaticMeshComponent>(Saved.Component.Get());
+  if (!Part || !WarehousePhysics::IsPhysicalContact(Part) || Part->BodyInstance.WeldParent) continue;
+  TArray<FOverlapResult> Hits;
+  GetWorld()->ComponentOverlapMultiByChannel(Hits,Part,Saved.Pose.GetLocation(),Saved.Pose.GetRotation(),Part->GetCollisionObjectType(),Params);
+  for (const auto& Hit:Hits) if (Hit.bBlockingHit && WarehousePhysics::IsPhysicalContact(Hit.GetComponent()))
+  {
+   if (Hit.GetComponent()==Floor.GetComponent()) continue;
+   if (Wheels.Contains(Part) && WheelBearingOnFloor(Part,Hit.GetComponent(),Saved.Pose,{})) continue;
+   Reason=FString::Printf(TEXT("처음 위치가 %s에 막혀 있습니다. 공간을 비운 뒤 다시 수리하세요."),*GetNameSafe(Hit.GetActor()));return false;
+  }
+  if (Wheels.Contains(Part))
+  {
+   // Check each actual axle position too, so a floor hole under one wheel is rejected.
+   FHitResult Bearing;const FVector Centre=Saved.Pose.GetLocation();
+   if (!GetWorld()->LineTraceSingleByChannel(Bearing,Centre,Centre-FVector(0,0,30),ECC_Visibility,FloorParams) ||
+       Bearing.ImpactNormal.Z<.98f || Bearing.GetComponent()->IsSimulatingPhysics() ||
+       FMath::Abs(Bearing.ImpactPoint.Z-Floor.ImpactPoint.Z)>.5f)
+   { Reason=TEXT("처음 위치의 바퀴 아래에 안전한 바닥이 없습니다.");return false; }
+  }
+ }
+ return true;
+}
+
+bool AWarehouseForklift::RepairAndReset()
+{
+ if (!HasAuthority() || !bMechanicalFailure || !bPhysicsReady || RepairParts.IsEmpty()) return false;
+ for (const auto& Saved:RepairParts) if (!Saved.Component.IsValid()) return false;
+ FString Reason;
+ if (!RepairPlacementClear(Reason))
+ { SetOperationError(TEXT("REPAIR_LOCATION_BLOCKED"),Reason);return false; }
+ if (IsRemoteControlled()) EndRemoteControl(RemoteOperator);
+
+ // Only the vehicle is reset. Freight stays where it is, with native gravity/contact.
+ for (const auto& Saved:RepairParts) if (auto* Joint=Cast<UPhysicsConstraintComponent>(Saved.Component.Get())) Joint->TermComponentConstraint();
+ SetActorTransform(InitialPlacement,false,nullptr,ETeleportType::TeleportPhysics);
+ for (const auto& Saved:RepairParts) Saved.Component->SetWorldTransform(Saved.Pose,false,nullptr,ETeleportType::TeleportPhysics);
+ for (const auto& Saved:RepairParts) if (auto* Part=Cast<UPrimitiveComponent>(Saved.Component.Get());Part && Part->IsSimulatingPhysics() && !Part->BodyInstance.WeldParent)
+ {
+  Part->SetPhysicsLinearVelocity(FVector::ZeroVector);Part->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);Part->WakeAllRigidBodies();
+ }
+ for (const auto& Saved:RepairParts) if (auto* Joint=Cast<UPhysicsConstraintComponent>(Saved.Component.Get()))
+ {
+  Joint->InitComponentConstraint();
+  Joint->SetConstraintReferenceFrame(EConstraintFrame::Frame1,Saved.Frame1);
+  Joint->SetConstraintReferenceFrame(EConstraintFrame::Frame2,Saved.Frame2);
+ }
+ if (IsValid(Elevator)) Elevator->ReleaseRecoveredVehicle(this);
+ bFloorTransfer=false;
+ StopCurrentWork();
+ if (IsValid(ChargingStation)) ChargingStation->Release(this);
+ bSupportingPallet=false;TargetPallet=nullptr;CarriedCargo.Reset();
+ bWorkStopRequested=bWorkStopNeedsRecovery=bClearingForksForWork=false;
+ WorkOrderSourcePoses.Reset();DeferredWorkUntil.Reset();WorkStopStatus.Reset();
+ bResumeAfterCheck=bReplanAfterRemote=bChargePending=bChargeToFull=false;
+ bOpportunityCharge=bIdleChargeParking=false;NextResourceCheck=-1;
+ bMechanicalFailure=false;
+ bSafetyScannerHealthy=bEStopReleased=bBrakeHealthy=bSteeringHealthy=true;
+ bForkSensorHealthy=bLocalizationHealthy=bBatteryHealthy=bPalletSensorHealthy=bLoadSensorHealthy=true;
+ RemoteForward=RemoteSteering=RemoteLift=0;
+ DesiredDriveSpeed=DesiredTurnRate=DesiredCurvature=DriveSpeedTarget=SteeringAngle=CurrentSpeedCm=0;
+ DesiredLift=LiftMotorTarget=LiftOffset=LostSupportSeconds=0;
+ RecoveryAttempts=ForkInsertionRetries=ObservedRouteReplans=HybridRouteReplans=0;
+ bRetryInsertion=bRecoveryNeedsRoute=bPalletReleased=false;
+ ResumeAI=WaitResumeAI=EWarehouseAIState::Ready;State=ResumeState=EWarehouseCycle::Idle;
+ LastErrorCode=NAME_None;LastErrorMessage.Reset();
+ if (auto* Strength=AWarehouseDamageSystem::Find(this)) Strength->RepairMachine(this);
+ RefreshAfterLayout(false);
+ Beacon->SetLightColor(FLinearColor(.03f,.35f,1.f));
+ TransitionAI(EWarehouseAIState::Paused,TEXT("수리·초기 위치 복귀 완료 · E:자체 점검 후 운행 시작"));
+ ReportJob(TEXT("REPAIRED"),TEXT("수리 후 처음 위치로 복귀했습니다. 기존 작업은 취소되었으며 화물은 현장에 남아 있습니다."));
+ return true;
+}
 
 bool AWarehouseForklift::HasRetainedForkContact() const
 {

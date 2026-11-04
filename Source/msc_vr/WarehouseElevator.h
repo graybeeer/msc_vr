@@ -70,6 +70,8 @@ public:
  UFUNCTION(BlueprintCallable, Category="Elevator") bool ConfirmBoarded(AWarehouseForklift* Vehicle);
  UFUNCTION(BlueprintCallable, Category="Elevator") bool ConfirmExited(AWarehouseForklift* Vehicle);
  UFUNCTION(BlueprintCallable, Category="Elevator") bool CancelTransfer(AWarehouseForklift* Vehicle);
+ // Recovery has already removed the failed vehicle; preserve passenger requests.
+ void ReleaseRecoveredVehicle(AWarehouseForklift* Vehicle);
  UFUNCTION(BlueprintCallable, Category="Elevator") void AdvanceElevator(float Seconds);
  UFUNCTION(BlueprintCallable, Category="Elevator|Human") bool RequestHumanCall(ACharacter* Person,int32 Floor);
  UFUNCTION(BlueprintCallable, Category="Elevator|Human") bool RequestHumanDestination(ACharacter* Person,int32 Floor);

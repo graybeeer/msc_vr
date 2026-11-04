@@ -505,6 +505,18 @@ void AWarehouseDamageSystem::ApplyImpact(AActor* Object,float EnergyJ)
  ShowDamage(I);
  if (Spec.Damage>=1.f) Fail(I);
 }
+void AWarehouseDamageSystem::RepairMachine(AActor* Object)
+{
+ if (!bInitialized) InitializeStrength();
+ const int32 I=IndexOf(Object);
+ if (I==INDEX_NONE || Objects[I].Failure!=EWarehouseFailure::Machine) return;
+ auto& Spec=Objects[I];Spec.Damage=0;Spec.bFailed=false;
+ if (Labels.IsValidIndex(I) && Labels[I]) Labels[I]->SetText(FText::GetEmpty());
+ for (auto& Entry:PrePhysicsMotion)
+  if (auto* Part=Entry.Key.Get();Part && Part->GetOwner()==Object) Entry.Value=ReadMotion(Part);
+ UpdateLoads(true);
+}
+
 void AWarehouseDamageSystem::Contact(AActor* A,AActor* B,float EnergyJ,UPrimitiveComponent* PartA,UPrimitiveComponent* PartB)
 {
  if (!A || !B || A==B || A->ActorHasTag(TEXT("LogisticsInTransit")) || B->ActorHasTag(TEXT("LogisticsInTransit"))) return;

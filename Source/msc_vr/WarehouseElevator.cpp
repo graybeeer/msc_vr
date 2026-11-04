@@ -811,6 +811,10 @@ bool AWarehouseElevator::CancelTransfer(AWarehouseForklift* Vehicle)
  if (!IsValid(Vehicle) || ReservedVehicle!=Vehicle || bBoarded) return false;
  ReleaseVehicleReservation();return true;
 }
+void AWarehouseElevator::ReleaseRecoveredVehicle(AWarehouseForklift* Vehicle)
+{
+ if (IsValid(Vehicle) && ReservedVehicle==Vehicle && Vehicle->bMechanicalFailure) ReleaseVehicleReservation();
+}
 bool AWarehouseElevator::RequestHumanCall(ACharacter* Person,int32 Floor)
 {
  if (Floor<0 || Floor>=FloorCount || HumanLandingFloor(Person)!=Floor)

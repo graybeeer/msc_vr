@@ -114,6 +114,10 @@ public:
  bool GetPerceivedActorBounds(const AActor* Actor,FBox& Bounds) const;
 
  UFUNCTION(BlueprintCallable, Category="Strength") void SetMechanicalFailure();
+ // Explicit player recovery, never part of automatic navigation or remote safety.
+ UFUNCTION(BlueprintCallable, Category="Strength") bool RepairAndReset();
+ UFUNCTION(BlueprintPure, Category="Training") FText GetInteractionText() const;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Strength") FTransform InitialPlacement;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Strength") bool bMechanicalFailure = false;
  virtual void Tick(float DeltaSeconds) override;
  virtual void EndPlay(const EEndPlayReason::Type Reason) override;
@@ -222,6 +226,14 @@ private:
  float DesiredLift=0, LiftMotorTarget=0;
  float SteeringAngle=0;
  bool bPhysicsReady=false;
+ struct FRepairPart
+ {
+  TWeakObjectPtr<USceneComponent> Component;
+  FTransform Pose,Frame1,Frame2;
+ };
+ TArray<FRepairPart> RepairParts;
+ void CaptureRepairPose();
+ bool RepairPlacementClear(FString& Reason) const;
  void InitializePhysicalRig();
  void UpdatePhysicalRig(float Dt);
  bool CommandDrive(float Speed,float Curvature,float Dt);

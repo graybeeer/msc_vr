@@ -175,7 +175,29 @@ void AWarehouseForklift::InitializePhysicalRig()
  }
  DesiredLift=LiftMotorTarget=LiftOffset;
  bPhysicsReady=true;
+ CaptureRepairPose();
  UE_LOG(LogTemp,Log,TEXT("PHYSICAL_AGV_READY %s mass=%.2f kg"),*GetName(),GetPhysicalMassKg());
+}
+
+void AWarehouseForklift::CaptureRepairPose()
+{
+ InitialPlacement=GetActorTransform();
+ RepairParts.Reset();
+ TArray<USceneComponent*> Parts;GetComponents(Parts);
+ for (auto* Part:Parts)
+ {
+  FRepairPart Saved;Saved.Component=Part;Saved.Pose=Part->GetComponentTransform();
+  if (auto* Joint=Cast<UPhysicsConstraintComponent>(Part))
+  {
+   Saved.Frame1=Joint->ConstraintInstance.GetRefFrame(EConstraintFrame::Frame1);
+   Saved.Frame2=Joint->ConstraintInstance.GetRefFrame(EConstraintFrame::Frame2);
+  }
+  RepairParts.Add(Saved);
+ }
+ // Restore parents before their children, including the welded fork geometry.
+ auto Depth=[](const FRepairPart& Saved)
+ { int32 N=0;for (auto* C=Saved.Component.Get();C && C->GetAttachParent();C=C->GetAttachParent()) ++N;return N; };
+ RepairParts.Sort([&](const FRepairPart& A,const FRepairPart& B) { return Depth(A)<Depth(B); });
 }
 
 float AWarehouseForklift::GetPhysicalMassKg() const

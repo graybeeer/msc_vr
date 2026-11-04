@@ -143,7 +143,7 @@ void AWarehouseForklift::SetMechanicalFailure()
  if (IsValid(ChargingStation)) ChargingStation->Release(this);
  if (IsValid(WaitingBay)) WaitingBay->Release(this);
  StopFor(TEXT("MECHANICAL FAILURE - REPAIR REQUIRED"));
- SetStatus(TEXT("MECHANICAL FAILURE - REPAIR REQUIRED"));
+ SetStatus(TEXT("상태:고장, E:수리 후 재배치"));
  Beacon->SetLightColor(FLinearColor::Red);
  Beacon->SetIntensity(1800);
 }

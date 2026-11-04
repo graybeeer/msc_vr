@@ -1084,9 +1084,7 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
     return Lift->GetInteractionText(FMath::Clamp(FMath::FloorToInt((OperatorCharacter->GetActorLocation().Z-Lift->GetActorLocation().Z)/400.f),0,Lift->FloorCount-1));
   if (!bObserverView)
    if (auto* Vehicle=Cast<AWarehouseForklift>(OperatorCharacter->GetInteractionTarget()))
-    return FText::FromString(FString::Printf(TEXT("E : %s  |  G : 스마트폰 원격 조작\n%s\n속도 %.2f m/s · 배터리 %.0f%% · 적재 %.0f / %.0f kg"),
-     Vehicle->bPowered ? TEXT("자율 운행 일시정지") : TEXT("자율 운행 시작 / 재개"),
-     *Vehicle->Status,FMath::Abs(Vehicle->CurrentSpeedCm)*.01f,Vehicle->BatteryPercent,Vehicle->GetLoadMassKg(),Vehicle->RatedLoadKg));
+    return Vehicle->GetInteractionText();
  }
  const FVector Eye=PlayerCameraManager->GetCameraLocation();
  FHitResult Hit;
