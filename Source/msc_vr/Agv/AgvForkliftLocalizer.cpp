@@ -1581,14 +1581,21 @@ void UAgvLocalizationSubsystem::UpdatePanelGrid(int32 Number, UAgvForkliftLocali
 	Grid.bDirty = false;
 	FTexture2DMipMap& Mip = Texture->GetPlatformData()->Mips[0];
 	FColor* Pixels = static_cast<FColor*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
+	// Obstacles off the map are drawn from the fleet's obstacle memory, the same cells the route planner keeps off (as a costmap
+	// view does); this vehicle's own grid adds the structure it has matched and the floor it has seen empty.
+	const FAgvObstacleMemory* Memory = ObstacleMemory.Find(FMath::RoundToInt32(Grid.FloorZ / 100.0));
+	const bool bShared = Memory && Memory->Width == Grid.Width && Memory->Height == Grid.Height && Memory->Origin.Equals(Grid.Origin);
+	const float Now = (float)GetWorld()->GetTimeSeconds();
 	for (int32 Index = 0; Index < Grid.Width * Grid.Height; ++Index)
 	{
 		const float Evidence = Grid.Evidence[Index];
 		// Depth from where the vehicle is now: what it has passed fades as it drives away.
 		const FVector2D Cell = Grid.Origin + FVector2D(Index % Grid.Width + 0.5, Index / Grid.Width + 0.5) * Grid.CellCm;
-		if (Evidence > 0.5f)
+		const bool bRemembered = bShared && Memory->Evidence[Index] >= 1.5f && Now - Memory->LastHit[Index] <= 300.f;
+		if (bRemembered || (Evidence > 0.5f && (!bShared || Grid.Mapped[Index] != 0)))
 		{
-			Pixels[Index] = AgvForkliftLoc::DepthColor(Grid.Mapped[Index] != 0, FVector2D::Distance(Cell, Grid.Sensor)).ToFColor(true);
+			const bool bMapped = !bRemembered && (bShared || Grid.Mapped[Index] != 0);
+			Pixels[Index] = AgvForkliftLoc::DepthColor(bMapped, FVector2D::Distance(Cell, Grid.Sensor)).ToFColor(true);
 		}
 		else if (Evidence < -0.3f)
 		{
