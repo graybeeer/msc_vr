@@ -3,6 +3,7 @@
 #include "AgvPath.h"
 #include "AgvShadowSensors.h"
 #include "WarehouseForklift.h"
+#include "WarehousePallet.h"
 #include "WarehouseAutonomyTypes.h"
 #include "WarehousePerformance.h"
 #include "CanvasItem.h"
@@ -720,6 +721,10 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	const double Low = SensorKit->SnapshotFloorZCm + PointMinZCm, High = SensorKit->SnapshotFloorZCm + MapMaxZCm;
 	TArray<FVector2D> ScanPoints;
 	TArray<double> ScanHeights;
+	// Each point's scanner, placed like the points: beams are traced from there into the obstacle memory.
+	TArray<FVector2D> ScanSources;
+	TArray<double> ScanSourceHeights;
+	TArray<int32> ScanSourceOf;
 	for (const UAgvLidarComponent* Lidar : Sources)
 	{
 		if (!Lidar)
@@ -728,6 +733,8 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 		}
 		const FTransform Sensor = Lidar->GetComponentTransform();
 		const FTransform Mount = Sensor.GetRelativeTransform(Actor);
+		const int32 SourceIndex = ScanSources.Add(OdomPosition + AgvMath::Rotate(OdomYaw, FVector2D(Mount.GetLocation()) - ReferenceOffset));
+		ScanSourceHeights.Add(Sensor.GetLocation().Z);
 		for (const FAgvLidarReturn& Return : Lidar->GetLastReturns())
 		{
 			const double Z = Sensor.TransformPosition(Return.SensorPoint).Z;
@@ -742,6 +749,7 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 			}
 			ScanPoints.Add(OdomPosition + AgvMath::Rotate(OdomYaw, Vehicle - ReferenceOffset));
 			ScanHeights.Add(Z);
+			ScanSourceOf.Add(SourceIndex);
 		}
 	}
 	TArray<FVector2D> Points;
@@ -751,6 +759,7 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 		// Keep the original voxel grid/returns, then optimize about the axle instead of the distant world origin.
 		for (FVector2D& P : Points) P -= OdomPosition;
 		for (FVector2D& P : ScanPoints) P -= OdomPosition;
+		for (FVector2D& P : ScanSources) P -= OdomPosition;
 	}
 	LastMatchPoints = Points.Num();
 	FVector2D Predicted;
@@ -904,6 +913,7 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 	// The scan in 3D as the vehicle places it, for the first-person view (about 3000 points at most).
 	LastScan3D.Reset();
 	LastScan3DMapped.Reset();
+	LastScan3DOrigins.Reset();
 	++ScanSerial;
 	const int32 Stride = FMath::Max(1, ScanPoints.Num() / 3000);
 	const FVector2D ScanOffset = CorrectionOffset + (bMotionPrior ? AgvMath::Rotate(CorrectionYaw, OdomPosition) : FVector2D::ZeroVector);
@@ -912,6 +922,8 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 		const FVector2D Placed = AgvMath::Rotate(CorrectionYaw, ScanPoints[Index]) + ScanOffset;
 		LastScan3D.Add(FVector(Placed, ScanHeights[Index]));
 		LastScan3DMapped.Add(Map->Sample(Placed) <= InlierDistanceCm);
+		const int32 Source = ScanSourceOf[Index];
+		LastScan3DOrigins.Add(FVector(AgvMath::Rotate(CorrectionYaw, ScanSources[Source]) + ScanOffset, ScanSourceHeights[Source]));
 	}
 	// The scan as the vehicle now places it: on the map where it believes it stands.
 	LastScanInMap.Reset(DisplayPoints.Num());
@@ -921,6 +933,10 @@ void UAgvForkliftLocalizerComponent::CollectAndMatchScan()
 		const FVector2D Placed = AgvMath::Rotate(CorrectionYaw, Point) + ScanOffset;
 		LastScanInMap.Add(Placed);
 		LastScanMapped.Add(Map->Sample(Placed) <= InlierDistanceCm);
+	}
+	if (UAgvLocalizationSubsystem* Fleet = GetWorld()->GetSubsystem<UAgvLocalizationSubsystem>())
+	{
+		Fleet->AddToObstacleMemory(this);
 	}
 	RecordMatchTime();
 }
@@ -1287,6 +1303,185 @@ namespace AgvForkliftLoc
 		const float Brightness = (float)FMath::Lerp(1.0, 0.18, FMath::Clamp(RangeCm / 1500.0, 0.0, 1.0));
 		const FLinearColor Base = bMapped ? FLinearColor(0.3f, 1.f, 0.4f) : FLinearColor(1.f, 0.55f, 0.1f);
 		return FLinearColor(Base.R * Brightness, Base.G * Brightness, Base.B * Brightness, 1.f);
+	}
+}
+
+void UAgvLocalizationSubsystem::AddToObstacleMemory(UAgvForkliftLocalizerComponent* Vehicle)
+{
+	AWarehouseForklift* Forklift = Vehicle ? Vehicle->GetForklift() : nullptr;
+	const TSharedPtr<const FAgvDistanceMap> Map = Vehicle ? Vehicle->GetMap() : nullptr;
+	const UAgvShadowSensorsComponent* Kit = Vehicle ? Vehicle->GetSensorKit() : nullptr;
+	if (!Forklift || !Map || Map->Width <= 0 || !Kit || Vehicle->IsLost() || Vehicle->HasNoMap())
+	{
+		return;
+	}
+	const double Floor = Kit->SnapshotFloorZCm;
+	FAgvObstacleMemory& Memory = ObstacleMemory.FindOrAdd(FMath::RoundToInt32(Floor / 100.0));
+	const int32 Width = FMath::CeilToInt32(Map->Width * Map->CellCm / Memory.CellCm);
+	const int32 Height = FMath::CeilToInt32(Map->Height * Map->CellCm / Memory.CellCm);
+	if (Memory.Width != Width || Memory.Height != Height || !Memory.Origin.Equals(Map->Origin))
+	{
+		Memory.Origin = Map->Origin;
+		Memory.Width = Width;
+		Memory.Height = Height;
+		Memory.FloorZ = Floor;
+		Memory.Evidence.Init(0.f, Width * Height);
+		Memory.MinZ.Init(0.f, Width * Height);
+		Memory.MaxZ.Init(0.f, Width * Height);
+		Memory.LastHit.Init(0.f, Width * Height);
+	}
+	// A pallet this vehicle has just lifted no longer stands where it was seen.
+	AActor* Carried = Forklift->GetSupportedPallet();
+	TWeakObjectPtr<AActor>& Before = CarriedAtLastScan.FindOrAdd(Forklift);
+	if (Carried && Before.Get() != Carried)
+	{
+		const FBox Box = Carried->GetComponentsBoundingBox(true).ExpandBy(FVector(15.0, 15.0, 0.0));
+		ForgetObstacles(Floor, FBox2D(FVector2D(Box.Min), FVector2D(Box.Max)));
+	}
+	Before = Carried;
+
+	// Not memory: the fleet's own vehicles and their loads (the fleet knows where they are), and people (they walk away).
+	TArray<FBox2D> Skip;
+	for (TActorIterator<AWarehouseForklift> It(GetWorld()); It; ++It)
+	{
+		if (*It == Forklift)
+		{
+			continue;
+		}
+		FBox Box = It->GetComponentsBoundingBox(true);
+		if (AActor* Load = It->GetSupportedPallet())
+		{
+			Box += Load->GetComponentsBoundingBox(true);
+		}
+		Skip.Add(FBox2D(FVector2D(Box.Min) - FVector2D(25.0), FVector2D(Box.Max) + FVector2D(25.0)));
+	}
+	for (const FAgvObservedObstacle& Entry : Kit->GetObservedObstacles())
+	{
+		if (Entry.bPerson && Entry.WorldBounds.IsValid)
+		{
+			Skip.Add(FBox2D(FVector2D(Entry.WorldBounds.Min) - FVector2D(30.0), FVector2D(Entry.WorldBounds.Max) + FVector2D(30.0)));
+		}
+	}
+
+	constexpr float Hit = 1.f, Pass = 0.5f, MaxEvidence = 4.f, BandCm = 10.f, FloorCm = 8.f;
+	const float Now = (float)GetWorld()->GetTimeSeconds();
+	const TArray<FVector>& Scan = Vehicle->GetLastScan3D();
+	const TArray<bool>& OnMap = Vehicle->GetLastScan3DMapped();
+	const TArray<FVector>& Origins = Vehicle->GetLastScan3DOrigins();
+	auto CellOf = [&](const FVector2D& P, int32& X, int32& Y)
+	{
+		X = FMath::FloorToInt32((P.X - Memory.Origin.X) / Memory.CellCm);
+		Y = FMath::FloorToInt32((P.Y - Memory.Origin.Y) / Memory.CellCm);
+	};
+	for (int32 Index = 0; Index < Scan.Num() && Index < Origins.Num(); ++Index)
+	{
+		const FVector& Point = Scan[Index];
+		const FVector& From = Origins[Index];
+		const float PointZ = (float)(Point.Z - Floor), FromZ = (float)(From.Z - Floor);
+		int32 X0, Y0, X1, Y1;
+		CellOf(FVector2D(From), X0, Y0);
+		CellOf(FVector2D(Point), X1, Y1);
+		// Bresenham from the scanner to the hit. A cell the beam crosses at a height where something was hit is now seen empty there.
+		const int32 DX = FMath::Abs(X1 - X0), DY = -FMath::Abs(Y1 - Y0), SX = X0 < X1 ? 1 : -1, SY = Y0 < Y1 ? 1 : -1;
+		const int32 Steps = FMath::Max(DX, -DY);
+		int32 X = X0, Y = Y0, Error = DX + DY, Step = 0;
+		while (X != X1 || Y != Y1)
+		{
+			if (X >= 0 && Y >= 0 && X < Memory.Width && Y < Memory.Height)
+			{
+				const int32 Cell = Y * Memory.Width + X;
+				if (Memory.Evidence[Cell] > 0.f)
+				{
+					const float BeamZ = FMath::Lerp(FromZ, PointZ, Steps > 0 ? float(Step) / Steps : 1.f);
+					if (BeamZ >= Memory.MinZ[Cell] - BandCm && BeamZ <= Memory.MaxZ[Cell] + BandCm)
+					{
+						Memory.Evidence[Cell] = FMath::Max(0.f, Memory.Evidence[Cell] - Pass);
+					}
+				}
+			}
+			const int32 Twice = 2 * Error;
+			if (Twice >= DY) { Error += DY; X += SX; }
+			if (Twice <= DX) { Error += DX; Y += SY; }
+			++Step;
+		}
+		// Only what the prior map does not already hold, above the floor itself.
+		if ((OnMap.IsValidIndex(Index) && OnMap[Index]) || PointZ < FloorCm || X1 < 0 || Y1 < 0 || X1 >= Memory.Width || Y1 >= Memory.Height)
+		{
+			continue;
+		}
+		const FVector2D Flat(Point);
+		bool bSkip = false;
+		for (const FBox2D& Box : Skip)
+		{
+			if (Box.IsInside(Flat))
+			{
+				bSkip = true;
+				break;
+			}
+		}
+		if (bSkip)
+		{
+			continue;
+		}
+		const int32 Cell = Y1 * Memory.Width + X1;
+		if (Memory.Evidence[Cell] <= 0.f)
+		{
+			Memory.MinZ[Cell] = Memory.MaxZ[Cell] = PointZ;
+		}
+		else
+		{
+			Memory.MinZ[Cell] = FMath::Min(Memory.MinZ[Cell], PointZ);
+			Memory.MaxZ[Cell] = FMath::Max(Memory.MaxZ[Cell], PointZ);
+		}
+		Memory.Evidence[Cell] = FMath::Min(MaxEvidence, Memory.Evidence[Cell] + Hit);
+		Memory.LastHit[Cell] = Now;
+	}
+}
+
+double UAgvLocalizationSubsystem::GatherRememberedPoints(double FloorZ, const FBox2D& Area, double ZMin, double ZMax, double MaxAgeSeconds, TArray<FVector2D>& Out) const
+{
+	const FAgvObstacleMemory* Memory = ObstacleMemory.Find(FMath::RoundToInt32(FloorZ / 100.0));
+	if (!Memory || Memory->Width <= 0)
+	{
+		return 0.0;
+	}
+	const float Now = (float)GetWorld()->GetTimeSeconds();
+	const int32 X0 = FMath::Max(0, FMath::FloorToInt32((Area.Min.X - Memory->Origin.X) / Memory->CellCm));
+	const int32 Y0 = FMath::Max(0, FMath::FloorToInt32((Area.Min.Y - Memory->Origin.Y) / Memory->CellCm));
+	const int32 X1 = FMath::Min(Memory->Width - 1, FMath::FloorToInt32((Area.Max.X - Memory->Origin.X) / Memory->CellCm));
+	const int32 Y1 = FMath::Min(Memory->Height - 1, FMath::FloorToInt32((Area.Max.Y - Memory->Origin.Y) / Memory->CellCm));
+	for (int32 Y = Y0; Y <= Y1; ++Y)
+	{
+		for (int32 X = X0; X <= X1; ++X)
+		{
+			const int32 Cell = Y * Memory->Width + X;
+			if (Memory->Evidence[Cell] >= 1.5f && Now - Memory->LastHit[Cell] <= MaxAgeSeconds &&
+				Memory->MaxZ[Cell] > ZMin && Memory->MinZ[Cell] < ZMax)
+			{
+				Out.Add(Memory->Origin + FVector2D(X + 0.5, Y + 0.5) * Memory->CellCm);
+			}
+		}
+	}
+	return Memory->CellCm;
+}
+
+void UAgvLocalizationSubsystem::ForgetObstacles(double FloorZ, const FBox2D& Box)
+{
+	FAgvObstacleMemory* Memory = ObstacleMemory.Find(FMath::RoundToInt32(FloorZ / 100.0));
+	if (!Memory || Memory->Width <= 0)
+	{
+		return;
+	}
+	const int32 X0 = FMath::Max(0, FMath::FloorToInt32((Box.Min.X - Memory->Origin.X) / Memory->CellCm));
+	const int32 Y0 = FMath::Max(0, FMath::FloorToInt32((Box.Min.Y - Memory->Origin.Y) / Memory->CellCm));
+	const int32 X1 = FMath::Min(Memory->Width - 1, FMath::FloorToInt32((Box.Max.X - Memory->Origin.X) / Memory->CellCm));
+	const int32 Y1 = FMath::Min(Memory->Height - 1, FMath::FloorToInt32((Box.Max.Y - Memory->Origin.Y) / Memory->CellCm));
+	for (int32 Y = Y0; Y <= Y1; ++Y)
+	{
+		for (int32 X = X0; X <= X1; ++X)
+		{
+			Memory->Evidence[Y * Memory->Width + X] = 0.f;
+		}
 	}
 }
 

@@ -67,6 +67,8 @@ public:
 	/** Last matched scan in 3D (map frame x, y; world height) and whether each point lies on the map. */
 	const TArray<FVector>& GetLastScan3D() const { return LastScan3D; }
 	const TArray<bool>& GetLastScan3DMapped() const { return LastScan3DMapped; }
+	/** Where each point's beam left its scanner (map frame x, y; world height). */
+	const TArray<FVector>& GetLastScan3DOrigins() const { return LastScan3DOrigins; }
 	/** Counts matched scans, so a viewer can tell a new one arrived. */
 	int32 GetScanSerial() const { return ScanSerial; }
 	UAgvShadowSensorsComponent* GetSensorKit() const { return SensorKit; }
@@ -319,6 +321,7 @@ private:
 	TArray<FVector2D> LastScanInMap;
 	TArray<FVector> LastScan3D;
 	TArray<bool> LastScan3DMapped;
+	TArray<FVector> LastScan3DOrigins;
 	int32 ScanSerial = 0;
 	TArray<bool> LastScanMapped;
 
@@ -373,6 +376,26 @@ struct FAgvPanelGrid
 	bool bDirty = false;
 };
 
+/**
+ * What the fleet's LiDARs have seen off the prior map on one floor, for route planning: a 10cm grid shared by all vehicles.
+ * A hit raises a cell's evidence; a beam that later passes through the cell at a height where something was hit lowers it, so
+ * a pallet carried away or a person who left fades out, while what stands behind a rack the vehicle now faces is kept.
+ */
+struct FAgvObstacleMemory
+{
+	FVector2D Origin = FVector2D::ZeroVector;
+	int32 Width = 0;
+	int32 Height = 0;
+	double CellCm = 10.0;
+	double FloorZ = 0.0;
+	TArray<float> Evidence;
+	/** Lowest and highest hit above the floor (cm), the band a passing beam has to cross to clear the cell. */
+	TArray<float> MinZ;
+	TArray<float> MaxZ;
+	/** World time of the last hit. */
+	TArray<float> LastHit;
+};
+
 UCLASS()
 class MSC_VR_API UAgvLocalizationSubsystem : public UWorldSubsystem
 {
@@ -409,6 +432,16 @@ public:
 	/** Top view: accumulate everything the LiDAR has seen into a minimap (default), or show only the current scan. */
 	void SetPanelAccumulate(bool bAccumulate) { bPanelAccumulate = bAccumulate; }
 
+	/** Adds the vehicle's newest matched scan to the fleet's obstacle memory of its floor. */
+	void AddToObstacleMemory(UAgvForkliftLocalizerComponent* Vehicle);
+	/**
+	 * Cells of the floor's obstacle memory inside Area that hold something between ZMin and ZMax above the floor, seen at
+	 * least twice and within MaxAgeSeconds. Returns the cell size, 0 when the floor has no memory.
+	 */
+	double GatherRememberedPoints(double FloorZ, const FBox2D& Area, double ZMin, double ZMax, double MaxAgeSeconds, TArray<FVector2D>& Out) const;
+	/** Forgets what the memory holds inside Box, as where a pallet was lifted from. */
+	void ForgetObstacles(double FloorZ, const FBox2D& Box);
+
 protected:
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
 
@@ -434,6 +467,10 @@ private:
 	bool bPanelMap = false;
 	bool bPanelFront = false;
 	bool bPanelAccumulate = true;
+	/** Keyed by the floor height in metres. */
+	TMap<int32, FAgvObstacleMemory> ObstacleMemory;
+	/** The pallet each vehicle carried at its previous scan, to forget where a newly lifted one stood. */
+	TMap<TWeakObjectPtr<AActor>, TWeakObjectPtr<AActor>> CarriedAtLastScan;
 	FAgvPanelGrid PanelGrids[2];
 	UPROPERTY(Transient) TArray<TObjectPtr<UTexture2D>> PanelGridTextures;
 	FDelegateHandle SpawnHandle;

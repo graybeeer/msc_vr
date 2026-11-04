@@ -6,10 +6,13 @@
 #include "WarehouseFleetCoordinator.h"
 #include "WarehousePallet.h"
 #include "AgvShadowSensors.h"
+#include "AgvForkliftLocalizer.h"
+#include "EngineUtils.h"
 #include "HAL/PlatformTime.h"
 #include "HAL/IConsoleManager.h"
 
 static TAutoConsoleVariable<int32> CVarHybridMemory(TEXT("Warehouse.Nav.HybridMemory"),1,TEXT("1: routes also keep off pallets the fleet saw earlier but cannot see now."));
+static TAutoConsoleVariable<int32> CVarHybridScanMemory(TEXT("Warehouse.Nav.HybridScanMemory"),1,TEXT("1: routes also keep off what the fleet's LiDARs hit off the prior map and no beam has seen gone since (10cm grid, 5 min)."));
 
 namespace AgvHybrid
 {
@@ -450,6 +453,66 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 			}
 		}
 	}
+	// The fleet's LiDAR memory: points hit off the prior map that no beam has seen gone since, such as a pallet a rack now hides.
+	// The fleet's own vehicles and loads are left to traffic control, and the job's pallet to the pickup guard below.
+	TArray<FVector2D> MemoryPoints;
+	TMap<int64, TArray<int32>> MemoryBuckets;
+	constexpr double MemoryBucketCm = 50.0;
+	const auto MemoryBucket = [&](double X, double Y)
+	{
+		return (int64(FMath::FloorToInt32(X / MemoryBucketCm)) << 32) ^ int64(uint32(FMath::FloorToInt32(Y / MemoryBucketCm)));
+	};
+	const UAgvLocalizationSubsystem* Fleet = GetWorld()->GetSubsystem<UAgvLocalizationSubsystem>();
+	if (Fleet && CVarHybridScanMemory.GetValueOnGameThread() != 0)
+	{
+		const double Floor = SensorKit->SnapshotFloorZCm;
+		TArray<FVector2D> Candidates;
+		Fleet->GatherRememberedPoints(Floor, FBox2D(Field.Origin, Field.Origin + FVector2D(Field.Width, Field.Height) * CellCm),
+			BaseZ + Query.Envelope.Min.Z - Floor, BaseZ + Query.Envelope.Max.Z - Floor, 300.0, Candidates);
+		TArray<FBox2D> Skip;
+		for (TActorIterator<AWarehouseForklift> It(GetWorld()); It; ++It)
+		{
+			FBox Box = It->GetComponentsBoundingBox(true);
+			if (AActor* Load = It->GetSupportedPallet())
+			{
+				Box += Load->GetComponentsBoundingBox(true);
+			}
+			Skip.Add(FBox2D(FVector2D(Box.Min) - FVector2D(40.0), FVector2D(Box.Max) + FVector2D(40.0)));
+		}
+		TArray<FTransform> Pickup;
+		if (!bSupportingPallet && IsValid(TargetPallet))
+		{
+			Pickup.Add(TaskSourcePose());
+			if (bHasRecognizedTargetPose)
+			{
+				Pickup.Add(SensorObservedTarget);
+			}
+		}
+		for (const FVector2D& Point : Candidates)
+		{
+			bool bSkip = false;
+			for (const FBox2D& Box : Skip)
+			{
+				bSkip |= Box.IsInside(Point);
+			}
+			for (const FTransform& Pose : Pickup)
+			{
+				const FVector Local = Pose.InverseTransformPositionNoScale(FVector(Point, Pose.GetLocation().Z));
+				bSkip |= FMath::Abs(Local.X) < 110.0 && FMath::Abs(Local.Y) < 110.0;
+			}
+			if (bSkip)
+			{
+				continue;
+			}
+			const int32 Index = MemoryPoints.Add(Point);
+			MemoryBuckets.FindOrAdd(MemoryBucket(Point.X, Point.Y)).Add(Index);
+			int32 CX, CY;
+			if (Field.Cell(Point.X, Point.Y, CX, CY))
+			{
+				Field.Occupied[Field.Index(CX, CY)] = 1;
+			}
+		}
+	}
 	// Receiving/job records do not reveal the current shape or pose of unseen freight.
 	// Only published structures, measured points and the fleet's last observations enter the field.
 	BuildClearance(Field);
@@ -490,9 +553,46 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 		}
 		return true;
 	};
+	const FBox2D TravelBox(FVector2D(Query.Envelope.Min), FVector2D(Query.Envelope.Max));
+	const double MemoryReach = FVector2D(FMath::Max(FMath::Abs(TravelBox.Min.X), FMath::Abs(TravelBox.Max.X)),
+		FMath::Max(FMath::Abs(TravelBox.Min.Y), FMath::Abs(TravelBox.Max.Y))).Size();
+	const auto MemoryHits = [&](const FTransform& Pose)
+	{
+		if (MemoryPoints.IsEmpty())
+		{
+			return false;
+		}
+		const FVector2D At(Pose.GetLocation());
+		const int32 BX0 = FMath::FloorToInt32((At.X - MemoryReach) / MemoryBucketCm), BX1 = FMath::FloorToInt32((At.X + MemoryReach) / MemoryBucketCm);
+		const int32 BY0 = FMath::FloorToInt32((At.Y - MemoryReach) / MemoryBucketCm), BY1 = FMath::FloorToInt32((At.Y + MemoryReach) / MemoryBucketCm);
+		for (int32 BX = BX0; BX <= BX1; ++BX)
+		{
+			for (int32 BY = BY0; BY <= BY1; ++BY)
+			{
+				const TArray<int32>* Bucket = MemoryBuckets.Find((int64(BX) << 32) ^ int64(uint32(BY)));
+				if (!Bucket)
+				{
+					continue;
+				}
+				for (const int32 Index : *Bucket)
+				{
+					const FVector Local = Pose.InverseTransformPositionNoScale(FVector(MemoryPoints[Index], Pose.GetLocation().Z));
+					if (TravelBox.IsInside(FVector2D(Local)))
+					{
+						return true;
+					}
+				}
+			}
+		}
+		return false;
+	};
 	const auto HitsTarget = [&](const FTransform& Pose)
 	{
 		const FVector2D At(Pose.GetLocation());
+		if (MemoryHits(Pose))
+		{
+			return true;
+		}
 		for (const FVector2D& Person : People)
 		{
 			const double Distance = FVector2D::Distance(At, Person);
@@ -933,8 +1033,8 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 	const double TotalMs = (FPlatformTime::Seconds() - StartedAt) * 1000.0;
 	if (OutReport)
 	{
-		*OutReport = FString::Printf(TEXT("hybrid_ms=%.0f grid_ms=%.0f expansions=%d native=%d analytic=%d/%d searches=%d timeout=%d reachable=%d start_blocked=%d straight=%d goal_clear=%d closest=%.0f%s"),
-			TotalMs, BuildMs, Expansions, NativeQueries, AnalyticTries, NearAnalyticTries, Searches, bTimedOut, Field.bGoalTimeUsable, bStartBlocked, Tail.Num() > 0, NavigationClear(Goal, &Query), ClosestToGoal, *FailReport);
+		*OutReport = FString::Printf(TEXT("hybrid_ms=%.0f grid_ms=%.0f expansions=%d native=%d analytic=%d/%d searches=%d timeout=%d reachable=%d start_blocked=%d straight=%d goal_clear=%d goal_memory=%d memory=%d closest=%.0f%s"),
+			TotalMs, BuildMs, Expansions, NativeQueries, AnalyticTries, NearAnalyticTries, Searches, bTimedOut, Field.bGoalTimeUsable, bStartBlocked, Tail.Num() > 0, NavigationClear(Goal, &Query), MemoryHits(Goal), MemoryPoints.Num(), ClosestToGoal, *FailReport);
 	}
 	if (!bValid)
 	{
