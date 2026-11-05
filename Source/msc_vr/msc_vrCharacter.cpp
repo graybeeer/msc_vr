@@ -566,6 +566,11 @@ void Amsc_vrCharacter::UpdateRemoteControl()
 	{
 		EndRemoteControl(); return;
 	}
+	if (PC->IsWarehouseAlertCursorActive())
+	{
+		RemoteForklift->SetRemoteInput(0,0,0);
+		return;
+	}
 	auto* Viewport=GetWorld()->GetGameViewport();
 	if (Viewport && Viewport->Viewport && !Viewport->Viewport->HasFocus())
 	{

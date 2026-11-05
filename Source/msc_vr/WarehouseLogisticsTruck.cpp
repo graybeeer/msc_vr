@@ -424,6 +424,16 @@ TArray<AActor*> AWarehouseLogisticsTruck::GetUnitCargo(AWarehousePallet* Pallet)
  return Result;
 }
 
+void AWarehouseLogisticsTruck::SetRearDoorsClosed(bool Closed)
+{
+ for (const auto& Door:RearDoors) if (IsValid(Door.Part))
+ {
+  const auto* Open=DockParts.FindByPredicate([&](const FUnitMember& P) { return P.Actor==Door.Part; });
+  if (Open) Door.Part->SetActorTransform((Closed ? Door.ClosedPose : Open->RelativePose)*GetActorTransform(),false,nullptr,ETeleportType::TeleportPhysics);
+ }
+ bRearDoorsClosed=Closed;
+}
+
 bool AWarehouseLogisticsTruck::Depart()
 {
  if (!IsManifestReady()) return Fail(TEXT("초기 입고 화물 명세 등록이 끝나지 않았습니다."));
@@ -432,16 +442,21 @@ bool AWarehouseLogisticsTruck::Depart()
  for (const FVector& Point:DepartureRoute) if (Point.ContainsNaN()) return Fail(TEXT("유효 출차 경로가 없습니다."));
  if (ManifestPallets.Num()!=Units.Num()) return Fail(TEXT("트럭 화물 명세가 일치하지 않습니다."));
  for (AWarehousePallet* Pallet:ManifestPallets) if (!IsUnitOnTruck(Pallet)) return Fail(TEXT("미확인 또는 이탈한 화물이 있습니다."));
+ for (const auto& Door:RearDoors)
+  if (!IsValid(Door.Part) || !TruckParts.Contains(Door.Part) || Door.ClosedPose.ContainsNaN() || Door.ClosedPose.GetScale3D().GetMin()<=0)
+   return Fail(TEXT("트럭 뒷문 구성 또는 닫힘 위치가 유효하지 않습니다."));
  DepartureParts.Reset();
  for (AActor* Part:TruckParts)
  {
-  DepartureParts.Add({Part,Part->GetActorTransform().GetRelativeTransform(GetActorTransform()),Part->IsHidden(),Part->GetActorEnableCollision()});
+  const auto* Door=RearDoors.FindByPredicate([&](const FWarehouseTruckDoorPose& D) { return D.Part==Part; });
+  DepartureParts.Add({Part,Door ? Door->ClosedPose : Part->GetActorTransform().GetRelativeTransform(GetActorTransform()),Part->IsHidden(),Part->GetActorEnableCollision()});
   TArray<USceneComponent*> Components;Part->GetComponents(Components);
   for (auto* Component:Components) Component->SetMobility(EComponentMobility::Movable);
   TArray<UPrimitiveComponent*> Bodies;Part->GetComponents(Bodies);
   for (auto* Body:Bodies) if (Body->IsSimulatingPhysics()) Body->SetSimulatePhysics(false);
  }
- RouteIndex=0;State=EWarehouseTruckState::Departing;Status=TEXT("출차 중");return true;
+ SetRearDoorsClosed(true);
+ RouteIndex=0;State=EWarehouseTruckState::Departing;Status=TEXT("뒷문 닫힘 · 출차 중");return true;
 }
 
 bool AWarehouseLogisticsTruck::ReturnForNextVisit()
@@ -576,6 +591,7 @@ void AWarehouseLogisticsTruck::Tick(float DeltaSeconds)
    Actor->SetActorTransform(Part.RelativePose*GetActorTransform(),false,nullptr,ETeleportType::TeleportPhysics);
    Actor->SetActorHiddenInGame(Part.bHidden);Actor->SetActorEnableCollision(Part.bCollisionEnabled);
   }
+  SetRearDoorsClosed(false);
   LastPose=GetActorTransform();MeasuredSpeedCm=0;State=EWarehouseTruckState::AtDock;Status=TEXT("새 방문 도착 · 도크 준비 대기");
   UE_LOG(LogTemp,Log,TEXT("LOGISTICS_TRUCK_ARRIVED visit=%s"),*GetVisitId());
   return;

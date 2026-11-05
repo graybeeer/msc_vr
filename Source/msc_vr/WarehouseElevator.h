@@ -62,6 +62,8 @@ public:
  UFUNCTION(BlueprintPure, Category="Elevator") FString CheckInterlocks() const;
  UFUNCTION(BlueprintPure, Category="Elevator") bool CanEnter(AWarehouseForklift* Vehicle) const;
  UFUNCTION(BlueprintPure, Category="Elevator") bool CanExit(AWarehouseForklift* Vehicle) const;
+ // Cabin manifest identities only; motion still checks sensed passenger geometry.
+ TArray<AActor*> GetExitPassengers(AWarehouseForklift* Vehicle) const;
  UFUNCTION(BlueprintPure, Category="Elevator") bool AreLandingDoorsClosed() const;
  // PLC-authorized deck support only; never a world/unknown-ground query.
  bool TraceCertifiedPlatformSupport(AWarehouseForklift* Vehicle,FVector Point,FHitResult& Support) const;

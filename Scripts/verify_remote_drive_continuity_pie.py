@@ -5,6 +5,7 @@ reverse escape, high-fork travel, pivoting, deadman braking and autonomous scan 
 SetRemoteInput is exercised directly; this is not an OS keyboard/focus test.
 -RemoteCombinedSteering checks full simultaneous forward/reverse and left/right
 inputs, including repeated steering changes. -RemoteRun=name preserves a report.
+-RemotePivotOnly checks held A/D separately; -RemotePivotPulse checks 0.5s presses.
 """
 import json
 import re
@@ -103,13 +104,16 @@ damage.set_editor_property('objects', [
 
 command = unreal.SystemLibrary.get_command_line()
 combined = '-remotecombinedsteering' in command.lower()
+pivot_only = '-remotepivotonly' in command.lower()
+pivot_pulse = '-remotepivotpulse' in command.lower()
+pivot_only = pivot_only or pivot_pulse
 combined_cases = [('forward_left', 1, -1), ('forward_right', 1, 1),
                   ('reverse_left', -1, -1), ('reverse_right', -1, 1), ('steering_changes', 1, 0)]
 combined_results = []
 combined_speeds = []
 combined_yaw = 0
 previous_yaw = 0
-if combined:
+if combined or pivot_only:
     # Author a separate clear test lane before PIE; never force a running body.
     vehicle.set_actor_location(unreal.Vector(-1800, -1600, 0), False, True)
     operator.set_actor_location(unreal.Vector(-1800, -1820, 75), False, True)
@@ -175,9 +179,9 @@ def tick(dt):
             live = {a.get_actor_label(): a for a in unreal.GameplayStatics.get_all_actors_of_class(game, unreal.Actor)}
             rig, dummy, auto = [live[n] for n in ('ManualVehicle', 'ManualOperator', 'ScanVehicle')]
             assert rig.begin_remote_control(dummy), rig.status
-            rig.set_remote_input(1, 0, 0)
+            rig.set_remote_input(0 if pivot_only else 1, 0, 0)
             previous_yaw = rig.get_actor_rotation().yaw
-            enter(combined_cases[0][0] if combined else 'immediate', now)
+            enter('pivot_right' if pivot_only else combined_cases[0][0] if combined else 'immediate', now)
             return
         assert rig.root_component.is_simulating_physics()
         assert abs(rig.get_physical_mass_kg() - 1000) < .1
@@ -194,7 +198,37 @@ def tick(dt):
         speed = rig.current_speed_cm
         if not rows or now - rows[-1]['time'] >= .1:
             rows.append(dict(time=now, phase=phase, x=rig.get_actor_location().x,
-                             y=rig.get_actor_location().y, yaw=rig.get_actor_rotation().yaw, speed=speed, status=rig.status))
+                             y=rig.get_actor_location().y, yaw=rig.get_actor_rotation().yaw,
+                             yaw_rate_deg_s=rig.root_component.get_physics_angular_velocity_in_degrees().z,
+                             speed=speed, status=rig.status))
+        if pivot_only:
+            direction = 1 if phase == 'pivot_right' else -1 if phase == 'pivot_left' else 0
+            rig.set_remote_input(0, direction, 0)
+            yaw = rig.get_actor_rotation().yaw
+            combined_yaw += (yaw-previous_yaw+180) % 360-180
+            previous_yaw = yaw
+            if direction and age >= (.5 if pivot_pulse else 8):
+                assert combined_yaw*direction > (1 if pivot_pulse else 140), ('Pure steering response failed', phase, combined_yaw, rig.status)
+                combined_results.append(dict(phase=phase,yaw_degrees=combined_yaw))
+                combined_yaw=0
+                enter('right_brake' if direction==1 else 'left_brake',now)
+            elif not direction and age>=2:
+                assert abs(speed)<5, ('Pivot release did not brake',speed)
+                # A single instantaneous angular sample includes native tyre/
+                # spindle settling. Bound measured heading drift as well as
+                # linear braking, without zeroing any physical velocity.
+                settled=[p for p in rows if p['phase']==phase and p['time']>=now-.5]
+                release=[p for p in rows if p['phase']==phase]
+                signed=lambda yaw:(yaw-release[0]['yaw']+180)%360-180
+                assert max(abs(signed(p['yaw'])) for p in release)<5, 'Unbounded heading drift after release'
+                changes=[signed(p['yaw']) for p in settled]
+                assert max(changes)-min(changes)<1, 'Heading did not settle after release'
+                combined_results.append(dict(phase=phase,settled_heading_span_deg=max(changes)-min(changes),
+                    final_yaw_rate_deg_s=rig.root_component.get_physics_angular_velocity_in_degrees().z))
+                combined_yaw=0
+                if phase=='left_brake':finish(True,('Both 0.5s A/D-only presses' if pivot_pulse else 'Both held A/D-only pivots')+' and release brakes; actual native rig, no scanner queries')
+                else:enter('pivot_left',now)
+            return
         if combined:
             if phase == 'combined_brake':
                 rig.set_remote_input(0, 0, 0)

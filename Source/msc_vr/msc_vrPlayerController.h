@@ -78,6 +78,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Alerts") FString ResourceAlertText;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="Alerts") int32 EmergencyAlarmCount=0;
 	UFUNCTION(BlueprintPure, Category="Alerts") bool IsEmergencyAlarmPlaying() const;
+	UFUNCTION(BlueprintCallable, Category="Alerts") void DismissWarehouseAlert();
+	UFUNCTION(BlueprintCallable, Category="Alerts") void ToggleWarehouseAlertCursor();
+	UFUNCTION(BlueprintPure, Category="Alerts") bool IsWarehouseAlertVisible() const { return !VisibleEmergencyAlertText.IsEmpty() || !VisibleResourceAlertText.IsEmpty(); }
+	bool IsWarehouseAlertCursorActive() const { return bWarehouseAlertCursor; }
 
 protected:
 
@@ -117,6 +121,9 @@ protected:
 	TSharedPtr<SWidget> EmergencyAlertWidget;
 	UPROPERTY(Transient) TObjectPtr<USoundWaveProcedural> EmergencyTone;
 	UPROPERTY(Transient) TObjectPtr<UAudioComponent> EmergencyAudio;
+	FString VisibleEmergencyAlertText, VisibleResourceAlertText;
+	TSet<FString> ActiveAlertKeys, DismissedAlertKeys;
+	bool bWarehouseAlertCursor=false;
 	void UpdateEmergencyAlerts(float Dt);
 	void PlayEmergencyAlarm();
 	UPROPERTY(VisibleAnywhere, Category="Warehouse|Display") TObjectPtr<UWarehouseTransportVisualizer> TransportVisualizer;

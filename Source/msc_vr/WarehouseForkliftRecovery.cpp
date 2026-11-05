@@ -24,7 +24,7 @@ bool AWarehouseForklift::TryHybridReplanHere(EWarehouseAIState From)
  if (HybridRouteReplans==0 || FVector::Dist2D(GetActorLocation(),HybridReplanProgress)>=100.f)
  { HybridRouteReplans=0;HybridReplanProgress=GetActorLocation(); }
  if (HybridRouteReplans>=3 || (From==EWarehouseAIState::NavigatePickup && !IsValid(TargetPallet))) return false;
- const FTransform Goal=From==EWarehouseAIState::NavigatePickup ? PalletApproach(TaskSourcePose(),220) :
+ const FTransform Goal=From==EWarehouseAIState::NavigatePickup ? PalletApproach(TaskSourcePose(),220,true) :
   From==EWarehouseAIState::NavigateDelivery ? PalletApproach(ActiveJob.Destination,220) : IdlePose;
  if (!PlanAutonomousRoute(Goal)) return false;
  ++HybridRouteReplans;++DetourCount;
@@ -84,7 +84,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
   // most 60cm of exact own-part checks from this fixed starting position.
   RecoveryStart=GetActorLocation();
   bObservedPickupEscape=bHasRecognizedTargetPose && FVector::Dist2D(RecoveryStart,TaskSourcePose().GetLocation())<=260.f;
-  if (PlanRecoveryDetour(PalletApproach(TaskSourcePose(),PickupApproachDistanceCm)))
+  if (PlanRecoveryDetour(PalletApproach(TaskSourcePose(),PickupApproachDistanceCm,true)))
   {
    ++RecoveryCount;++ObservedRouteReplans;
    UE_LOG(LogTemp,Log,TEXT("AGV_OBSERVED_REPLAN %s observed=%d/3 mechanical=%d/3 insertion=%d/3 progress_cm=%.2f"),
@@ -99,7 +99,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  if (RecoveryAttempts>=3 || (bRetryInsertion && ForkInsertionRetries>=3))
  { RecoveryFault(TEXT("RECOVERY LIMIT - CHECK PALLET / CLEAR SPACE"),TEXT("복구를 3회 시도했지만 이동·포크 삽입에 실패했습니다.")); return false; }
  if ((FailedDeliveryRoute || (FailedPickupRoute && IsValid(TargetPallet) && !ObservedPickupBlocked)) &&
-     PlanRecoveryDetour(PalletApproach(FailedPickupRoute ? TaskSourcePose() : ActiveJob.Destination,220)))
+     PlanRecoveryDetour(PalletApproach(FailedPickupRoute ? TaskSourcePose() : ActiveJob.Destination,220,FailedPickupRoute)))
  {
   ++RecoveryCount; ++RecoveryAttempts;
   ProgressLocation=GetActorLocation();StalledSeconds=0;WaitSeconds=0;
@@ -122,7 +122,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  case EWarehouseAIState::NavigatePickup:
  case EWarehouseAIState::AlignVehicle:
   if (!IsValid(TargetPallet)) { FaultAI(TEXT("TARGET LOST")); return false; }
-  RecoveryGoal=PalletApproach(TaskSourcePose(),PickupApproachDistanceCm);
+  RecoveryGoal=PalletApproach(TaskSourcePose(),PickupApproachDistanceCm,true);
   RecoveryResume=EWarehouseAIState::NavigatePickup; break;
  case EWarehouseAIState::PlanDelivery:
  case EWarehouseAIState::NavigateDelivery:
@@ -169,7 +169,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  {
   TGuardValue<bool> Planning(bPlanningRoute,true);
   const FTransform Goal=PalletApproach(FailedPickupRoute ? TaskSourcePose() : ActiveJob.Destination,
-   FailedPickupRoute ? PickupApproachDistanceCm : 220.f);
+   FailedPickupRoute ? PickupApproachDistanceCm : 220.f,FailedPickupRoute);
   const bool GoalClear=NavigationClear(Goal);
   const FString Detail=GoalClear ? TEXT("현재 배치에서 연결 가능한 경로를 찾지 못했습니다. 통로 폭과 랙 배치를 확인한 뒤 E로 재시도하세요.") :
    FString(TEXT("팔레트 접근 공간이 막혀 있습니다. "))+NavigationBlockDetail+TEXT(". 랙 앞 작업 공간과 팔레트 방향을 확인한 뒤 E로 재시도하세요.");
@@ -219,7 +219,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  if (bRetryInsertion)
  {
   // Leave enough steering distance for a new alignment after real contact drift.
-  const FVector ClearPose=PalletApproach(SensorMode==EWarehouseSensorMode::Autonomous ? ObservedPallet : TargetPallet->GetActorTransform(),320).GetLocation();
+  const FVector ClearPose=PalletApproach(SensorMode==EWarehouseSensorMode::Autonomous ? ObservedPallet : TargetPallet->GetActorTransform(),320,true).GetLocation();
   RecoveryDistance=FMath::Clamp(FVector::DotProduct(GetActorLocation()-ClearPose,GetActorForwardVector())+10.f,0.f,300.f);
   // Do not back an already-clear pallet out of its configured sensor range.
   const FVector Offset=(SensorMode==EWarehouseSensorMode::Autonomous ? ObservedPallet.GetLocation() : TargetPallet->GetActorLocation())-GetActorLocation();

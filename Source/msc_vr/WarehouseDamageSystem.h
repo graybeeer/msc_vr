@@ -33,6 +33,8 @@ struct FWarehouseStrength
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly) float PeakLevelKg = 0;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly) float Damage = 0;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly) bool bFailed = false;
+ // Runtime recovery clock. Failure flags and broken physics joints are separate.
+ double LastDamageSeconds=-1;
 };
 
 UCLASS()

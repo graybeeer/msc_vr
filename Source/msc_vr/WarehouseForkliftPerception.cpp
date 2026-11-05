@@ -16,6 +16,30 @@
 
 namespace
 {
+const FBox StandardPalletBox(FVector(-55,-55,0),FVector(55,55,15));
+bool IsObservedPallet(const FAgvObservedObstacle& Obstacle)
+{
+ const AActor* Actor=Obstacle.Actor.Get();
+ return Cast<AWarehousePallet>(Actor) && Obstacle.Component.Get()==Actor->GetRootComponent();
+}
+void AddObservedPalletCandidates(const UAgvShadowSensorsComponent* Sensors,const TMap<TWeakObjectPtr<AActor>,FTransform>& Models,const FBox& Bounds,FAgvObstacleIndices& Candidates)
+{
+ // The point index bounds only contain returned beams. A catalog corner can
+ // extend beyond them; use observed identities/poses, never a world search.
+ const auto& Observed=Sensors->GetObservedObstacles();
+ for (int32 I=0;I<Observed.Num();++I)
+  if (const FTransform* Pose=Models.Find(Observed[I].Actor); Pose && IsObservedPallet(Observed[I]) &&
+      StandardPalletBox.TransformBy(Pose->ToMatrixWithScale()).ExpandBy(2.f).Intersect(Bounds)) Candidates.AddUnique(I);
+}
+bool ObservedPalletOverlapsPart(const FTransform& ModelPose,UStaticMeshComponent* Part,const FTransform& Pose)
+{
+ // Bring the saved catalog box into our component's current frame. Only our
+ // own collision geometry is queried; no neighbour's live shape/pose is read.
+ const FTransform Model(ModelPose.GetRotation(),ModelPose.TransformPosition(StandardPalletBox.GetCenter()));
+ const FTransform Test=Model*Pose.Inverse()*Part->GetComponentTransform();
+ const FVector Half=StandardPalletBox.GetExtent()*ModelPose.GetScale3D().GetAbs()+FVector(2);
+ return Part->OverlapComponent(Test.GetLocation(),Test.GetRotation(),FCollisionShape::MakeBox(Half));
+}
 // The broad phase uses the saved observation only. Projecting the query back
 // through the saved and live frames cancels the latter mathematically: native
 // fixed-building geometry is tested at its published map pose, not a hidden
@@ -99,6 +123,7 @@ bool AWarehouseForklift::IsSensorSamplingSuppressed() const
 void AWarehouseForklift::InvalidateSensorSnapshot(const FString& Reason)
 {
  bObservedTargetValid=false;
+ SensorObservedPalletModels.Reset();
  bHasRecognizedTargetPose=false;
  bObservedPickupEscape=false;
  if (SensorKit) SensorKit->InvalidateSnapshot(Reason);
@@ -158,6 +183,40 @@ void AWarehouseForklift::UpdateSensorSnapshot()
   if (It.Key()!=ActiveJob.JobId && !PendingJobs.ContainsByPredicate([&](const FWarehouseWorkOrder& Job) { return Job.JobId==It.Key(); })) It.RemoveCurrent();
  bObservedTargetValid=false;
  if (!SensorKit->RefreshSnapshot(GetWorld()->GetTimeSeconds(),FloorBase(GetActorLocation().Z))) return;
+ if (!IsValid(Elevator))
+ {
+  FHitResult Floor;
+  if (PerceivedFloorSupport(GetActorLocation(),&Floor)) SensorKit->SnapshotFloorZCm=Floor.ImpactPoint.Z;
+ }
+ SensorObservedPalletModels.Reset();
+ if (bPalletSensorHealthy && ActiveJob.bRackDestination &&
+     (AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::LowerLoad))
+ {
+  // The same model-recognition proxy as the target camera, on the existing
+  // one-second frame. Aim at actual measured points, never hidden live poses.
+  const FVector Origin=GetActorLocation()+GetActorForwardVector()*10+FVector(0,0,90);
+  FCollisionQueryParams Camera(SCENE_QUERY_STAT(RackPalletModelRecognition),true,this);
+  for (const auto& Obstacle:SensorKit->GetObservedObstacles())
+  {
+   if (!IsObservedPallet(Obstacle) || Obstacle.Actor.Get()==TargetPallet || Obstacle.WorldPoints.IsEmpty()) continue;
+   const FVector Delta=Obstacle.WorldBounds.GetCenter()-GetActorLocation();
+   if (Delta.Size()>PalletDetectionRangeCm || FVector::DotProduct(Delta.GetSafeNormal2D(),GetActorForwardVector())<.5f) continue;
+   for (int32 I:{0,Obstacle.WorldPoints.Num()/2,Obstacle.WorldPoints.Num()-1})
+   {
+    const FVector Point=Obstacle.WorldPoints[I];FHitResult Hit;
+    if (GetWorld()->LineTraceSingleByChannel(Hit,Origin,Point+(Point-Origin).GetSafeNormal()*2.f,ECC_Visibility,Camera) && Hit.GetActor()==Obstacle.Actor.Get())
+    {
+     // Only a positive, unoccluded camera hit supplies a standard-model fit,
+     // matching existing target-pallet recognition. Raw cloud centroids are
+     // not pallet poses. Cache once; queries never poll the neighbour live.
+     FTransform Model=Obstacle.Actor->GetActorTransform();Model.AddToTranslation(PalletPositionBiasCm);
+     FRotator Heading=Model.Rotator();Heading.Yaw+=PalletYawBiasDegrees;Model.SetRotation(Heading.Quaternion());
+     SensorObservedPalletModels.Add(Obstacle.Actor,Model);
+     break;
+    }
+   }
+  }
+ }
  if (!FleetCoordinator) FleetCoordinator=AWarehouseFleetCoordinator::Find(this);
  if (FleetCoordinator)
  {
@@ -171,16 +230,21 @@ void AWarehouseForklift::UpdateSensorSnapshot()
    }
  }
  // Existing close-range pallet-model recognition remains a dedicated sensor:
- // range, FOV, actual visibility and the common scan must all confirm it.
+ // check range, FOV and actual visibility on the common one-second scan.
  // Its model-fit pose is cached only on this frame, never polled while hidden.
- if (!IsValid(TargetPallet) || !bPalletSensorHealthy || !SensorKit->HasObservedActor(TargetPallet)) return;
- const FVector Delta=TargetPallet->GetActorLocation()-GetActorLocation();
+ if (!IsValid(TargetPallet) || !bPalletSensorHealthy) return;
+ // Aim the existing close-range camera at the published/last observed pose.
+ // The three actual occluded rays are independent camera evidence, even if
+ // a sparse LiDAR row missed the low pallet. Never aim at an unseen live pose.
+ const FTransform Prior=TaskSourcePose();
+ const FVector Delta=Prior.GetLocation()-GetActorLocation();
  if (Delta.Size()>PalletDetectionRangeCm || FVector::DotProduct(Delta.GetSafeNormal2D(),GetActorForwardVector())<.5f) return;
  FCollisionQueryParams Params(SCENE_QUERY_STAT(PalletModelRecognition),true,this);
  const FVector Origin=GetActorLocation()+GetActorForwardVector()*10+FVector(0,0,90);
- for (float Y : {-40.f,0.f,40.f})
+ const FTransform Entry=FTransform(FRotator(0,PickupEntryQuarterTurns*90.f,0))*Prior;
+ for (float Y : {-49.f,0.f,49.f})
  {
-  const FVector Point=TargetPallet->GetActorTransform().TransformPosition(FVector(-53,Y,8));
+  const FVector Point=Entry.TransformPosition(FVector(-53,Y,8));
   FHitResult Hit;
   if (GetWorld()->LineTraceSingleByChannel(Hit,Origin,Point,ECC_Visibility,Params) && Hit.GetActor()==TargetPallet)
   { bObservedTargetValid=true;break; }
@@ -275,10 +339,16 @@ bool AWarehouseForklift::PerceivedBoxClear(const FTransform& Pose,const FBox& Lo
   { NavigationBlockDetail=TEXT("사전 지도 구조물의 갱신 필요");return false; }
  }
  SensorKit->FindObservedCandidates(Broad,Candidates);
+ const bool RackInsertion=ActiveJob.bRackDestination && (AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::LowerLoad);
+ if (RackInsertion && !PeopleOnly) AddObservedPalletCandidates(SensorKit,SensorObservedPalletModels,Broad,Candidates);
  for (int32 Index : Candidates)
  {
   const auto& Obstacle=SensorKit->GetObservedObstacles()[Index];
   FVector Point;
+  const FTransform* PalletPose=SensorObservedPalletModels.Find(Obstacle.Actor);
+  if (RackInsertion && !PeopleOnly && !Ignore(Obstacle) && PalletPose &&
+      CatalogBoxesOverlap(Pose,LocalBox.ExpandBy(2.f),*PalletPose,StandardPalletBox))
+  { LogBlock(Obstacle,TEXT("observed-pallet-catalog"),FVector::ZeroVector);return false; }
   if (!Ignore(Obstacle) && PointCloudOverlaps(Obstacle,Pose,LocalBox,&Point))
   {
    LogBlock(Obstacle,TEXT("observed-point"),Point);
@@ -319,10 +389,16 @@ bool AWarehouseForklift::PerceivedPartClear(UStaticMeshComponent* Part,const FTr
  // PointCloudOverlapsPart uses AggGeom's bounds, which may differ from the
  // current native body's transformed bounds used for fixed-shape overlap.
  SensorKit->FindObservedCandidates(Setup ? Setup->AggGeom.CalcAABB(Pose) : Local.TransformBy(Pose.ToMatrixWithScale()),Candidates);
+ const bool RackInsertion=ActiveJob.bRackDestination && (AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::LowerLoad);
+ if (RackInsertion) AddObservedPalletCandidates(SensorKit,SensorObservedPalletModels,Broad,Candidates);
  for (int32 Index : Candidates)
  {
   const auto& Obstacle=SensorKit->GetObservedObstacles()[Index];
   FVector Point=FVector::ZeroVector;
+  const FTransform* PalletPose=SensorObservedPalletModels.Find(Obstacle.Actor);
+  if (RackInsertion && Obstacle.Actor.Get()!=this && !Ignored.Contains(Obstacle.Actor.Get()) && PalletPose &&
+      ObservedPalletOverlapsPart(*PalletPose,Part,Pose))
+   return Reject(Obstacle,TEXT("observed-pallet-catalog"),FVector::ZeroVector);
   if (Obstacle.Component.Get()!=Bearing && Obstacle.Actor.Get()!=this && !Ignored.Contains(Obstacle.Actor.Get()) && PointCloudOverlapsPart(Obstacle,Part,Pose,&Point))
    return Reject(Obstacle,TEXT("observed-point"),Point);
  }
@@ -350,10 +426,21 @@ bool AWarehouseForklift::PerceivedMotionClear(UStaticMeshComponent* Part,FVector
  };
  FAgvObstacleIndices Candidates;
  SensorKit->FindObservedCandidates(Swept,Candidates);
+ const bool RackInsertion=ActiveJob.bRackDestination && (AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::LowerLoad);
+ if (RackInsertion) AddObservedPalletCandidates(SensorKit,SensorObservedPalletModels,Swept,Candidates);
  for (int32 Index : Candidates)
  {
   const auto& Obstacle=SensorKit->GetObservedObstacles()[Index];
-  if (Obstacle.Actor.Get()==this || Ignored.Contains(Obstacle.Actor.Get()) || !Obstacle.WorldBounds.Intersect(Swept)) continue;
+  if (Obstacle.Actor.Get()==this || Ignored.Contains(Obstacle.Actor.Get())) continue;
+  const FTransform* PalletPose=SensorObservedPalletModels.Find(Obstacle.Actor);
+  if (RackInsertion && PalletPose)
+   for (int32 I=0;I<=Steps;++I)
+   {
+    FTransform Pose=Start;Pose.AddToTranslation(Delta*(float(I)/Steps));
+    if (ObservedPalletOverlapsPart(*PalletPose,Part,Pose))
+     return Reject(Obstacle,FVector::ZeroVector,TEXT("OBSERVED_PALLET_CATALOG"),0,0,Pose);
+   }
+  if (!Obstacle.WorldBounds.Intersect(Swept)) continue;
   for (const FVector& Point : Obstacle.WorldPoints) if (Swept.IsInsideOrOn(Point))
   {
    const float InitialDistance=Shape->GetShortestDistanceToPoint(Point,Start,true);

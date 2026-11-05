@@ -8797,7 +8797,7 @@
       "package": "/Game/Warehouse/Physics/SM_Pallet_110",
       "path": "Content/Warehouse/Physics/SM_Pallet_110.uasset",
       "asset_class": "StaticMesh",
-      "bytes": 77524345,
+      "bytes": 70952381,
       "roots": [
         "Source/msc_vr/WarehousePallet.cpp"
       ],
@@ -21659,7 +21659,7 @@
       "package": "/Game/__ExternalActors__/FirstPerson/Lvl_FirstPerson/3/RI/BCZBRTEQSBBTEEFZA1XVYE",
       "path": "Content/__ExternalActors__/FirstPerson/Lvl_FirstPerson/3/RI/BCZBRTEQSBBTEEFZA1XVYE.uasset",
       "asset_class": "WarehouseWorker",
-      "bytes": 7046,
+      "bytes": 7106,
       "roots": [],
       "dependencies": [
         "/Game/Characters/Mannequins/Anims/Unarmed/ABP_Unarmed",
@@ -23005,7 +23005,7 @@
       "package": "/Game/__ExternalActors__/FirstPerson/Lvl_FirstPerson/4/8M/VPNARIRRF4ILBM1ON0XY8R",
       "path": "Content/__ExternalActors__/FirstPerson/Lvl_FirstPerson/4/8M/VPNARIRRF4ILBM1ON0XY8R.uasset",
       "asset_class": "WarehouseWorker",
-      "bytes": 6976,
+      "bytes": 7036,
       "roots": [],
       "dependencies": [
         "/Game/Characters/Mannequins/Anims/Unarmed/ABP_Unarmed",
@@ -23775,7 +23775,7 @@
       "package": "/Game/__ExternalActors__/FirstPerson/Lvl_FirstPerson/4/IE/13F1ZD2Q1T2M0BDF65CT67",
       "path": "Content/__ExternalActors__/FirstPerson/Lvl_FirstPerson/4/IE/13F1ZD2Q1T2M0BDF65CT67.uasset",
       "asset_class": "WarehouseWorker",
-      "bytes": 7044,
+      "bytes": 7100,
       "roots": [],
       "dependencies": [
         "/Game/Characters/Mannequins/Anims/Unarmed/ABP_Unarmed",
@@ -25366,7 +25366,7 @@
       "package": "/Game/__ExternalActors__/FirstPerson/Lvl_FirstPerson/5/0V/PO5SITMNHQAMKLPDNLZFXF",
       "path": "Content/__ExternalActors__/FirstPerson/Lvl_FirstPerson/5/0V/PO5SITMNHQAMKLPDNLZFXF.uasset",
       "asset_class": "WarehouseWorker",
-      "bytes": 6976,
+      "bytes": 7036,
       "roots": [],
       "dependencies": [
         "/Game/Characters/Mannequins/Anims/Unarmed/ABP_Unarmed",
@@ -26815,7 +26815,7 @@
       "package": "/Game/__ExternalActors__/FirstPerson/Lvl_FirstPerson/5/EG/GHKDO7CHYSXGB4ZIUP283A",
       "path": "Content/__ExternalActors__/FirstPerson/Lvl_FirstPerson/5/EG/GHKDO7CHYSXGB4ZIUP283A.uasset",
       "asset_class": "WarehouseLogisticsTruck",
-      "bytes": 10266,
+      "bytes": 14280,
       "roots": [],
       "dependencies": [
         "/Game/FirstPerson/Lvl_FirstPerson",
@@ -27095,7 +27095,7 @@
       "package": "/Game/__ExternalActors__/FirstPerson/Lvl_FirstPerson/5/GU/A93NX6K8F5ZKI5DYADTVZ0",
       "path": "Content/__ExternalActors__/FirstPerson/Lvl_FirstPerson/5/GU/A93NX6K8F5ZKI5DYADTVZ0.uasset",
       "asset_class": "WarehouseWorker",
-      "bytes": 6984,
+      "bytes": 7044,
       "roots": [],
       "dependencies": [
         "/Game/Characters/Mannequins/Anims/Unarmed/ABP_Unarmed",
@@ -28486,7 +28486,7 @@
       "package": "/Game/__ExternalActors__/FirstPerson/Lvl_FirstPerson/5/VE/4Y4OZH4W9P6AHZEVB4X61T",
       "path": "Content/__ExternalActors__/FirstPerson/Lvl_FirstPerson/5/VE/4Y4OZH4W9P6AHZEVB4X61T.uasset",
       "asset_class": "WarehouseLogisticsTruck",
-      "bytes": 10266,
+      "bytes": 14280,
       "roots": [],
       "dependencies": [
         "/Game/FirstPerson/Lvl_FirstPerson",
@@ -33258,7 +33258,7 @@
       "package": "/Game/__ExternalActors__/FirstPerson/Lvl_FirstPerson/7/DE/RTL4PLA5LZDCQPO0LJ3IXY",
       "path": "Content/__ExternalActors__/FirstPerson/Lvl_FirstPerson/7/DE/RTL4PLA5LZDCQPO0LJ3IXY.uasset",
       "asset_class": "WarehouseWorker",
-      "bytes": 7042,
+      "bytes": 7102,
       "roots": [],
       "dependencies": [
         "/Game/Characters/Mannequins/Anims/Unarmed/ABP_Unarmed",
@@ -51891,7 +51891,7 @@
       "package": "/Game/__ExternalActors__/FirstPerson/Lvl_FirstPerson/C/SU/OP8Z46J1YXACZI8CCR0WII",
       "path": "Content/__ExternalActors__/FirstPerson/Lvl_FirstPerson/C/SU/OP8Z46J1YXACZI8CCR0WII.uasset",
       "asset_class": "WarehouseLogisticsTruck",
-      "bytes": 11620,
+      "bytes": 15634,
       "roots": [],
       "dependencies": [
         "/Game/FirstPerson/Lvl_FirstPerson",
@@ -59422,7 +59422,7 @@
     "/Script/UnrealEd",
     "/Script/msc_vr"
   ],
-  "total_bytes": 2404404286,
+  "total_bytes": 2397844720,
   "git_policy": {
     "scope": "runtime_dependency_subset",
     "package_storage": "Git; files >=1MiB use Git LFS",
