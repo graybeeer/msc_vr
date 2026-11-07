@@ -16,6 +16,15 @@ enum class EWarehouseTruckState : uint8 { AtDock, Loading, Departing, Departed, 
 UENUM(BlueprintType)
 enum class EWarehouseDockServiceState : uint8 { Awaiting, Securing, Ready, Clearing, Released };
 
+USTRUCT(BlueprintType)
+struct FWarehouseTruckDoorPose
+{
+ GENERATED_BODY()
+ UPROPERTY(EditAnywhere,BlueprintReadWrite) TObjectPtr<AActor> Part;
+ // Closed transform in the truck frame; the dock placement supplies the open pose.
+ UPROPERTY(EditAnywhere,BlueprintReadWrite) FTransform ClosedPose;
+};
+
 /** Deliberately cinematic dock handling. Warehouse units retain their actors, recipes and damage. */
 UCLASS()
 class MSC_VR_API AWarehouseLogisticsTruck : public AActor
@@ -40,6 +49,8 @@ public:
  UFUNCTION(BlueprintPure,Category="Logistics|Driver") UPoseableMeshComponent* GetDriverMesh() const { return DriverMesh; }
  // Chassis, panels, open doors and work lights; never include the fixed dock leveller.
  UPROPERTY(EditInstanceOnly,BlueprintReadWrite,Category="Logistics") TArray<TObjectPtr<AActor>> TruckParts;
+ UPROPERTY(EditInstanceOnly,BlueprintReadWrite,Category="Logistics") TArray<FWarehouseTruckDoorPose> RearDoors;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Logistics") bool bRearDoorsClosed=false;
  UPROPERTY(EditInstanceOnly,BlueprintReadWrite,Category="Logistics") TObjectPtr<AActor> DockAnchor;
  // Pallet bottom-centre poses relative to this actor. Size is in each slot's local axes.
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Logistics") TArray<FTransform> LoadSlots;
@@ -132,5 +143,6 @@ private:
  static FBox UnitBounds(const FUnit& Unit,const FTransform& PalletPose,const FTransform& Reference);
  bool FitsSlot(const FUnit& Unit,const FTransform& PalletPose,int32 Slot) const;
  void ResetDockService();
+ void SetRearDoorsClosed(bool Closed);
  void AdvanceDockService(float DeltaSeconds);
 };

@@ -210,7 +210,8 @@ bool AWarehouseForklift::PalletOnForks() const
  return Local.X>=35 && Local.X<=85 && FMath::Abs(Local.Y)<=25 &&
   FMath::Abs(Local.Z+PalletContactLiftCm)<=5 &&
   FVector::DotProduct(GetActorUpVector(),TargetPallet->GetActorUpVector())>.94f &&
-  FVector::DotProduct(GetActorForwardVector(),TargetPallet->GetActorForwardVector())>.94f;
+  FMath::Max(FMath::Abs(FVector::DotProduct(GetActorForwardVector(),TargetPallet->GetActorForwardVector())),
+   FMath::Abs(FVector::DotProduct(GetActorForwardVector(),TargetPallet->GetActorRightVector())))>.94f;
 }
 void AWarehouseForklift::ConsumeEnergy(float Wh)
 {
@@ -325,6 +326,14 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
  const float ReactionSeconds=SensorMode==EWarehouseSensorMode::Autonomous ? 1.1f : .2f;
  const float LookAhead=FMath::Max(100.f,CurrentSpeedCm*CurrentSpeedCm/100.f+FMath::Abs(CurrentSpeedCm)*ReactionSeconds+20.f);
  const FVector SafetyEnd=SafetyCenter+(LiftOnly ? FVector::ZeroVector : Delta+Delta.GetSafeNormal()*LookAhead);
+ TArray<AActor*> SafetyIgnored=GetPhysicalLoads();
+ // A stationary co-rider beside the truck must not veto an otherwise clear
+ // exit through the broad human zone. Only a PLC-authorized straight exit gets
+ // this exception; the per-part sensed/native sweeps below still include them.
+ if (!LiftOnly && bFloorTransfer && AIState==EWarehouseAIState::ElevatorExit && IsValid(Elevator) &&
+     FVector::DotProduct(Delta,Elevator->GetActorForwardVector())<0.f)
+  SafetyIgnored.Append(Elevator->GetExitPassengers(this));
+ SafetyParams.AddIgnoredActors(SafetyIgnored);
  TArray<FHitResult> PeopleHits;
  const bool SensorDriven=SensorMode==EWarehouseSensorMode::Autonomous;
  if (!SensorDriven) GetWorld()->SweepMultiByObjectType(PeopleHits,SafetyCenter,SafetyEnd,GetActorQuat(),People,FCollisionShape::MakeBox(FVector(110,75,110)),SafetyParams);
@@ -333,7 +342,7 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
   const FBox SafetyBox(FVector(-110,-75,-110),FVector(110,75,110));
   const int32 Samples=FMath::Max(1,FMath::CeilToInt(FVector::Dist(SafetyCenter,SafetyEnd)/20.f));
   for (int32 I=0;I<=Samples;++I)
-   if (!PerceivedBoxClear(FTransform(GetActorQuat(),FMath::Lerp(SafetyCenter,SafetyEnd,float(I)/Samples)),SafetyBox,GetPhysicalLoads(),true))
+   if (!PerceivedBoxClear(FTransform(GetActorQuat(),FMath::Lerp(SafetyCenter,SafetyEnd,float(I)/Samples)),SafetyBox,SafetyIgnored,true))
     return Blocked(TEXT("PERSON IN SAFETY ZONE"));
  }
  else if (PeopleHits.ContainsByPredicate([](const FHitResult& Hit) { return WarehousePhysics::IsPhysicalContact(Hit.GetComponent()) && Hit.GetActor() && (Hit.GetActor()->ActorHasTag(TEXT("WarehousePhysicalHuman")) || Hit.GetComponent()->GetCollisionObjectType()==ECC_Pawn); }))
@@ -498,12 +507,13 @@ bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt,flo
  const FVector Offset=Destination-GetActorLocation();
  const bool ElevatorLine=IsValid(Elevator) && (AIState==EWarehouseAIState::ElevatorCall || AIState==EWarehouseAIState::ElevatorBoard || AIState==EWarehouseAIState::ElevatorExit);
  const bool PalletLine=AIState==EWarehouseAIState::AlignVehicle || AIState==EWarehouseAIState::InsertFork;
+ const FTransform PalletFrame=FTransform(FRotator(0,PickupEntryQuarterTurns*90.f,0))*ObservedPallet;
  const float LateralLimit=AIState==EWarehouseAIState::DockCharge ? ChargingDockLateralLimitCm : AIState==EWarehouseAIState::AlignUnload ? 15.f :
   PalletLine ? 7.f : 5.f;
  // A long straight boarding line magnifies a small heading error. Measure
  // corridor departure against the shaft, then steer onto that same line.
  // Heading error over a long insertion line is not a lateral miss of the holes.
- const FVector LateralAxis=ElevatorLine ? Elevator->GetActorRightVector() : PalletLine ? ObservedPallet.GetUnitAxis(EAxis::Y) : GetActorRightVector();
+ const FVector LateralAxis=ElevatorLine ? Elevator->GetActorRightVector() : PalletLine ? PalletFrame.GetUnitAxis(EAxis::Y) : GetActorRightVector();
  if (FMath::Abs(FVector::DotProduct(Offset,LateralAxis))>LateralLimit || FMath::Abs(Offset.Z)>3)
  { StopFor(TEXT("ROUTE MISALIGNED")); return false; }
  const float Distance=FVector::DotProduct(Offset,GetActorForwardVector());
@@ -535,7 +545,7 @@ bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt,flo
  }
  if (AIState==EWarehouseAIState::InsertFork)
  {
-  const float HeadingError=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,ObservedPallet.Rotator().Yaw));
+  const float HeadingError=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,PalletFrame.Rotator().Yaw));
   // Keep both long tines parallel to the sensed holes. Chasing a centimetre
   // lateral point error at the end otherwise turns the fork out of alignment.
   Curvature=FMath::Sign(Distance)*FMath::Clamp(HeadingError/25.f,-1.f/117.3f,1.f/117.3f);

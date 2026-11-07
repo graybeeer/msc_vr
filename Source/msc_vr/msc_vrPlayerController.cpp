@@ -239,18 +239,27 @@ void Amsc_vrPlayerController::BeginPlay()
 					.Text_Lambda([this]() { return GetCargoReadout(); })]];
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(CargoReadoutWidget.ToSharedRef(),5);
 		EmergencyAlertWidget=SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Top).Padding(FMargin(24,24))
-			.Visibility(EVisibility::HitTestInvisible)
+			.Visibility(EVisibility::SelfHitTestInvisible)
 			[SNew(SBox).WidthOverride(820)
 				[SNew(SBorder).Padding(WarehouseUIStyle::PanelPadding).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 					.BorderBackgroundColor(WarehouseUIStyle::DangerPanel)
-				.Visibility_Lambda([this]() { return EmergencyAlertText.IsEmpty() && ResourceAlertText.IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible; })
+				.Visibility_Lambda([this]() { return IsWarehouseAlertVisible() ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed; })
 					[SNew(SVerticalBox)
-						+SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::TitleSize,true))
-						.ColorAndOpacity(WarehouseUIStyle::Warning).Text_Lambda([this]() { return FText::FromString(EmergencyAlertText.IsEmpty() ? TEXT("운영 · 필요한 설비 확인") : TEXT("비상 · 지게차 작업 중단")); })]
+						+SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)
+							+SHorizontalBox::Slot().FillWidth(1)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::TitleSize,true))
+						.ColorAndOpacity(WarehouseUIStyle::Warning).Text_Lambda([this]() { return FText::FromString(VisibleEmergencyAlertText.IsEmpty() ? TEXT("운영 · 필요한 설비 확인") : TEXT("비상 · 지게차 작업 중단")); })]
+							+SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(12,0)[SNew(STextBlock)
+								.Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
+								.Text(FText::FromString(TEXT("Alt: 커서")))]
+							+SHorizontalBox::Slot().AutoWidth()[SNew(SButton).IsFocusable(false).ContentPadding(FMargin(12,4))
+								.ToolTipText(FText::FromString(TEXT("현재 알림 닫기")))
+								.OnClicked_Lambda([this]() { DismissWarehouseAlert(); return FReply::Handled(); })
+								[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::TitleSize,true))
+									.ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(TEXT("×")))]]]
 						+SVerticalBox::Slot().AutoHeight().Padding(0,8)[SNew(STextBlock).Font(WarehouseUIStyle::Font())
-						.ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(780).Text_Lambda([this]() { return FText::FromString(EmergencyAlertText.IsEmpty() ? ResourceAlertText : EmergencyAlertText+TEXT("\n")+ResourceAlertText); })]
+						.ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(780).Text_Lambda([this]() { return FText::FromString(VisibleEmergencyAlertText.IsEmpty() ? VisibleResourceAlertText : VisibleEmergencyAlertText+TEXT("\n")+VisibleResourceAlertText); })]
 						+SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font())
-						.ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(780).Text_Lambda([this]() { return FText::FromString(EmergencyAlertText.IsEmpty() ? TEXT("중앙 컴퓨터에서 작업을 확인하거나 배치 모드에서 필요한 설비를 추가하세요.") : TEXT("주변 장애물을 제거하거나 G로 수동 탈출하세요. 해결 후 E로 재점검·재개합니다.")); })]]]];
+						.ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(780).Text_Lambda([this]() { return FText::FromString(VisibleEmergencyAlertText.IsEmpty() ? TEXT("중앙 컴퓨터에서 작업을 확인하거나 배치 모드에서 필요한 설비를 추가하세요.") : TEXT("주변 장애물을 제거하거나 G로 수동 탈출하세요. 해결 후 E로 재점검·재개합니다.")); })]]]];
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(EmergencyAlertWidget.ToSharedRef(),200);
 		auto Tools=SNew(SVerticalBox);
 		LayoutCanvas=SNew(SWarehouseLayoutCanvas).Layout(LayoutEditor).Controller(this)
@@ -535,6 +544,7 @@ void Amsc_vrPlayerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
 	InputComponent->BindKey(EKeys::F1,IE_Pressed,this,&Amsc_vrPlayerController::ToggleWarehouseMenu).bExecuteWhenPaused=true;
+	InputComponent->BindKey(EKeys::LeftAlt,IE_Pressed,this,&Amsc_vrPlayerController::ToggleWarehouseAlertCursor).bExecuteWhenPaused=true;
 	InputComponent->BindKey(EKeys::Escape,IE_Pressed,this,&Amsc_vrPlayerController::ToggleWarehouseMenu).bExecuteWhenPaused=true;
 
 	// only add IMCs for local player controllers
@@ -569,14 +579,14 @@ bool Amsc_vrPlayerController::ShouldUseTouchControls() const
 
 void Amsc_vrPlayerController::UpdateInputMode()
 {
-	const bool Locked=IsWarehouseMenuOpen() || bObserverView;
+	const bool Locked=IsWarehouseMenuOpen() || bObserverView || bWarehouseAlertCursor;
 	if (Locked!=bWarehouseInputLocked)
 	{
 		SetIgnoreMoveInput(Locked); SetIgnoreLookInput(Locked);
 		bWarehouseInputLocked=Locked;
 		if (auto* PlayerCharacter=Cast<ACharacter>(GetPawn())) PlayerCharacter->GetCharacterMovement()->StopMovementImmediately();
 	}
-	bShowMouseCursor=IsWarehouseMenuOpen() || bObserverView;
+	bShowMouseCursor=IsWarehouseMenuOpen() || bObserverView || bWarehouseAlertCursor;
 	if (IsMainMenu() && PlayWidget.IsValid())
 	{
 		FInputModeUIOnly Mode;SetInputMode(Mode);
@@ -589,7 +599,7 @@ void Amsc_vrPlayerController::UpdateInputMode()
 	{
 		FInputModeUIOnly Mode;Mode.SetWidgetToFocus(ComputerWidget);SetInputMode(Mode);
 	}
-	else if (MenuWidget.IsValid() || bObserverView)
+	else if (MenuWidget.IsValid() || bObserverView || bWarehouseAlertCursor)
 	{
 		FInputModeGameAndUI Mode;
 		Mode.SetHideCursorDuringCapture(false);
@@ -1128,6 +1138,22 @@ void Amsc_vrPlayerController::EndPlay(const EEndPlayReason::Type Reason)
 	Super::EndPlay(Reason);
 }
 
+void Amsc_vrPlayerController::DismissWarehouseAlert()
+{
+ DismissedAlertKeys.Append(ActiveAlertKeys);
+ VisibleEmergencyAlertText.Empty(); VisibleResourceAlertText.Empty();
+ EmergencyAlarmElapsed=0;
+ if (EmergencyAudio) EmergencyAudio->Stop();
+ if (bWarehouseAlertCursor) { bWarehouseAlertCursor=false; UpdateInputMode(); }
+}
+
+void Amsc_vrPlayerController::ToggleWarehouseAlertCursor()
+{
+ if (!IsWarehouseAlertVisible() && !bWarehouseAlertCursor) return;
+ bWarehouseAlertCursor=!bWarehouseAlertCursor;
+ UpdateInputMode();
+}
+
 void Amsc_vrPlayerController::UpdateEmergencyAlerts(float Dt)
 {
  if (!IsLocalPlayerController()) return;
@@ -1136,29 +1162,49 @@ void Amsc_vrPlayerController::UpdateEmergencyAlerts(float Dt)
  if (EmergencyPollElapsed>=.25f)
  {
   EmergencyPollElapsed=0;
-  TArray<FString> Notices;
-  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) if (It->bEmergencyBlocked)
+  TSet<FString> CurrentKeys;
+  TArray<FString> Notices, Resources, VisibleNotices, VisibleResources;
+  const bool HadVisibleEmergency=!VisibleEmergencyAlertText.IsEmpty();
+  auto AddNotice=[&](const FString& Key,const FString& Text,TArray<FString>& All,TArray<FString>& Visible)
   {
-   const float Distance=GetPawn() ? FVector::Dist(GetPawn()->GetActorLocation(),It->GetActorLocation())*.01f : 0.f;
-   const FString Job=It->ActiveJob.JobId.IsEmpty() ? FString() :
-    FString::Printf(TEXT(" · %s 작업 #%s"),It->ActiveJob.SourceSystem==TEXT("FMS-COMPUTER") ? TEXT("출고") : TEXT("운반"),*It->ActiveJob.JobId.Right(6));
-   Notices.Add(FString::Printf(TEXT("%s%s · 거리 %.0fm\n%s"),*It->VehicleName,*Job,Distance,*It->EmergencyReason));
-  }
-  if (EmergencyAlertText.IsEmpty() && !Notices.IsEmpty()) EmergencyAlarmElapsed=6.f;
-  EmergencyAlertText=FString::Join(Notices,TEXT("\n\n"));
-  TArray<FString> Resources;
+   CurrentKeys.Add(Key); All.Add(Text);
+   if (!DismissedAlertKeys.Contains(Key)) Visible.Add(Text);
+  };
   for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
-   if (!It->LastErrorMessage.IsEmpty()) Resources.Add(It->VehicleName+TEXT(": ")+It->LastErrorMessage);
+  {
+   if (It->bEmergencyBlocked)
+   {
+    const float Distance=GetPawn() ? FVector::Dist(GetPawn()->GetActorLocation(),It->GetActorLocation())*.01f : 0.f;
+    const FString Job=It->ActiveJob.JobId.IsEmpty() ? FString() :
+     FString::Printf(TEXT(" · %s 작업 #%s"),It->ActiveJob.SourceSystem==TEXT("FMS-COMPUTER") ? TEXT("출고") : TEXT("운반"),*It->ActiveJob.JobId.Right(6));
+    // Identity excludes distance: walking away must not reopen an acknowledged alert.
+    AddNotice(It->GetPathName()+TEXT("|Emergency|")+It->ActiveJob.JobId+TEXT("|")+It->EmergencyReason,
+     FString::Printf(TEXT("%s%s · 거리 %.0fm\n%s"),*It->VehicleName,*Job,Distance,*It->EmergencyReason),Notices,VisibleNotices);
+   }
+   if (!It->LastErrorMessage.IsEmpty())
+    AddNotice(It->GetPathName()+TEXT("|Error|")+It->ActiveJob.JobId+TEXT("|")+It->LastErrorMessage,
+     It->VehicleName+TEXT(": ")+It->LastErrorMessage,Resources,VisibleResources);
+  }
   for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It)
-   if (It->LastWorkAlertUntil>=GetWorld()->GetTimeSeconds() && !It->LastWorkAlert.IsEmpty()) Resources.Add(It->LastWorkAlert);
+   if (It->LastWorkAlertUntil>=GetWorld()->GetTimeSeconds() && !It->LastWorkAlert.IsEmpty())
+    AddNotice(FString::Printf(TEXT("%s|Work|%.9f|%s"),*It->GetPathName(),It->LastWorkAlertUntil,*It->LastWorkAlert),
+     It->LastWorkAlert,Resources,VisibleResources);
+  for (auto It=DismissedAlertKeys.CreateIterator();It;++It) if (!CurrentKeys.Contains(*It)) It.RemoveCurrent();
+  ActiveAlertKeys=MoveTemp(CurrentKeys);
+  // Preserve raw diagnostics for the computer/dashboard; dismissal only affects this HUD.
+  EmergencyAlertText=FString::Join(Notices,TEXT("\n\n"));
   ResourceAlertText=FString::Join(Resources,TEXT("\n"));
-  if (Notices.IsEmpty())
+  VisibleEmergencyAlertText=FString::Join(VisibleNotices,TEXT("\n\n"));
+  VisibleResourceAlertText=FString::Join(VisibleResources,TEXT("\n"));
+  if (!HadVisibleEmergency && !VisibleNotices.IsEmpty()) EmergencyAlarmElapsed=6.f;
+  if (VisibleNotices.IsEmpty())
   {
    EmergencyAlarmElapsed=0;
    if (EmergencyAudio) EmergencyAudio->Stop();
   }
+  if (!IsWarehouseAlertVisible() && bWarehouseAlertCursor) { bWarehouseAlertCursor=false; UpdateInputMode(); }
  }
- if (!EmergencyAlertText.IsEmpty() && EmergencyAlarmElapsed>=6.f) PlayEmergencyAlarm();
+ if (!VisibleEmergencyAlertText.IsEmpty() && EmergencyAlarmElapsed>=6.f) PlayEmergencyAlarm();
 }
 
 void Amsc_vrPlayerController::PlayEmergencyAlarm()

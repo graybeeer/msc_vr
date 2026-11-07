@@ -86,9 +86,12 @@ bool AWarehousePallet::CanEngage(const FTransform& Frame) const
 {
  if (auto* Strength=AWarehouseDamageSystem::Find(this); Strength && Strength->HasFailed(const_cast<AWarehousePallet*>(this))) return false;
  if (!Frame.GetScale3D().Equals(FVector::OneVector, .001f) || !GetActorScale3D().Equals(FVector::OneVector, .001f)) return false;
- if (FVector::DotProduct(Frame.GetUnitAxis(EAxis::X), GetActorForwardVector()) < FMath::Cos(FMath::DegreesToRadians(2.f)) ||
+ const FVector Direction=GetActorTransform().InverseTransformVectorNoScale(Frame.GetUnitAxis(EAxis::X));
+ const int32 Quarter=FMath::RoundToInt(FMath::Atan2(Direction.Y,Direction.X)/(PI*.5f));
+ const FTransform Entry=FTransform(FRotator(0,Quarter*90.f,0))*GetActorTransform();
+ if (FVector::DotProduct(Frame.GetUnitAxis(EAxis::X), Entry.GetUnitAxis(EAxis::X)) < FMath::Cos(FMath::DegreesToRadians(2.f)) ||
      FVector::DotProduct(Frame.GetUnitAxis(EAxis::Z), GetActorUpVector()) < FMath::Cos(FMath::DegreesToRadians(1.f))) return false;
- auto Local = [&](FVector P) { return GetActorTransform().InverseTransformPosition(Frame.TransformPosition(P)); };
+ auto Local = [&](FVector P) { return Entry.InverseTransformPosition(Frame.TransformPosition(P)); };
  for (float Side : {-1.f, 1.f})
  {
   if (Local(FVector(0,Side*25,6.5)).X > -55 || Local(FVector(115,Side*25,6.5)).X < 40 || Local(FVector(115,Side*25,6.5)).X > 55.25) return false;

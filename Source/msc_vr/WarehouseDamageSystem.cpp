@@ -19,6 +19,11 @@ CSV_DEFINE_CATEGORY(Warehouse,true);
 #include "PhysicsEngine/BodyInstance.h"
 #include "HAL/IConsoleManager.h"
 
+static TAutoConsoleVariable<float> CVarVehicleRecoveryRate(TEXT("Warehouse.Damage.VehicleRecoveryRate"),.0025f,
+ TEXT("Forklift damage recovery per simulation second, stopping at 50 percent. Failure flags are never repaired."));
+static TAutoConsoleVariable<float> CVarVehicleRecoveryDelay(TEXT("Warehouse.Damage.VehicleRecoveryDelay"),10.f,
+ TEXT("Simulation seconds without new damage before forklift recovery starts."));
+
 static TAutoConsoleVariable<int32> CVarWarehouseSupportSharing(TEXT("Warehouse.SupportSnapshotSharing"),1,
  TEXT("Share the current 10Hz support snapshot between periodic readers; 0 reproduces legacy refreshes."));
 static TAutoConsoleVariable<int32> CVarWarehouseSupportRelationCache(TEXT("Warehouse.SupportRelationCache"),1,
@@ -479,15 +484,28 @@ void AWarehouseDamageSystem::AdvanceStrength(float Seconds)
  for (int32 I=0; I<Objects.Num(); ++I)
  {
   auto& Spec=Objects[I];
-  if (Spec.bFailed || Spec.Members.ContainsByPredicate([](AActor* A) { return IsValid(A) && A->ActorHasTag(TEXT("LogisticsInTransit")); })) continue;
+  if (Spec.Members.ContainsByPredicate([](AActor* A) { return IsValid(A) && A->ActorHasTag(TEXT("LogisticsInTransit")); })) continue;
   const float Capacity=FMath::Max(1.f,Spec.RatedLoadKg)*(1.f-.5f*Spec.Damage);
   float Ratio=Spec.SupportedKg/Capacity;
   if (Spec.LevelCapacityKg>0) Ratio=FMath::Max(Ratio,Spec.PeakLevelKg/(Spec.LevelCapacityKg*(1.f-.5f*Spec.Damage)));
+  const double Now=GetWorld()->GetTimeSeconds();
+  if (Spec.LastDamageSeconds<0) Spec.LastDamageSeconds=Now;
   if (Ratio>1.f)
   {
+   Spec.LastDamageSeconds=Now;
+   if (Spec.bFailed) continue;
    Spec.Damage=FMath::Clamp(Spec.Damage+FMath::Square(Ratio-1.f)*Dt/FMath::Max(.1f,Spec.OverloadSeconds),0.f,1.f);
    ShowDamage(I);
    if (Spec.Damage>=1.f) Fail(I);
+  }
+  else if (Spec.Damage>.5f && Spec.Failure==EWarehouseFailure::Machine &&
+      Now-Spec.LastDamageSeconds>=FMath::Max(0.f,CVarVehicleRecoveryDelay.GetValueOnGameThread()) &&
+      Spec.Members.ContainsByPredicate([](AActor* A) { return IsValid(A) && A->IsA<AWarehouseForklift>(); }))
+  {
+   const double ActiveSeconds=FMath::Min(double(Seconds),FMath::Max(0.,Now-Spec.LastDamageSeconds-
+    FMath::Max(0.f,CVarVehicleRecoveryDelay.GetValueOnGameThread())));
+   Spec.Damage=FMath::Max(.5f,Spec.Damage-FMath::Max(0.f,CVarVehicleRecoveryRate.GetValueOnGameThread())*ActiveSeconds);
+   ShowDamage(I);
   }
  }
 }
@@ -497,10 +515,12 @@ void AWarehouseDamageSystem::ApplyImpact(AActor* Object,float EnergyJ)
  if (!FMath::IsFinite(EnergyJ) || EnergyJ<=0) return;
  if (!bInitialized) InitializeStrength();
  const int32 I=IndexOf(Object);
- if (I==INDEX_NONE || Objects[I].bFailed) return;
+ if (I==INDEX_NONE) return;
  auto& Spec=Objects[I];
  const float Yield=FMath::Max(1.f,Spec.ImpactYieldJ);
  if (EnergyJ<=Yield) return;
+ Spec.LastDamageSeconds=GetWorld()->GetTimeSeconds();
+ if (Spec.bFailed) return;
  Spec.Damage=FMath::Clamp(Spec.Damage+(EnergyJ-Yield)/FMath::Max(1.f,Spec.ImpactFailureJ-Yield),0.f,1.f);
  ShowDamage(I);
  if (Spec.Damage>=1.f) Fail(I);
@@ -510,7 +530,7 @@ void AWarehouseDamageSystem::RepairMachine(AActor* Object)
  if (!bInitialized) InitializeStrength();
  const int32 I=IndexOf(Object);
  if (I==INDEX_NONE || Objects[I].Failure!=EWarehouseFailure::Machine) return;
- auto& Spec=Objects[I];Spec.Damage=0;Spec.bFailed=false;
+ auto& Spec=Objects[I];Spec.Damage=0;Spec.bFailed=false;Spec.LastDamageSeconds=GetWorld()->GetTimeSeconds();
  if (Labels.IsValidIndex(I) && Labels[I]) Labels[I]->SetText(FText::GetEmpty());
  for (auto& Entry:PrePhysicsMotion)
   if (auto* Part=Entry.Key.Get();Part && Part->GetOwner()==Object) Entry.Value=ReadMotion(Part);

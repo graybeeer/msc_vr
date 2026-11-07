@@ -30,6 +30,14 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 
 | 요청 유형 | 먼저 확인할 곳 | 필요할 때만 넓힐 곳 |
 | --- | --- | --- |
+| 상단 오류·비상 알림 닫기·커서·재알림 | `msc_vrPlayerController::UpdateEmergencyAlerts`/`DismissWarehouseAlert`/`ToggleWarehouseAlertCursor`, `Scripts/verify_alert_dismiss_pie.py` | 관제용 원본 오류는 유지하고 HUD 확인 상태만 분리한다. 원격 커서 중 입력 보류는 `msc_vrCharacter::UpdateRemoteControl`, 사용법·검증은 `WAREHOUSE.md` |
+| 랙 삽입 중 이웃 팔레트 접촉·상자 돌출·하역 공간 확인 | `WarehouseForkliftAI::DestinationClear`/`RackLoadAligned`/`FloorBase`, `WarehouseForkliftPerception::UpdateSensorSnapshot`/`PerceivedMotionClear`, `Scripts/verify_rack_neighbor_insertion_pie.py` | 카메라로 실제 확인한 표준 팔레트 모델의 스냅샷과 운반물 전체 외곽 검사. `-RackCase=normal/intrusion/oversize -RackLevel=20/140 -RackRun=name`; 승강기 없는 바닥 기준과 상한 정착·검증은 `AUTONOMY.md` |
+| 동승자가 가만히 있어도 지게차 먼저 하차·경로 방해 시 정지 | `WarehouseElevator::CanExit`/`GetExitPassengers`, `WarehouseForklift::ClearToMove`, `Scripts/verify_elevator_passenger_exit_pie.py` | 목적층에서 문/정렬/예약이 유효한 직선 후진 하차만 동승자에 대한 넓은 사람 영역을 제외한다. 실제 관측된 사람에 대한 부품/화물 이동 범위 검사는 유지. 기준·검증은 `MEZZANINE.md` |
+| 상단 랙 팔레트 감지·리프트 높이 거부 원인 조사 | `WarehouseForkliftAI`의 `ValidateJob`/`CorrectFork`/`LiftLoad`, `Scripts/diagnose_upper_rack_pickup_pie.py` | 기존10부품 랙과 차량의 실제 운반 및 높이를 바꾼 대조 검사. `-UpperShelfHeight=140.1/143.1 -UpperShelfRun=name`; 결과는 `Saved/Testing/UpperRackPickup_20261105/`, 센서 경계와 현재 제한은 `AUTONOMY.md` |
+| 짧은 수동 A/D 제자리 회전 응답·좌우 지속 회전 | `WarehouseForkliftPhysics::UpdatePhysicalRig`, `Scripts/verify_remote_drive_continuity_pie.py` | `-RemotePivotPulse`는0.5초 입력, `-RemotePivotOnly`는좌우8초 입력, `-RemoteRun=name`으로 보존. 실제 강체·조향/제동 검사이며 OS 키 검사와 구분. 기준은 `AUTONOMY.md` |
+| 지게차 손상도 자연 회복·50% 하한·재충격 대기 | `WarehouseDamageSystem::AdvanceStrength`/`ApplyImpact`, `Scripts/verify_vehicle_damage_recovery_pie.py` | 차량 손상 수치만 회복하며 고장/관절은 E 수리로 복구. 설정·검증은 `PHYSICS.md` |
+| 팔레트 앞뒤·좌우 진입·접근면 선택·적재 방향 유지 | `WarehousePallet::CanEngage`/`GetSupportLiftOffset`, `WarehouseForkliftAI::PalletApproach`/`PlanPickupApproach`/`PlanDeliveryApproach`/`RackApproachClear`, `WarehouseForklift::PalletOnForks`, `Scripts/verify_four_way_pallet_pie.py` | 기존 `SM_Pallet_110` 실제 옆면 구멍은 `build_four_way_pallet.py`/`configure_four_way_pallet.py`로 편집·검증. 랙 양방향 왕복은 `verify_rack_neighbor_insertion_pie.py -RackSide=front/back -RackRoundTrip`. 기준은 `AUTONOMY.md`, 물리·출처는 `PHYSICS.md`/`RUNTIME_ASSETS.md` |
+| 출차 트럭 뒷문 닫힘·재접안 시 열림 | `WarehouseLogisticsTruck::Depart`/`SetRearDoorsClosed`, `Scripts/configure_truck_departure_doors.py`, `Scripts/verify_truck_departure_doors_pie.py` | 기존 문·잠금장치 8부품의 닫힘 자세를 차량별 데이터로 저장. `configure_shipping_system.py` 재생성도 같은 설정 사용. 운영 기준은 `TRUCK_LOGISTICS_DESIGN.md` |
 | 고장 차량 E 수리·처음 위치 복귀·부품/관절 복원 | `WarehouseForkliftWorkControl::RepairAndReset`/`RepairPlacementClear`/`GetInteractionText`, `WarehouseForkliftPhysics::CaptureRepairPose`, `Scripts/verify_forklift_repair_pie.py` | 선택·E 연결은 `msc_vrCharacter`/`msc_vrPlayerController`, 차량 손상만 `WarehouseDamageSystem::RepairMachine`, 승강기 예약 해제는 `WarehouseElevator::ReleaseRecoveredVehicle`. 정책·검증은 `AUTONOMY.md`, 조작은 `WAREHOUSE.md` |
 | 하중별 위치 추정 신뢰도·LiDAR 보정과 오차 비교 | `AgvForkliftLocalizer::StepOdometry`/`CollectAndMatchScan`, `Scripts/verify_load_aware_localization_pie.py` | `Warehouse.Localization.LoadAware`로 실제 지지 하중의 반영을 비교. `-LoadAwareModes=0,1 -WorkLoads=50,200,500 -BenchRepeats=2 -LoadRun=name`; 실제 바퀴 거리·물리·센서 주기·원격 제외 유지. 기준·검증은 `AUTONOMY.md`, 결과는 `Saved/Testing/LoadAwareLocalization_20261103/` |
 | Hybrid A* 경로·기존 차선 대체·관측 장애물 기억 | `Agv/AgvHybridPlanner.cpp`, `WarehouseForkliftNavQuery.h`, `WarehouseForkliftAI::TryPlanAutonomousRoute`/`BenchRoutePlan`, `WarehouseFleetCoordinator::SeenObstacles` | `Warehouse.Nav.HybridPlanner`로 비교하며 고정 지도·실제 관측·관제 최근 관측만 사용. 작업 지시는 미관측 물류의 실제 충돌 형상을 제공하지 않는다. 병합 경계·검증은 `AUTONOMY.md` |
@@ -197,6 +205,7 @@ msc_vr/
     build_column_protectors.py
     build_conveyor_model.py
     build_first_person_warehouse.py
+    build_four_way_pallet.py
     build_orange_agv.py
     build_pallet_lift.py
     build_warehouse_exterior.py
@@ -214,6 +223,7 @@ msc_vr/
     configure_empty_storage.py
     configure_fleet_corridors.py
     configure_forklift_autonomy.py
+    configure_four_way_pallet.py
     configure_game_animation_sample.py
     configure_heavy_test_cargo.py
     configure_inbound_area.py
@@ -222,6 +232,7 @@ msc_vr/
     configure_observer_view.py
     configure_sensor_structure_tags.py
     configure_shipping_system.py
+    configure_truck_departure_doors.py
     configure_truck_interior.py
     configure_unified_racks.py
     configure_warehouse_computer.py
@@ -233,6 +244,7 @@ msc_vr/
     convert_agv_original5_cm.py
     convert_agv_refined_cm.py
     diagnose_pickup_approach_pie.py
+    diagnose_upper_rack_pickup_pie.py
     download_cargo_assets.ps1
     expand_large_cargo.py
     export_agv_charger.py
@@ -283,6 +295,7 @@ msc_vr/
     verify_agv_safety_pie.py
     verify_agv_warehouse.py
     verify_agv_warehouse_pie.py
+    verify_alert_dismiss_pie.py
     verify_arcade_carry_placement_pie.py
     verify_arcade_player_pie.py
     verify_area_labels_pie.py
@@ -310,6 +323,7 @@ msc_vr/
     verify_dynamic_forklift_transfer_pie.py
     verify_dynamic_warehouse_startup.py
     verify_elevator_model_layout_pie.py
+    verify_elevator_passenger_exit_pie.py
     verify_elevator_route_visuals_pie.py
     verify_empty_storage_pie.py
     verify_estimated_navigation_pie.py
@@ -328,6 +342,7 @@ msc_vr/
     verify_forklift_sensors_pie.py
     verify_forklift_training.py
     verify_forklift_work_control_pie.py
+    verify_four_way_pallet_pie.py
     verify_heavy_test_cargo_pie.py
     verify_human_elevator_pie.py
     verify_human_landing_pie.py
@@ -358,6 +373,7 @@ msc_vr/
     verify_orange_agv_export.py
     verify_pickup_reposition_pie.py
     verify_prediction_interval_pie.py
+    verify_rack_neighbor_insertion_pie.py
     verify_real_world_scale.py
     verify_receiving_inspection_pie.py
     verify_refined_agv.py
@@ -378,9 +394,11 @@ msc_vr/
     verify_support_snapshot_pie.py
     verify_transport_benchmark_pie.py
     verify_transport_visuals_pie.py
+    verify_truck_departure_doors_pie.py
     verify_truck_driver_pie.py
     verify_truck_interior_pie.py
     verify_two_hand_carry.py
+    verify_vehicle_damage_recovery_pie.py
     verify_view_and_wheel_fixes_pie.py
     verify_warehouse_computer_pie.py
     verify_warehouse_contact_physics.py

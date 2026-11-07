@@ -54,7 +54,7 @@ public:
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Load", meta=(ClampMin="1")) float PalletMassKg = 25;
  UFUNCTION(BlueprintCallable, Category="Training")
  bool CanEngage(const FTransform& ForkFrame) const;
- float GetSupportLiftOffset(const FTransform& ForkFrame) const;
+ UFUNCTION(BlueprintPure, Category="Training") float GetSupportLiftOffset(const FTransform& ForkFrame) const;
  UFUNCTION(BlueprintCallable, Category="Training")
  static void FitCollisionBounds(class UStaticMesh* Mesh);
 private:

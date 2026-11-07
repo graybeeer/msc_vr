@@ -885,6 +885,13 @@ bool AWarehouseElevator::CanExit(AWarehouseForklift* Vehicle) const
  return ReservedVehicle==Vehicle && IsValid(Vehicle) && bBoarded && State==EWarehouseElevatorState::AwaitExit &&
   CurrentFloor==VehicleDestinationFloor && ActualDoorOpening()>=124 && FMath::Abs(PlatformHeight-VehicleDestinationFloor*400)<1.f && CheckInterlocks().IsEmpty();
 }
+TArray<AActor*> AWarehouseElevator::GetExitPassengers(AWarehouseForklift* Vehicle) const
+{
+ TArray<AActor*> Passengers;
+ if (CanExit(Vehicle)) for (const auto& Passenger:HumanPayload)
+  if (Passenger.IsValid() && Passenger->IsA<ACharacter>()) Passengers.Add(Passenger.Get());
+ return Passengers;
+}
 bool AWarehouseElevator::TraceCertifiedPlatformSupport(AWarehouseForklift* Vehicle,FVector Point,FHitResult& Support) const
 {
  // The existing PLC handshake certifies this vehicle, this floor, a stationary

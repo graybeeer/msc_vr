@@ -262,13 +262,14 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  if (!bPowered || bMechanicalFailure || !bEStopReleased || !bBrakeHealthy) BrakeDrive();
  const float Wheelbase=FMath::Abs((-74.f+7.f)*(215.f/282.55f));
  const bool Turning=!FMath::IsNearlyZero(DesiredTurnRate);
+ const bool ManualPivot=Turning && IsRemoteControlled();
  // Hold the tyre sideways and reverse its rolling direction to reverse yaw.
  // Slewing steering by 180 degrees for each tiny correction scrubbed the
  // chassis away from the alignment pose and delayed the next correction.
  const float RequestedSteering=Turning ? -PI*.5f : -FMath::Atan(Wheelbase*DesiredCurvature);
  // A stop holds the steering position instead of straightening a rolling tyre.
  if (bSteeringHealthy && (Turning || !FMath::IsNearlyZero(DesiredDriveSpeed)))
-  SteeringAngle=FMath::FInterpConstantTo(SteeringAngle,RequestedSteering,Dt,FMath::DegreesToRadians(120.f));
+  SteeringAngle=FMath::FInterpConstantTo(SteeringAngle,RequestedSteering,Dt,FMath::DegreesToRadians(ManualPivot ? 720.f : 120.f));
  auto* Drive=Wheels[0].Get();
  const FVector Axle=Drive->GetRightVector();
  const float Spin=FVector::DotProduct(Drive->GetPhysicsAngularVelocityInRadians()-ChassisBody->GetPhysicsAngularVelocityInRadians(),Axle);
@@ -276,6 +277,14 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  // The tyre's forward vector spins through vertical every revolution. Its
  // axle stays perpendicular to the rolling plane and measures steering only.
  const float ActualSteering=FMath::Atan2(-FVector::DotProduct(Axle,GetActorForwardVector()),FVector::DotProduct(Axle,GetActorRightVector()));
+ // A short manual A/D press must not expire during the old 0.75s steering
+ // ramp. Respond faster with the existing finite 500Nm spindle motor; keep
+ // real axle readiness, tyre contacts and release braking. Autonomy is unchanged.
+ const float SteeringStiffness=ManualPivot ? 40000000.f : 20000000.f;
+ float CurrentStiffness,CurrentDamping,CurrentLimit;
+ SteeringJoint->ConstraintInstance.GetAngularDriveParams(CurrentStiffness,CurrentDamping,CurrentLimit);
+ if (CurrentStiffness!=SteeringStiffness)
+  SteeringJoint->SetAngularDriveParams(SteeringStiffness,2000000.f,5000000.f);
  SteeringJoint->SetAngularOrientationTarget(FRotator(0,0,FMath::RadiansToDegrees(SteeringAngle)));
  if (FMath::Abs(FMath::FindDeltaAngleRadians(ActualSteering,SteeringAngle))>.01f) SteeringBody->WakeAllRigidBodies();
  const float SteeringError=FMath::Abs(FMath::FindDeltaAngleRadians(ActualSteering,RequestedSteering));

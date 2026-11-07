@@ -191,6 +191,7 @@ private:
  bool bObservedTargetValid=false;
  bool bHasRecognizedTargetPose=false;
  FTransform SensorObservedTarget;
+ TMap<TWeakObjectPtr<AActor>,FTransform> SensorObservedPalletModels;
  TMap<FString,FTransform> WorkOrderSourcePoses;
  void UpdateSensorSnapshot();
  void InvalidateSensorSnapshot(const FString& Reason);
@@ -296,8 +297,12 @@ private:
  bool PalletOnForks() const;
  float LostSupportSeconds = 0;
  float LiftInitialHeight=0,LiftProgressHeight=0,LiftProgressAt=0;
- FTransform PalletApproach(const FTransform& PalletPose,float Distance) const;
+ FTransform PalletApproach(const FTransform& PalletPose,float Distance,bool Pickup=false) const;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Autonomy",meta=(AllowPrivateAccess="true")) int32 PickupEntryQuarterTurns=0;
  bool PlanPickupApproach();
+ bool PlanDeliveryApproach();
+ bool RackApproachClear(const FTransform& PalletPose,bool Pickup) const;
+ int32 RackDeliveryQuarterTurns=0;
  float PickupApproachDistanceCm=220.f;
  EWarehouseAIState ResumeAI = EWarehouseAIState::Ready;
  EWarehouseAIState WaitResumeAI = EWarehouseAIState::Ready;

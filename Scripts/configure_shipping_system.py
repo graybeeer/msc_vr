@@ -87,6 +87,8 @@ def configure():
         truck.set_editor_property('truck_id', f'TRUCK-{index:02}')
         truck.set_editor_property('dock_id', f'DOCK-{index:02}')
         truck.set_editor_property('truck_parts', parts)
+        from configure_truck_departure_doors import configure_truck
+        assert configure_truck(truck) == 8, truck.get_actor_label()
         truck.set_editor_property('dock_anchor', dock)
         truck.set_editor_property('load_slots', slots)
         truck.set_editor_property('load_slot_size_cm', unreal.Vector(111, 111, roof_low.z-high.z-.3))

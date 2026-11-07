@@ -4,6 +4,14 @@
 
 이 문서는 배송편 명세, 입출고 인계 조건, 트럭 상하차와 출발을 담당한다. 화면 조작과 현재 외형은 [WAREHOUSE.md](WAREHOUSE.md), 외부 에셋 설치는 [TEAM_ASSETS.md](TEAM_ASSETS.md), 창고 자율 운반은 [AUTONOMY.md](AUTONOMY.md), 상품 생성은 [CARGO_RULES.md](CARGO_RULES.md)를 따른다.
 
+## 트럭 뒷문 출차 연출 (2026-11-04)
+
+입고·출고가 공유하는 `WarehouseLogisticsTruck::Depart`가 출차 조건을 모두 확인한 뒤 트럭 뒷문을 즉시 닫고 출발한다. 문짝·잠금장치·테두리8부품의 차량 기준 닫힘 자세는 `RearDoors` 데이터로 지정하며 닫힌 자세를 출차/재진입 내내 유지한다. 다음 방문의 도크 도착 시 최초의 열린 자세를 복원한다. 도크 문 논리 신호와 트럭 뒷문 모델 상태 `bRearDoorsClosed`는 구분한다. 별도의 문 회전 애니메이션이나 안전 감지 장치는 추가하지 않는다.
+
+기존 세 트럭은 `Scripts/configure_truck_departure_doors.py`로 설정하며 배송편 재생성 스크립트도 같은 함수를 사용한다. 새 메시나 외부 에셋은 추가하지 않는다.
+
+2026-11-04 최종 Editor 빌드와 `Scripts/verify_truck_departure_doors_pie.py` 검사를 통과했다. 저장된 실제 트럭3대(6팔레트·279.9kg 적재 차량 포함)에 출차 준비·출발 API를 호출해 이동 전 문8부품 닫힘, 출차 중 차체와의 상대 자세 유지, 다음 방문 복귀 후 원래 열린 자세·도크 준비 가능 상태 복원을 확인했다. 결과는 `Saved/Testing/TruckDepartureDoors_20261104/Report.json`, 빌드는 `FinalBuild.log`다. 원본 맵은 설정 적용 때만 저장했고 PIE 검사는 저장하지 않았다. NullRHI native API 검사이며 화면 픽셀·실제 문 힌지 물리·입출고 배송편 전체 절차를 새로 검증한 결과는 아니다.
+
 ## 구현 범위
 
 | 구분 | 현재 코드의 범위 | 남은 계획 |
