@@ -488,9 +488,13 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 				Pickup.Add(SensorObservedTarget);
 			}
 		}
+		// The goal pose already passed the native check above, which knows the job's destination slot (an outbound slot holds empty pallets).
+		// Remembered points there and on the last straight run into it must not overrule that check.
+		const double TailBack = FVector::Dist2D(Goal.GetLocation(), FinalGoal.GetLocation());
+		const FBox2D GoalBox(FVector2D(Query.Envelope.Min) - FVector2D(80.0 + TailBack, 50.0), FVector2D(Query.Envelope.Max) + FVector2D(80.0, 50.0));
 		for (const FVector2D& Point : Candidates)
 		{
-			bool bSkip = false;
+			bool bSkip = GoalBox.IsInside(FVector2D(FinalGoal.InverseTransformPositionNoScale(FVector(Point, FinalGoal.GetLocation().Z))));
 			for (const FBox2D& Box : Skip)
 			{
 				bSkip |= Box.IsInside(Point);
