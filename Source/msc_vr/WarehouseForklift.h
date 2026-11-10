@@ -211,6 +211,8 @@ private:
  // Valid only within one synchronous game-thread PlanAutonomousRoute call.
  TOptional<bool> PlanningSensorReadiness;
  bool bObservedPickupEscape=false;
+ // The escape was granted because the truck already stood box-blocked, far from the pallet.
+ bool bObservedEscapeFromStart=false;
  bool bEndpointDriving=false,bEndpointOrienting=false,bRouteTurning=false;
  int32 EndpointSegment=-1; int32 EndpointCorrections=0;
  FBox NavigationEnvelope() const;

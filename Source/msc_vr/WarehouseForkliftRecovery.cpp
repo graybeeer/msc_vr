@@ -41,7 +41,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
 {
  BrakeDrive();
  if (IsRemoteControlled() || IsRecovering()) return false;
- bObservedPickupEscape=false;
+ bObservedPickupEscape=false;bObservedEscapeFromStart=false;
  if (bFloorTransfer || (bSupportingPallet && LiftOffset>20.f))
  { RecoveryFault(TEXT("RECOVERY REQUIRES SAFE FLOOR / LOW LOAD - OPERATOR REQUIRED"),TEXT("승강기 또는 높은 적재 상태에서 자동 탈출할 수 없습니다.")); return false; }
  // A hybrid route is not tied to the lanes and can meet something the sensors could not see when it was planned.
@@ -87,8 +87,16 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
   // blindly towards the source. A catalog/envelope-only start overlap gets at
   // most 60cm of exact own-part checks from this fixed starting position.
   RecoveryStart=GetActorLocation();
-  bObservedPickupEscape=bHasRecognizedTargetPose && FVector::Dist2D(RecoveryStart,TaskSourcePose().GetLocation())<=260.f;
-  const bool CurrentFaceClear=!FailedPickupRoute && RackApproachClear(TaskSourcePose(),true);
+  // Far from the pallet too: a route can pass a floor pallet nobody had seen yet, and once the truck
+  // stands beside it the rectangular box already overlaps it, so every replan stopped at its first step.
+  const bool StartBoxBlocked=!NavigationClear(FTransform(FRotator(0,GetActorRotation().Yaw,0),GetActorLocation()));
+  bObservedPickupEscape=(bHasRecognizedTargetPose && FVector::Dist2D(RecoveryStart,TaskSourcePose().GetLocation())<=260.f) || StartBoxBlocked;
+  bObservedEscapeFromStart=StartBoxBlocked;
+  // Only a face judged at the pallet with a fresh scan is excluded: an obstacle met metres away on the
+  // route says nothing about the rack face, and a stale snapshot reads every part check as blocked.
+  const bool FaceJudgeable=AutonomousSensorsReady() &&
+   FVector::Dist2D(GetActorLocation(),PalletApproach(TaskSourcePose(),PickupApproachDistanceCm,true).GetLocation())<=400.f;
+  const bool CurrentFaceClear=!FailedPickupRoute && (!FaceJudgeable || RackApproachClear(TaskSourcePose(),true));
   if (!FailedPickupRoute && !CurrentFaceClear) BlockedPickupFaces|=1u<<PickupEntryQuarterTurns;
   const bool Found=CurrentFaceClear ? PlanPickupTravelTo(PalletApproach(TaskSourcePose(),PickupApproachDistanceCm,true),true) : PlanPickupApproach();
   if (Found)
@@ -101,7 +109,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
    bRouteStarted=true;
    return true;
   }
-  bObservedPickupEscape=false;
+  bObservedPickupEscape=false;bObservedEscapeFromStart=false;
  }
  if (RecoveryAttempts>=3 || (bRetryInsertion && ForkInsertionRetries>=3))
  { RecoveryFault(TEXT("RECOVERY LIMIT - CHECK PALLET / CLEAR SPACE"),TEXT("복구를 3회 시도했지만 이동·포크 삽입에 실패했습니다.")); return false; }

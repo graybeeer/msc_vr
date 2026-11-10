@@ -275,9 +275,11 @@ bool AWarehouseForklift::PlanPickupApproach()
   if ((BlockedPickupFaces & (1u<<Face))!=0) continue;
   PickupEntryQuarterTurns=Face;
   PickupApproachDistanceCm=220.f;
-  if (!RackApproachClear(Source,true)) continue;
+  const bool bRackClear=RackApproachClear(Source,true);
+  const bool DefaultClear=bRackClear && NavigationClear(PalletApproach(Source,220.f,true));
+  UE_LOG(LogTemp,Log,TEXT("AGV_ENTRY_CANDIDATE %s face=%d blocked_mark=%d rack_clear=%d standoff220_clear=%d"),*VehicleName,Face*90,(BlockedPickupFaces&(1u<<Face))!=0,bRackClear,DefaultClear);
+  if (!bRackClear) continue;
   int32 FaceSearches=0;
-  const bool DefaultClear=NavigationClear(PalletApproach(Source,220.f,true));
   for (float Distance:{220.f,185.f,260.f,320.f})
   {
    if (Distance!=220.f && DefaultClear) break;
@@ -314,8 +316,11 @@ bool AWarehouseForklift::PlanPickupTravelTo(const FTransform& Goal,bool TryDetou
  for (float Back=PickupStraightLengthCm;Back>=0;Back-=10.f)
  {
   const FTransform Pose(Goal.GetRotation(),Goal.GetLocation()-Axis*Back);
-  if (!PhysicalPoseClear(Pose,true)) return false;
-  if (FleetCoordinator && !FleetCoordinator->PlanningClear(this,Envelope.TransformBy(Pose.ToMatrixWithScale()))) return false;
+  if (!PhysicalPoseClear(Pose,true) || (FleetCoordinator && !FleetCoordinator->PlanningClear(this,Envelope.TransformBy(Pose.ToMatrixWithScale()))))
+  {
+   UE_LOG(LogTemp,Log,TEXT("AGV_PICKUP_STRAIGHT_BLOCKED %s face=%d standoff=%.0f at %.0f cm back of the approach"),*VehicleName,PickupEntryQuarterTurns*90,PickupApproachDistanceCm,Back);
+   return false;
+  }
   if (Back<PickupStraightLengthCm) Straight.Add({Pose,false,false});
  }
  // The empty forks fit this corridor, but the truck must also leave it loaded. Sweep the
@@ -336,7 +341,11 @@ bool AWarehouseForklift::PlanPickupTravelTo(const FTransform& Goal,bool TryDetou
    }
   }
  }
- if (!PlanAutonomousRoute(Lead) && !(TryDetour && PlanRecoveryDetour(Lead))) return false;
+ if (!PlanAutonomousRoute(Lead) && !(TryDetour && PlanRecoveryDetour(Lead)))
+ {
+  UE_LOG(LogTemp,Log,TEXT("AGV_PICKUP_STRAIGHT_NO_ROUTE %s face=%d standoff=%.0f lead=%s"),*VehicleName,PickupEntryQuarterTurns*90,PickupApproachDistanceCm,*Lead.GetLocation().ToCompactString());
+  return false;
+ }
  PlannedRoute.Add({Lead,false,true});
  PlannedRoute.Append(Straight);
  PickupStraightGoal=Goal;
@@ -483,7 +492,7 @@ FWarehouseNavigationQuery AWarehouseForklift::BuildNavigationQuery() const
 {
  FWarehouseNavigationQuery Query{FCollisionQueryParams(SCENE_QUERY_STAT(AGVNavigation),false,this),NavigationEnvelope(),FVector::ZeroVector,Wheels.Num()>=3};
  Query.bInsertionRetryEscape=bPlanningRoute && bRetryInsertion && ForkInsertionRetries>0 && AIState==EWarehouseAIState::AlignVehicle && !bSupportingPallet;
- Query.bObservedPickupEscape=bObservedPickupEscape && !bSupportingPallet && bHasRecognizedTargetPose &&
+ Query.bObservedPickupEscape=bObservedPickupEscape && !bSupportingPallet && (bHasRecognizedTargetPose || bObservedEscapeFromStart) &&
   (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::PlanPickup || AIState==EWarehouseAIState::RecoverReplan ||
    (AIState==EWarehouseAIState::WaitingObstacle && WaitResumeAI==EWarehouseAIState::NavigatePickup));
  Query.bPrecisionPickupEnd=!bSupportingPallet && IsValid(TargetPallet) && PickupApproachDistanceCm<220.f &&
@@ -1706,6 +1715,10 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
     *VehicleName,*ActiveJob.JobId,*TaskSourcePose().ToString(),*PalletApproach(TaskSourcePose(),220,true).ToString(),SensorMode==EWarehouseSensorMode::Autonomous,
     bObservedTargetValid,bObservedTargetValid ? *SensorObservedTarget.ToString() : TEXT("NONE"));
   if (BeginFloorTransfer(TaskSourcePose().GetLocation().Z,EWarehouseAIState::PlanPickup)) break;
+  // Entry faces are judged against the scan. Right after braking for a recovery the snapshot can be
+  // stale, and every part check then reads as blocked: wait briefly for a fresh scan instead.
+  if (SensorMode==EWarehouseSensorMode::Autonomous && !AutonomousSensorsReady() && AIElapsed<5.f)
+  { BrakeDrive();SetStatus(TEXT("WAIT FRESH SCAN - PLAN PICKUP"));break; }
   if (PlanPickupApproach())
   { Next(EWarehouseAIState::NavigatePickup,TEXT("NAVIGATION TO PICKUP")); bRouteStarted=true; }
   else StopFor(TEXT("OBSTACLE / NO PICKUP ROUTE"));
