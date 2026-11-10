@@ -125,7 +125,7 @@ void AWarehouseForklift::InvalidateSensorSnapshot(const FString& Reason)
  bObservedTargetValid=false;
  SensorObservedPalletModels.Reset();
  bHasRecognizedTargetPose=false;
- bObservedPickupEscape=false;
+ bObservedPickupEscape=false;bObservedEscapeFromStart=false;
  if (SensorKit) SensorKit->InvalidateSnapshot(Reason);
  if (SensorMode!=EWarehouseSensorMode::Autonomous) return;
  bMovementObstacleClear=bLiftObstacleClear=bRouteObstacleClear=bTurnObstacleClear=false;
