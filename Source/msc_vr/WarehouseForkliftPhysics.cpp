@@ -107,7 +107,7 @@ void AWarehouseForklift::InitializePhysicalRig()
   Constraint->ConstraintInstance.SetShockPropagationParams(false,0);
   Constraint->SetLinearXLimit(LCM_Locked,0); Constraint->SetLinearYLimit(LCM_Locked,0); Constraint->SetLinearZLimit(LCM_Locked,0);
   Constraint->SetAngularTwistLimit(ACM_Locked,0); Constraint->SetAngularSwing1Limit(ACM_Locked,0); Constraint->SetAngularSwing2Limit(ACM_Locked,0);
-  Constraint->SetLinearBreakable(true,25000000.f); Constraint->SetAngularBreakable(true,100000000.f);
+  Constraint->SetLinearBreakable(true,50000000.f); Constraint->SetAngularBreakable(true,200000000.f);
   Constraint->SetConstrainedComponents(Mount ? Mount : ChassisBody.Get(),NAME_None,Moving,NAME_None);
   return Constraint;
  };

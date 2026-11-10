@@ -514,10 +514,17 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 	FWarehouseNavigationQuery EscapeQuery = Query;
 	EscapeQuery.Envelope = Query.Envelope.ExpandBy(FVector(5.0 - Margin, 5.0 - Margin, 0.0));
 	const bool bStartBlocked = !NavigationClear(Start, &Query);
-	constexpr double EscapeCm = 90.0;
+	const bool bLoadedDeparture = bStartBlocked && bSupportingPallet &&
+		(AIState==EWarehouseAIState::PlanDelivery || AIState==EWarehouseAIState::NavigateDelivery);
+	constexpr double EscapeCm = FWarehouseRoutePoint::LoadedEscapeRadiusCm;
 	const auto FullyClear = [&](const FTransform& Pose)
 	{
 		const bool bEscape = bStartBlocked && FVector2D::DistSquared(FVector2D(Pose.GetLocation()), StartXY) < EscapeCm * EscapeCm;
+		if (bEscape && bLoadedDeparture)
+		{
+			return (!FleetCoordinator || FleetCoordinator->PlanningClear(this, Query.Envelope.TransformBy(Pose.ToMatrixWithScale()))) &&
+				PhysicalPoseClear(Pose, true);
+		}
 		// The tip of a fork that stopped beside something can stay inside even the reduced box while backing off: then the real parts decide.
 		return NavigationClear(Pose, bEscape ? &EscapeQuery : &Query) || (bEscape && PhysicalPoseClear(Pose, true));
 	};
@@ -941,5 +948,6 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 		return false;
 	}
 	OutRoute = MoveTemp(BestRoute);
+	if (bLoadedDeparture && !OutRoute.IsEmpty()) OutRoute[0].LoadedEscapeOrigin=Start.GetLocation();
 	return true;
 }

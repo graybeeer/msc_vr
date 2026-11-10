@@ -352,7 +352,24 @@ bool AWarehouseForklift::PlanDeliveryApproach()
 {
  RackDeliveryQuarterTurns=0;
  if (!ActiveJob.bRackDestination || ActiveJob.Destination.GetLocation().Z-FloorBase(ActiveJob.Destination.GetLocation().Z)<=5.f)
-  return PlanAutonomousRoute(PalletApproach(ActiveJob.Destination,220));
+ {
+  const bool Outbound=ActiveJob.SourceSystem==TEXT("FMS-COMPUTER");
+  if ((!Outbound || RackApproachClear(ActiveJob.Destination,false)) && PlanAutonomousRoute(PalletApproach(ActiveJob.Destination,220))) return true;
+  if (!Outbound) return false;
+  // The square floor reservation can take a quarter-turned load. Try the
+  // opposite entrance first, then the two sides if that aisle is blocked.
+  for (int32 Face : {2,1,3})
+  {
+   RackDeliveryQuarterTurns=Face;
+   if (RackApproachClear(ActiveJob.Destination,false) && PlanAutonomousRoute(PalletApproach(ActiveJob.Destination,220)))
+   {
+    ReportJob(TEXT("DELIVERY_ENTRY_SELECTED"),FString::Printf(TEXT("Alternative approach to the same outbound slot: %d degrees"),Face*90));
+    return true;
+   }
+  }
+  RackDeliveryQuarterTurns=0;
+  return false;
+ }
  const FTransform Start=NavigationTransform();
  TArray<int32> Faces{0,1,2,3};
  const float CarriedYaw=TargetPallet->GetActorTransform().GetRelativeTransform(GetActorTransform()).Rotator().Yaw;
@@ -466,7 +483,10 @@ bool AWarehouseForklift::NavigationClear(const FTransform& Pose,const FWarehouse
   StraightPickup=Local.X>=-PickupStraightLengthCm-10.f && Local.X<=3.f && FMath::Abs(Local.Y)<=7.f &&
    FMath::Abs(FMath::FindDeltaAngleDegrees(Guide.Rotator().Yaw,Pose.Rotator().Yaw))<=5.f;
  }
- const bool PhysicalEscape=BoxBlocked && (LegacyEscape || ObservedPickupEscape || PrecisionPickupEnd || StraightPickup) && PhysicalPoseClear(Pose,true);
+ const bool LoadedEscape=!bPlanningRoute && AIState==EWarehouseAIState::NavigateDelivery && bSupportingPallet &&
+  !PlannedRoute.IsEmpty() && PlannedRoute[0].LoadedEscapeOrigin.IsSet() &&
+  FVector::DistSquared2D(Pose.GetLocation(),PlannedRoute[0].LoadedEscapeOrigin.GetValue())<FMath::Square(FWarehouseRoutePoint::LoadedEscapeRadiusCm);
+ const bool PhysicalEscape=BoxBlocked && (LegacyEscape || ObservedPickupEscape || PrecisionPickupEnd || StraightPickup || LoadedEscape) && PhysicalPoseClear(Pose,true);
  if (PhysicalEscape) NavigationBlockDetail.Reset();
  if (BoxBlocked && !PhysicalEscape)
  {
@@ -898,6 +918,12 @@ bool AWarehouseForklift::TryPlanAutonomousRoute(const FTransform& Goal,float Cle
 bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
 {
  if (PlannedRoute.IsEmpty()) { BrakeDrive(); return true; }
+ if (AIState==EWarehouseAIState::NavigateDelivery && PlannedRoute[0].LoadedEscapeOrigin.IsSet())
+ {
+  auto& Origin=PlannedRoute[0].LoadedEscapeOrigin;
+  if (FVector::DistSquared2D(GetActorLocation(),Origin.GetValue())>=FMath::Square(FWarehouseRoutePoint::LoadedEscapeRadiusCm)) Origin.Reset();
+  else Speed=FMath::Min(30.f,Speed);
+ }
  if (AIState==EWarehouseAIState::NavigatePickup && PickupStraightGoal.IsSet() &&
      PlannedRoute.Last().Pose.Equals(PickupStraightGoal.GetValue(),.1f) &&
      FVector::Dist2D(GetActorLocation(),PickupStraightGoal.GetValue().GetLocation())<=PickupStraightLengthCm+10.f)
@@ -1377,7 +1403,10 @@ void AWarehouseForklift::TrackCargo()
  CarriedCargo.Reset();
  if (auto* Strength=AWarehouseDamageSystem::Find(this))
   for (AActor* Actor : Strength->GetSupportedActors(TargetPallet))
-   if (Cast<AWarehouseCargo>(Actor)) CarriedCargo.Add(Actor);
+   if (Cast<AWarehouseCargo>(Actor)) CarriedCargo.AddUnique(Actor);
+ // A load can be suspended on the wrap joints even when the vertical support
+ // samples miss it. The confirmed wrap contains only this pallet's cargo.
+ if (IsValid(TargetPallet)) for (AWarehouseCargo* Cargo : TargetPallet->GetWrappedCargo()) CarriedCargo.AddUnique(Cargo);
 }
 
 float AWarehouseForklift::FloorBase(float WorldZ) const
@@ -1787,7 +1816,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   const float FloorMargin=RelaxedFloor ? 1.5f : 2.f;
   const bool FloorInner=DropHeight<=5.f && FloorFootprintFits(FloorLoads,ActiveJob.Destination,FloorMargin);
   const bool FloorAligned=FloorInner &&
-   FMath::Abs(FMath::FindDeltaAngleDegrees(TargetPallet->GetActorRotation().Yaw,ActiveJob.Destination.Rotator().Yaw))<(RelaxedFloor ? 2.f : 1.f);
+   FMath::Abs(FMath::FindDeltaAngleDegrees(TargetPallet->GetActorRotation().Yaw,ActiveJob.Destination.Rotator().Yaw+RackDeliveryQuarterTurns*90.f))<(RelaxedFloor ? 2.f : 1.f);
   if (DropHeight<=5.f && FParse::Param(FCommandLine::Get(),TEXT("DriveDiagnostics")) &&
       FMath::FloorToInt(AIElapsed)>FMath::FloorToInt(FMath::Max(0.f,AIElapsed-Dt)))
   {
@@ -1948,7 +1977,10 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    // including its normal travel margin, rather than stopping inside it.
    UE_LOG(LogTemp,Log,TEXT("UNLOAD_BEFORE_WITHDRAW pallet=%s yaw=%.2f"),
     *TargetPallet->GetActorLocation().ToString(),TargetPallet->GetActorRotation().Yaw);
-   RetractLocation=GetActorLocation()-GetActorForwardVector()*FMath::Max(130.f,FVector::Dist2D(GetActorLocation(),PalletApproach(ActiveJob.Destination,220).GetLocation())); Next(EWarehouseAIState::WithdrawFork,TEXT("FORK WITHDRAW"));
+   const float Retreat=DropHeight<=5.f && RackDeliveryQuarterTurns!=0 ?
+    220.f-FVector::DotProduct(ActiveJob.Destination.GetLocation()-GetActorLocation(),GetActorForwardVector()) :
+    FVector::Dist2D(GetActorLocation(),PalletApproach(ActiveJob.Destination,220).GetLocation());
+   RetractLocation=GetActorLocation()-GetActorForwardVector()*FMath::Max(130.f,Retreat); Next(EWarehouseAIState::WithdrawFork,TEXT("FORK WITHDRAW"));
   }
   break;
  case EWarehouseAIState::WithdrawFork:
