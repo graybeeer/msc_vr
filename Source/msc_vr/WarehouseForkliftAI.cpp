@@ -318,11 +318,85 @@ bool AWarehouseForklift::PlanPickupTravelTo(const FTransform& Goal,bool TryDetou
   if (FleetCoordinator && !FleetCoordinator->PlanningClear(this,Envelope.TransformBy(Pose.ToMatrixWithScale()))) return false;
   if (Back<PickupStraightLengthCm) Straight.Add({Pose,false,false});
  }
+ // The empty forks fit this corridor, but the truck must also leave it loaded. Sweep the
+ // catalog pallet footprint (110 cm, travel height) along the same line, about 60 cm ahead of
+ // the truck as it is carried: a column the bare forks clear by centimetres can still catch
+ // the pallet's corner on the way out (logged 2026-11-10 at MZ_L2_Column_500_0).
+ {
+  TArray<AActor*> Ignored=GetPhysicalLoads();
+  if (IsValid(TargetPallet)) Ignored.AddUnique(TargetPallet);
+  const FBox LoadBox(FVector(-57,-57,3),FVector(57,57,120));
+  for (float Back=0;Back<=PickupStraightLengthCm;Back+=10.f)
+  {
+   const FTransform Load(Goal.GetRotation(),Goal.GetLocation()+Axis*(60.f-Back));
+   if (!PerceivedBoxClear(Load,LoadBox,Ignored))
+   {
+    UE_LOG(LogTemp,Log,TEXT("AGV_PICKUP_LOADED_EXIT_BLOCKED %s face=%d standoff=%.0f at %.0f cm back of the approach"),*VehicleName,PickupEntryQuarterTurns*90,PickupApproachDistanceCm,Back);
+    return false;
+   }
+  }
+ }
  if (!PlanAutonomousRoute(Lead) && !(TryDetour && PlanRecoveryDetour(Lead))) return false;
  PlannedRoute.Add({Lead,false,true});
  PlannedRoute.Append(Straight);
  PickupStraightGoal=Goal;
  ReportJob(TEXT("PICKUP_STRAIGHT_APPROACH"),TEXT("Pre-align before the tight rack corridor"));
+ return true;
+}
+bool AWarehouseForklift::InPickupCorridor(const FTransform& Pose,float SideCm) const
+{
+ if (!PickupStraightGoal.IsSet()) return false;
+ const FTransform& Guide=PickupStraightGoal.GetValue();
+ const FVector Local=Guide.InverseTransformPosition(Pose.GetLocation());
+ return Local.X>=-PickupStraightLengthCm-10.f && Local.X<=3.f && FMath::Abs(Local.Y)<=SideCm &&
+  FMath::Abs(FMath::FindDeltaAngleDegrees(Guide.Rotator().Yaw,Pose.Rotator().Yaw))<=5.f;
+}
+bool AWarehouseForklift::PlanPickupCorridorExit()
+{
+ // The loaded truck leaves the way it came: the same straight line, reversing, with every
+ // real part and the carried load checked. The rectangular travel box that let the planner
+ // squeeze in only because of the inbound exception would otherwise trap it between the
+ // column and the rack it just emptied.
+ bPickupCorridorExit=false;
+ if (!PickupStraightGoal.IsSet() || !InPickupCorridor(GetActorTransform(),10.f))
+ {
+  if (PickupStraightGoal.IsSet()) UE_LOG(LogTemp,Log,TEXT("AGV_CORRIDOR_EXIT_SKIP %s outside corridor at %s yaw=%.1f guide=%s"),*VehicleName,
+   *GetActorLocation().ToCompactString(),GetActorRotation().Yaw,*PickupStraightGoal.GetValue().ToHumanReadableString());
+  return false;
+ }
+ const FTransform& Guide=PickupStraightGoal.GetValue();
+ const FVector Axis=Guide.GetUnitAxis(EAxis::X);
+ const float From=float(Guide.InverseTransformPosition(GetActorLocation()).X);
+ TArray<FWarehouseRoutePoint> Exit;
+ const FBox Envelope=NavigationEnvelope();
+ for (float X=FMath::Min(From-10.f,0.f);X>=-PickupStraightLengthCm-.1f;X-=10.f)
+ {
+  const FTransform Pose(Guide.GetRotation(),Guide.GetLocation()+Axis*X);
+  const bool bPartsClear=PhysicalPoseClear(Pose,true);
+  const bool bFleetClear=!FleetCoordinator || FleetCoordinator->PlanningClear(this,Envelope.TransformBy(Pose.ToMatrixWithScale()));
+  if (!bPartsClear || !bFleetClear)
+  {
+   FString Hit;
+   if (!bPartsClear)
+   {
+    FHitResult Ground;PerceivedFloorSupport(Pose.GetLocation(),&Ground);
+    const TArray<AActor*> Loads=GetPhysicalLoads();
+    TArray<UStaticMeshComponent*> Parts;GetComponents(Parts);
+    for (AActor* Load:Loads) if (IsValid(Load)) { TArray<UStaticMeshComponent*> More;Load->GetComponents(More);Parts.Append(More); }
+    for (auto* Part:Parts)
+     if (WarehousePhysics::IsPhysicalContact(Part) && Part->IsQueryCollisionEnabled() &&
+         !PerceivedPartClear(Part,Part->GetComponentTransform().GetRelativeTransform(GetActorTransform())*Pose,Loads,Ground.GetComponent()))
+      Hit+=GetNameSafe(Part->GetOwner())+TEXT(".")+Part->GetName()+TEXT(" ");
+   }
+   UE_LOG(LogTemp,Log,TEXT("AGV_CORRIDOR_EXIT_BLOCKED %s at corridor %.0f cm pose=%s parts=%d fleet=%d hit=[%s]"),*VehicleName,X,*Pose.GetLocation().ToCompactString(),bPartsClear,bFleetClear,*Hit);
+   return false;
+  }
+  FWarehouseRoutePoint Step;Step.Pose=Pose;Step.bReverse=true;Exit.Add(Step);
+ }
+ if (Exit.IsEmpty()) return false;
+ PlannedRoute=MoveTemp(Exit);RouteIndex=0;RouteClearanceCm=0.f;
+ bPickupCorridorExit=true;
+ ReportJob(TEXT("PICKUP_CORRIDOR_EXIT"),TEXT("Reverse out along the straight pickup corridor before the delivery route"));
  return true;
 }
 bool AWarehouseForklift::RackApproachClear(const FTransform& PalletPose,bool Pickup) const
@@ -467,6 +541,8 @@ bool AWarehouseForklift::NavigationClear(const FTransform& Pose,const FWarehouse
  // space around the two forks with one tall rectangular envelope.
  const bool PrecisionPickupEnd=Query->bPrecisionPickupEnd && FVector::DistSquared2D(Pose.GetLocation(),Query->PickupEnd)<=150.f*150.f;
  bool StraightPickup=false;
+ if (BoxBlocked && !bPlanningRoute && AIState==EWarehouseAIState::NavigateDelivery && bPickupCorridorExit)
+  StraightPickup=InPickupCorridor(Pose,7.f);
  if (BoxBlocked && !bPlanningRoute && AIState==EWarehouseAIState::NavigatePickup && PickupStraightGoal.IsSet() &&
      !PlannedRoute.IsEmpty() && PlannedRoute.Last().Pose.Equals(PickupStraightGoal.GetValue(),.1f))
  {
@@ -1763,6 +1839,8 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   if (LiftTo(10.5f)) Next(EWarehouseAIState::PlanDelivery,TEXT("PLAN LOADED ROUTE"));
   break;
  case EWarehouseAIState::PlanDelivery:
+  if (PlanPickupCorridorExit())
+  { Next(EWarehouseAIState::NavigateDelivery,TEXT("LEAVE PICKUP CORRIDOR - REVERSE STRAIGHT")); bRouteStarted=true; break; }
   if (BeginFloorTransfer(ActiveJob.Destination.GetLocation().Z,EWarehouseAIState::PlanDelivery)) break;
   if (!WaitForDestinationClear(Dt)) break;
   if (PlanDeliveryApproach())
@@ -1770,6 +1848,15 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   else StopFor(TEXT("OBSTACLE / NO DELIVERY ROUTE"));
   break;
  case EWarehouseAIState::NavigateDelivery:
+  if (bPickupCorridorExit)
+  {
+   if (FollowRoute(30.f,Dt))
+   {
+    bPickupCorridorExit=false;PickupStraightGoal.Reset();bRouteStarted=false;
+    Next(EWarehouseAIState::PlanDelivery,TEXT("PICKUP CORRIDOR CLEARED - PLAN LOADED ROUTE"));
+   }
+   break;
+  }
   Route(PalletApproach(ActiveJob.Destination,220),EWarehouseAIState::AlignUnload,TEXT("ALIGN UNLOADING POSITION"),LoadedTravelSpeedCm);
   break;
  case EWarehouseAIState::AlignUnload:

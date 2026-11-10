@@ -304,6 +304,10 @@ private:
  bool PlanPickupApproach();
  bool PlanPickupTravelTo(const FTransform& Goal,bool TryDetour);
  TOptional<FTransform> PickupStraightGoal;
+ // Loaded exit back along the same straight pickup corridor, before the delivery route.
+ bool PlanPickupCorridorExit();
+ bool InPickupCorridor(const FTransform& Pose,float SideCm) const;
+ bool bPickupCorridorExit=false;
  uint8 BlockedPickupFaces=0;
  bool PlanDeliveryApproach();
  bool RackApproachClear(const FTransform& PalletPose,bool Pickup) const;
