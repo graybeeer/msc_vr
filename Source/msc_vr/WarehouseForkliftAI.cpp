@@ -1936,6 +1936,8 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    const float Along=FVector::DotProduct(Error,Heading.Vector());
    const float Side=FVector::DotProduct(Error,Goal.GetUnitAxis(EAxis::Y));
    const float YawError=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,Heading.Yaw));
+   if (FParse::Param(FCommandLine::Get(),TEXT("DriveDiagnostics")) && FMath::FloorToInt(AIElapsed*2.f)>FMath::FloorToInt(FMath::Max(0.f,AIElapsed-Dt)*2.f))
+    UE_LOG(LogTemp,Log,TEXT("AGV_FLOOR_DOCK %s age=%.1f along=%.2f side=%.2f yaw_err=%.2f rel_yaw=%.2f speed=%.1f"),*VehicleName,AIElapsed,Along,Side,FMath::RadiansToDegrees(YawError),Relative.Rotator().Yaw,CurrentSpeedCm);
    if (FMath::Abs(Side)<=(RelaxedFloor ? 12.f : 8.f) && FMath::Abs(YawError)<=FMath::DegreesToRadians(RelaxedFloor ? 8.f : 3.f) && Along>=-15.f && Along<=(RelaxedFloor ? 320.f : 200.f))
    {
     bRouteStarted=false;
@@ -1956,7 +1958,11 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
     const float Cross=FVector::DotProduct(Goal.TransformPosition(LocalAxle)-Axle,Goal.GetUnitAxis(EAxis::Y));
     const float Sign=Along<0.f ? -1.f : 1.f;
     constexpr float LookAhead=35.f;
-    const float DesiredYaw=Heading.Yaw+FMath::RadiansToDegrees(FMath::Atan(Sign*Cross/LookAhead));
+    // Correcting a sideways offset by yawing needs travel to turn it into sideways motion. In the last
+    // 40 cm there is none: the truck only twisted the load away from the slot heading (logged 2026-11-07:
+    // 2.7 -> 7.6 degrees at 0 cm to go, then no connecting curve and a fault). Fade the cross term out there.
+    const float CrossGain=FMath::Clamp(FMath::Abs(Along)/40.f,0.f,1.f);
+    const float DesiredYaw=Heading.Yaw+FMath::RadiansToDegrees(FMath::Atan(Sign*Cross*CrossGain/LookAhead));
     const float Turn=FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,DesiredYaw));
     const float Curvature=Sign*FMath::Clamp(Turn/LookAhead,-1.f/FMath::Max(117.3f,MinimumTurningRadiusCm),1.f/FMath::Max(117.3f,MinimumTurningRadiusCm));
     TGuardValue<float> Precision(SensorPrecisionDistanceCm,FMath::Abs(Along));
@@ -1980,7 +1986,14 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    FVector Point=ActiveJob.Destination.GetLocation()-Heading.RotateVector(Relative.GetLocation());Point.Z=Ground;
    float Cost;
    if (!ConnectPoses(GetActorTransform(),FTransform(Heading,Point),PlannedRoute,Cost))
-   { FaultAI(TEXT("NO CLEAR PRECISE RACK APPROACH"));break; }
+   {
+    UE_LOG(LogTemp,Log,TEXT("AGV_PRECISE_APPROACH_FAIL %s from=%s yaw=%.2f to=%s yaw=%.2f rack=%d drop=%.1f"),*VehicleName,*GetActorLocation().ToCompactString(),GetActorRotation().Yaw,
+     *Point.ToCompactString(),Heading.Yaw,ActiveJob.bRackDestination,DropHeight);
+    // Right at a floor slot a few centimetres and degrees off cannot be joined by any curve: back off and
+    // approach again through the bounded recovery instead of stopping for an operator at once.
+    if (!ActiveJob.bRackDestination && FVector::Dist2D(GetActorLocation(),Point)<60.f && BeginRecovery(EWarehouseAIState::AlignUnload,TEXT("FLOOR LOAD ALIGNMENT OUTSIDE SLOT"))) break;
+    FaultAI(TEXT("NO CLEAR PRECISE RACK APPROACH"));break;
+   }
    RouteIndex=0;bRouteStarted=true;
   }
   const bool RackInsertion=ActiveJob.bRackDestination && DropHeight>5.f;
