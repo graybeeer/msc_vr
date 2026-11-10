@@ -122,6 +122,7 @@ bool AWarehouseForklift::BeginRemoteControl(AActor* Operator)
  // Poll the operator before consuming its heartbeat, including a slow frame.
  AddTickPrerequisiteActor(Operator);
  RemoteForward=RemoteSteering=RemoteLift=0; BrakeDrive();
+ RemoteStraightYaw.Reset();
  LastRemoteInputTime=GetWorld()->GetRealTimeSeconds();
  SetStatus(TEXT("SMARTPHONE REMOTE READY / G: DISCONNECT"));
  return true;
@@ -146,6 +147,7 @@ void AWarehouseForklift::SetRemoteInput(float Forward,float Steering,float Lift)
  RemoteForward=FMath::Clamp(Forward,-1.f,1.f);
  RemoteSteering=FMath::Clamp(Steering,-1.f,1.f);
  RemoteLift=FMath::Clamp(Lift,-1.f,1.f);
+ if (FMath::IsNearlyZero(RemoteForward) || !FMath::IsNearlyZero(RemoteSteering)) RemoteStraightYaw.Reset();
  LastRemoteInputTime=GetWorld()->GetRealTimeSeconds();
  // Releasing the drive button engages the brake; payload inertia stays physical.
  if (FMath::IsNearlyZero(RemoteForward) && FMath::IsNearlyZero(RemoteSteering)) BrakeDrive();
@@ -301,7 +303,27 @@ void AWarehouseForklift::AdvanceRemote(float Dt)
   else
   {
    const float Limit=bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(180.f,EmptyTravelSpeedCm);
-   if (!CommandDrive(RemoteForward*Limit,RemoteSteering/FMath::Max(117.3f,MinimumTurningRadiusCm),Dt)) return;
+   float Curvature=RemoteSteering/FMath::Max(117.3f,MinimumTurningRadiusCm);
+   if (bPhysicsReady && FMath::IsNearlyZero(RemoteSteering))
+   {
+    const float Yaw=GetActorRotation().Yaw;
+    const FVector Axle=(Wheels[1]->GetComponentLocation()+Wheels[2]->GetComponentLocation())*.5f;
+    if (!RemoteStraightYaw.IsSet())
+    {
+     RemoteStraightYaw=Yaw;
+     RemoteStraightAxleOrigin=Axle;
+    }
+    // Hold the line selected by the operator at the start of this straight input.
+    // The rear steering motor corrects drift without applying chassis yaw directly.
+    const float Direction=FMath::Sign(FMath::Abs(CurrentSpeedCm)>10.f ? CurrentSpeedCm : RemoteForward);
+    const FVector Right=FRotationMatrix(FRotator(0,RemoteStraightYaw.GetValue(),0)).GetUnitAxis(EAxis::Y);
+    const float CrossTrack=FVector::DotProduct(RemoteStraightAxleOrigin-Axle,Right);
+    const float TargetYaw=RemoteStraightYaw.GetValue()+FMath::RadiansToDegrees(FMath::Atan(Direction*CrossTrack/200.f));
+    const float YawError=FMath::FindDeltaAngleDegrees(Yaw,TargetYaw);
+    const float YawRate=ChassisBody->GetPhysicsAngularVelocityInDegrees().Z;
+    Curvature=Direction*FMath::Clamp(FMath::DegreesToRadians(YawError-.65f*YawRate)/130.f,-1.f/450.f,1.f/450.f);
+   }
+   if (!CommandDrive(RemoteForward*Limit,Curvature,Dt)) return;
   }
  }
  else BrakeDrive();

@@ -242,6 +242,8 @@ private:
  void BrakeDrive();
  UPROPERTY(Transient) TObjectPtr<AActor> RemoteOperator;
  float RemoteForward=0,RemoteSteering=0,RemoteLift=0;
+ TOptional<float> RemoteStraightYaw;
+ FVector RemoteStraightAxleOrigin=FVector::ZeroVector;
  double LastRemoteInputTime=0;
  bool bReplanAfterRemote=false;
  void AdvanceRemote(float Dt);
@@ -300,6 +302,9 @@ private:
  FTransform PalletApproach(const FTransform& PalletPose,float Distance,bool Pickup=false) const;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Autonomy",meta=(AllowPrivateAccess="true")) int32 PickupEntryQuarterTurns=0;
  bool PlanPickupApproach();
+ bool PlanPickupTravelTo(const FTransform& Goal,bool TryDetour);
+ TOptional<FTransform> PickupStraightGoal;
+ uint8 BlockedPickupFaces=0;
  bool PlanDeliveryApproach();
  bool RackApproachClear(const FTransform& PalletPose,bool Pickup) const;
  int32 RackDeliveryQuarterTurns=0;
