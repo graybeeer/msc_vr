@@ -262,14 +262,22 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  if (!bPowered || bMechanicalFailure || !bEStopReleased || !bBrakeHealthy) BrakeDrive();
  const float Wheelbase=FMath::Abs((-74.f+7.f)*(215.f/282.55f));
  const bool Turning=!FMath::IsNearlyZero(DesiredTurnRate);
- const bool ManualPivot=Turning && IsRemoteControlled();
+ const bool Manual=IsRemoteControlled();
+ const bool ManualPivot=Manual && Turning;
+ const bool ManualTravel=Manual && !Turning && !FMath::IsNearlyZero(RemoteForward);
+ const bool ManualStraight=ManualTravel && FMath::IsNearlyZero(RemoteSteering);
  // Hold the tyre sideways and reverse its rolling direction to reverse yaw.
  // Slewing steering by 180 degrees for each tiny correction scrubbed the
  // chassis away from the alignment pose and delayed the next correction.
  const float RequestedSteering=Turning ? -PI*.5f : -FMath::Atan(Wheelbase*DesiredCurvature);
  // A stop holds the steering position instead of straightening a rolling tyre.
  if (bSteeringHealthy && (Turning || !FMath::IsNearlyZero(DesiredDriveSpeed)))
-  SteeringAngle=FMath::FInterpConstantTo(SteeringAngle,RequestedSteering,Dt,FMath::DegreesToRadians(ManualPivot ? 720.f : 120.f));
+ {
+  if (ManualTravel && !ManualStraight)
+   SteeringAngle=FMath::FInterpTo(SteeringAngle,RequestedSteering,Dt,4.f);
+  else
+   SteeringAngle=FMath::FInterpConstantTo(SteeringAngle,RequestedSteering,Dt,FMath::DegreesToRadians(ManualPivot ? 720.f : 120.f));
+ }
  auto* Drive=Wheels[0].Get();
  const FVector Axle=Drive->GetRightVector();
  const float Spin=FVector::DotProduct(Drive->GetPhysicsAngularVelocityInRadians()-ChassisBody->GetPhysicsAngularVelocityInRadians(),Axle);
@@ -280,11 +288,12 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  // A short manual A/D press must not expire during the old 0.75s steering
  // ramp. Respond faster with the existing finite 500Nm spindle motor; keep
  // real axle readiness, tyre contacts and release braking. Autonomy is unchanged.
- const float SteeringStiffness=ManualPivot ? 40000000.f : 20000000.f;
+ const float SteeringStiffness=ManualPivot || ManualStraight ? 40000000.f : 20000000.f;
+ const float SteeringDamping=ManualStraight ? 3000000.f : 2000000.f;
  float CurrentStiffness,CurrentDamping,CurrentLimit;
  SteeringJoint->ConstraintInstance.GetAngularDriveParams(CurrentStiffness,CurrentDamping,CurrentLimit);
- if (CurrentStiffness!=SteeringStiffness)
-  SteeringJoint->SetAngularDriveParams(SteeringStiffness,2000000.f,5000000.f);
+ if (CurrentStiffness!=SteeringStiffness || CurrentDamping!=SteeringDamping)
+  SteeringJoint->SetAngularDriveParams(SteeringStiffness,SteeringDamping,5000000.f);
  SteeringJoint->SetAngularOrientationTarget(FRotator(0,0,FMath::RadiansToDegrees(SteeringAngle)));
  if (FMath::Abs(FMath::FindDeltaAngleRadians(ActualSteering,SteeringAngle))>.01f) SteeringBody->WakeAllRigidBodies();
  const float SteeringError=FMath::Abs(FMath::FindDeltaAngleRadians(ActualSteering,RequestedSteering));
@@ -311,8 +320,23 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  const bool Braking=Turning ? !TurnReady : FMath::Abs(DesiredDriveSpeed)<.01f || AwaitSteering;
  // Let the finite spindle catch up without either a full stop or full-speed
  // lateral drift. Final approach still uses the original readiness control.
- const float TravelSpeed=RollingCruise && SteeringError>SteeringTolerance ?
+ float TravelSpeed=RollingCruise && SteeringError>SteeringTolerance ?
   FMath::Sign(DesiredDriveSpeed)*FMath::Min(FMath::Abs(DesiredDriveSpeed),60.f) : DesiredDriveSpeed;
+ if (ManualStraight)
+ {
+  const float SteerDegrees=FMath::Abs(FMath::RadiansToDegrees(ActualSteering));
+  const float YawRate=FMath::Abs(ChassisBody->GetPhysicsAngularVelocityInDegrees().Z);
+  const float Settled=FMath::Clamp(1.f-FMath::Max((SteerDegrees-3.f)/9.f,(YawRate-5.f)/25.f),0.f,1.f);
+  const float Creep=FMath::Min(FMath::Clamp(47.f-SteerDegrees,8.f,35.f),FMath::Abs(TravelSpeed));
+  TravelSpeed=FMath::Sign(TravelSpeed)*FMath::Lerp(Creep,FMath::Abs(TravelSpeed),FMath::Square(Settled));
+ }
+ else if (ManualTravel)
+ {
+  // Limit rolling yaw demand and ramp the actual speed through the same motor.
+  const float Curve=FMath::Max(FMath::Abs(DesiredCurvature),FMath::Abs(FMath::Tan(FMath::Clamp(ActualSteering,-1.2f,1.2f)))/Wheelbase);
+  const float TurnSpeed=FMath::Max(15.f,FMath::DegreesToRadians(40.f)/FMath::Max(Curve,.0001f));
+  TravelSpeed=FMath::Clamp(TravelSpeed,-TurnSpeed,TurnSpeed);
+ }
  // Do not accumulate a full-speed target while a readiness brake is engaged.
  DriveSpeedTarget=FMath::FInterpConstantTo(DriveSpeedTarget,Braking ? 0.f : TravelSpeed,Dt,FMath::Max(1.f,DriveAccelerationCm));
  // The implicit joint brake opposes rolling with finite torque each substep.

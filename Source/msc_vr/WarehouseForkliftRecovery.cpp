@@ -24,9 +24,11 @@ bool AWarehouseForklift::TryHybridReplanHere(EWarehouseAIState From)
  if (HybridRouteReplans==0 || FVector::Dist2D(GetActorLocation(),HybridReplanProgress)>=100.f)
  { HybridRouteReplans=0;HybridReplanProgress=GetActorLocation(); }
  if (HybridRouteReplans>=3 || (From==EWarehouseAIState::NavigatePickup && !IsValid(TargetPallet))) return false;
- const FTransform Goal=From==EWarehouseAIState::NavigatePickup ? PalletApproach(TaskSourcePose(),220,true) :
+ if (From==EWarehouseAIState::NavigatePickup && !RackApproachClear(TaskSourcePose(),true)) return false;
+ const FTransform Goal=From==EWarehouseAIState::NavigatePickup ? PalletApproach(TaskSourcePose(),PickupApproachDistanceCm,true) :
   From==EWarehouseAIState::NavigateDelivery ? PalletApproach(ActiveJob.Destination,220) : IdlePose;
- if (!PlanAutonomousRoute(Goal)) return false;
+ const bool Found=From==EWarehouseAIState::NavigatePickup ? PlanPickupTravelTo(Goal,false) : PlanAutonomousRoute(Goal);
+ if (!Found) return false;
  ++HybridRouteReplans;++DetourCount;
  ReportJob(TEXT("REPLANNED"),TEXT("SENSED OBSTACLE - NEW ROUTE FROM HERE"));
  ProgressLocation=GetActorLocation();StalledSeconds=0;WaitSeconds=0;
@@ -53,12 +55,14 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
   const float Ahead=FVector::DotProduct(Offset,GetActorForwardVector());
   AlignmentRetry=Ahead>0 && Ahead<=PalletDetectionRangeCm &&
    FMath::Abs(FVector::DotProduct(Offset,GetActorRightVector()))<=50.f &&
-   FMath::Abs(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,Reference.Rotator().Yaw))<=15.f &&
+   FMath::Abs(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,PalletApproach(Reference,185.f,true).Rotator().Yaw))<=15.f &&
    FMath::Abs(FloorBase(Reference.GetLocation().Z)-FloorBase(GetActorLocation().Z))<1.f;
  }
  bRetryInsertion=!bSupportingPallet && !bPalletReleased && IsValid(TargetPallet) &&
   (From==EWarehouseAIState::CorrectFork ||
    From==EWarehouseAIState::InsertFork || From==EWarehouseAIState::VerifyInsertion || AlignmentRetry);
+ const bool BlockedPickupEntry=bRetryInsertion && Reason.StartsWith(TEXT("OBSTACLE"));
+ if (BlockedPickupEntry) BlockedPickupFaces|=1u<<PickupEntryQuarterTurns;
  const bool FailedDeliveryRoute=From==EWarehouseAIState::PlanDelivery && Reason==TEXT("OBSTACLE / NO DELIVERY ROUTE");
  const bool FailedPickupRoute=From==EWarehouseAIState::PlanPickup && Reason==TEXT("OBSTACLE / NO PICKUP ROUTE");
  const bool FloorAlignmentRetry=From==EWarehouseAIState::AlignUnload && Reason==TEXT("FLOOR LOAD ALIGNMENT OUTSIDE SLOT");
@@ -84,7 +88,10 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
   // most 60cm of exact own-part checks from this fixed starting position.
   RecoveryStart=GetActorLocation();
   bObservedPickupEscape=bHasRecognizedTargetPose && FVector::Dist2D(RecoveryStart,TaskSourcePose().GetLocation())<=260.f;
-  if (PlanRecoveryDetour(PalletApproach(TaskSourcePose(),PickupApproachDistanceCm,true)))
+  const bool CurrentFaceClear=!FailedPickupRoute && RackApproachClear(TaskSourcePose(),true);
+  if (!FailedPickupRoute && !CurrentFaceClear) BlockedPickupFaces|=1u<<PickupEntryQuarterTurns;
+  const bool Found=CurrentFaceClear ? PlanPickupTravelTo(PalletApproach(TaskSourcePose(),PickupApproachDistanceCm,true),true) : PlanPickupApproach();
+  if (Found)
   {
    ++RecoveryCount;++ObservedRouteReplans;
    UE_LOG(LogTemp,Log,TEXT("AGV_OBSERVED_REPLAN %s observed=%d/3 mechanical=%d/3 insertion=%d/3 progress_cm=%.2f"),
@@ -113,7 +120,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  if (bRetryInsertion)
  {
   ++ForkInsertionRetries;
-  RecoveryResume=EWarehouseAIState::DetectPallet;
+  RecoveryResume=BlockedPickupEntry ? EWarehouseAIState::PlanPickup : EWarehouseAIState::DetectPallet;
   bRecoveryNeedsRoute=false;
  }
  else switch (From)
@@ -122,8 +129,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  case EWarehouseAIState::NavigatePickup:
  case EWarehouseAIState::AlignVehicle:
   if (!IsValid(TargetPallet)) { FaultAI(TEXT("TARGET LOST")); return false; }
-  RecoveryGoal=PalletApproach(TaskSourcePose(),PickupApproachDistanceCm,true);
-  RecoveryResume=EWarehouseAIState::NavigatePickup; break;
+  RecoveryResume=EWarehouseAIState::PlanPickup; bRecoveryNeedsRoute=false; break;
  case EWarehouseAIState::PlanDelivery:
  case EWarehouseAIState::NavigateDelivery:
  case EWarehouseAIState::DepartPickup:
@@ -327,6 +333,12 @@ void AWarehouseForklift::AdvanceRecovery(float Dt)
  {
   if (bRetryInsertion)
   {
+   if (RecoveryResume==EWarehouseAIState::PlanPickup && FMath::Abs(LiftOffset)>.5f)
+   {
+    MoveLift(0.f);
+    if (AIElapsed>25.f) RecoveryFault(TEXT("RECOVERY LOWER BLOCKED - OPERATOR REQUIRED"),TEXT("다른 방향으로 접근하기 전에 포크를 주행 높이로 내릴 수 없습니다."));
+    return;
+   }
    // Read the pallet again, including configured perception errors. Never move
    // the pallet or waive engagement checks to manufacture a successful retry.
    TransitionAI(RecoveryResume,TEXT("RETRY - DETECT CURRENT PALLET POSE"));

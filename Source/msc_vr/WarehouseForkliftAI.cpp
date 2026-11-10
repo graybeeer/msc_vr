@@ -120,7 +120,7 @@ void AWarehouseForklift::ToggleAutonomy()
  }
  bResumeAfterCheck=AIState==EWarehouseAIState::Paused || AIState==EWarehouseAIState::Fault;
  if (AIState==EWarehouseAIState::Fault)
- { RecoveryAttempts=0;ForkInsertionRetries=0;ObservedRouteReplans=0;ObservedRouteProgress=GetActorLocation(); }
+ { RecoveryAttempts=0;ForkInsertionRetries=0;BlockedPickupFaces=0;ObservedRouteReplans=0;ObservedRouteProgress=GetActorLocation(); }
  bEmergencyBlocked=false; EmergencyReason.Reset();
  bPowered=true;
  TransitionAI(EWarehouseAIState::SelfCheck,TEXT("POWER ON - SELF CHECK"));
@@ -175,6 +175,7 @@ void AWarehouseForklift::RefreshAfterLayout(bool PublishTaskLocation)
  PlannedRoute.Reset();RouteIndex=0;bRouteStarted=false;
  LastObstacleCheckSeconds=-1;ObstacleCheckFrame=MAX_uint64;
  PickupApproachDistanceCm=220.f;
+ BlockedPickupFaces=0;
  InvalidateSensorSnapshot(TEXT("LAYOUT MAP REVISION / FRESH SCAN REQUIRED"));
  if (auto* Localizer=FindComponentByClass<UAgvForkliftLocalizerComponent>()) Localizer->InitializePose();
  ObservedRouteReplans=0;ObservedRouteProgress=GetActorLocation();
@@ -244,6 +245,8 @@ FTransform AWarehouseForklift::PalletApproach(const FTransform& Pose,float Dista
 bool AWarehouseForklift::PlanPickupApproach()
 {
  RackDeliveryQuarterTurns=0;
+ const int32 PreviousFace=PickupEntryQuarterTurns;
+ const float PreviousStandoff=PickupApproachDistanceCm;
  PickupApproachDistanceCm=220.f;
  const FTransform Source=TaskSourcePose();
  const FTransform Start=NavigationTransform();
@@ -255,13 +258,14 @@ bool AWarehouseForklift::PlanPickupApproach()
    FMath::Abs(FMath::FindDeltaAngleDegrees(Start.Rotator().Yaw,Heading.Yaw))*2.f;
  };
  Faces.StableSort([&](int32 A,int32 B) { return Cost(A)<Cost(B); });
- int32 Searches=0;
  // Bounded candidates: two per face/eight total, each with the existing
  // ordinary route and recovery-detour attempt (up to sixteen planner calls).
  // These endpoints use WMS/observed poses and the same perceived-space tests.
  for (int32 Face:Faces)
  {
+  if ((BlockedPickupFaces & (1u<<Face))!=0) continue;
   PickupEntryQuarterTurns=Face;
+  PickupApproachDistanceCm=220.f;
   if (!RackApproachClear(Source,true)) continue;
   int32 FaceSearches=0;
   const bool DefaultClear=NavigationClear(PalletApproach(Source,220.f,true));
@@ -272,15 +276,45 @@ bool AWarehouseForklift::PlanPickupApproach()
    const FTransform Candidate=PalletApproach(Source,Distance,true);
    if (!NavigationClear(Candidate)) continue;
    if (++FaceSearches>2) break;
-   if (++Searches>8) return false;
-   if (!PlanAutonomousRoute(Candidate) && !PlanRecoveryDetour(Candidate)) continue;
+   if (!PlanPickupTravelTo(Candidate,true)) continue;
    ReportJob(TEXT("PICKUP_ENTRY_SELECTED"),FString::Printf(TEXT("Pallet entry %d degrees; standoff %.0f cm"),Face*90,Distance));
    if (Distance!=220.f) ReportJob(TEXT("APPROACH_REPOSITIONED"),FString::Printf(TEXT("Pallet standoff 220 -> %.0f cm; actual fork clearance retained"),Distance));
    return true;
   }
  }
- PickupApproachDistanceCm=220.f;
+ PickupEntryQuarterTurns=PreviousFace;
+ PickupApproachDistanceCm=PreviousStandoff;
  return false;
+}
+static constexpr float PickupStraightLengthCm=280.f;
+
+bool AWarehouseForklift::PlanPickupTravelTo(const FTransform& Goal,bool TryDetour)
+{
+ PickupStraightGoal.Reset();
+ const bool RaisedPickup=TaskSourcePose().GetLocation().Z-Goal.GetLocation().Z>5.f;
+ const bool TightPickup=RaisedPickup && (PickupApproachDistanceCm<220.f ||
+  !PerceivedBoxClear(Goal,NavigationEnvelope().ExpandBy(FVector(25,25,0)),GetPhysicalLoads()));
+ if (!TightPickup) return PlanAutonomousRoute(Goal) || (TryDetour && PlanRecoveryDetour(Goal));
+
+ // Finish the turn away from the rack. A collision-free end pose alone can
+ // still leave the actual chassis nowhere to turn into that pose.
+ const FVector Axis=Goal.GetUnitAxis(EAxis::X);
+ const FTransform Lead(Goal.GetRotation(),Goal.GetLocation()-Axis*PickupStraightLengthCm);
+ TArray<FWarehouseRoutePoint> Straight;
+ const FBox Envelope=NavigationEnvelope();
+ for (float Back=PickupStraightLengthCm;Back>=0;Back-=10.f)
+ {
+  const FTransform Pose(Goal.GetRotation(),Goal.GetLocation()-Axis*Back);
+  if (!PhysicalPoseClear(Pose,true)) return false;
+  if (FleetCoordinator && !FleetCoordinator->PlanningClear(this,Envelope.TransformBy(Pose.ToMatrixWithScale()))) return false;
+  if (Back<PickupStraightLengthCm) Straight.Add({Pose,false,false});
+ }
+ if (!PlanAutonomousRoute(Lead) && !(TryDetour && PlanRecoveryDetour(Lead))) return false;
+ PlannedRoute.Add({Lead,false,true});
+ PlannedRoute.Append(Straight);
+ PickupStraightGoal=Goal;
+ ReportJob(TEXT("PICKUP_STRAIGHT_APPROACH"),TEXT("Pre-align before the tight rack corridor"));
+ return true;
 }
 bool AWarehouseForklift::RackApproachClear(const FTransform& PalletPose,bool Pickup) const
 {
@@ -288,7 +322,6 @@ bool AWarehouseForklift::RackApproachClear(const FTransform& PalletPose,bool Pic
  // existing sensor snapshot. No other movable actor's hidden pose is read.
  const float Floor=FloorBase(PalletPose.GetLocation().Z);
  const float Height=FMath::Max(0.f,float(PalletPose.GetLocation().Z-Floor));
- if (Height<=5.f) return true;
  const float LiftDelta=FMath::Min(Height+(Pickup ? 0.f : 10.5f),FMath::Min(160.f,MaxForkHeightCm)-9.5f)-LiftOffset;
  TArray<AActor*> Ignored=GetPhysicalLoads();
  if (IsValid(TargetPallet)) Ignored.AddUnique(TargetPallet);
@@ -424,7 +457,16 @@ bool AWarehouseForklift::NavigationClear(const FTransform& Pose,const FWarehouse
  // against the published map / measured points instead of filling the empty
  // space around the two forks with one tall rectangular envelope.
  const bool PrecisionPickupEnd=Query->bPrecisionPickupEnd && FVector::DistSquared2D(Pose.GetLocation(),Query->PickupEnd)<=150.f*150.f;
- const bool PhysicalEscape=BoxBlocked && (LegacyEscape || ObservedPickupEscape || PrecisionPickupEnd) && PhysicalPoseClear(Pose,true);
+ bool StraightPickup=false;
+ if (BoxBlocked && !bPlanningRoute && AIState==EWarehouseAIState::NavigatePickup && PickupStraightGoal.IsSet() &&
+     !PlannedRoute.IsEmpty() && PlannedRoute.Last().Pose.Equals(PickupStraightGoal.GetValue(),.1f))
+ {
+  const FTransform& Guide=PickupStraightGoal.GetValue();
+  const FVector Local=Guide.InverseTransformPosition(Pose.GetLocation());
+  StraightPickup=Local.X>=-PickupStraightLengthCm-10.f && Local.X<=3.f && FMath::Abs(Local.Y)<=7.f &&
+   FMath::Abs(FMath::FindDeltaAngleDegrees(Guide.Rotator().Yaw,Pose.Rotator().Yaw))<=5.f;
+ }
+ const bool PhysicalEscape=BoxBlocked && (LegacyEscape || ObservedPickupEscape || PrecisionPickupEnd || StraightPickup) && PhysicalPoseClear(Pose,true);
  if (PhysicalEscape) NavigationBlockDetail.Reset();
  if (BoxBlocked && !PhysicalEscape)
  {
@@ -856,6 +898,10 @@ bool AWarehouseForklift::TryPlanAutonomousRoute(const FTransform& Goal,float Cle
 bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
 {
  if (PlannedRoute.IsEmpty()) { BrakeDrive(); return true; }
+ if (AIState==EWarehouseAIState::NavigatePickup && PickupStraightGoal.IsSet() &&
+     PlannedRoute.Last().Pose.Equals(PickupStraightGoal.GetValue(),.1f) &&
+     FVector::Dist2D(GetActorLocation(),PickupStraightGoal.GetValue().GetLocation())<=PickupStraightLengthCm+10.f)
+  Speed=FMath::Min(30.f,Speed);
  if (RouteClearanceCm>0.f && RouteClearanceCm<25.f && SensorKit && !IsRemoteControlled())
  {
   if (ClearanceSpeedSnapshot!=SensorKit->SnapshotCount)
@@ -1440,12 +1486,13 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    // new goal while the vehicle still follows a different planned endpoint.
    BrakeDrive();SetStatus(TEXT("OBSERVED PICKUP POSE UPDATED - BRAKE / REPLAN"));
    if (FMath::Abs(CurrentSpeedCm)>=2.f || ChassisBody->GetPhysicsAngularVelocityInDegrees().Size()>=.5f) return;
-   if (!PlanAutonomousRoute(Goal)) { StopFor(TEXT("OBSTACLE / NO CLEAR ROUTE TO OBSERVED PALLET"));return; }
+   if (!PlanPickupTravelTo(Goal,false)) { StopFor(TEXT("OBSTACLE / NO CLEAR ROUTE TO OBSERVED PALLET"));return; }
    bRouteStarted=true;
   }
   if (!bRouteStarted)
   {
-   if (!PlanAutonomousRoute(Goal)) { StopFor(TEXT("OBSTACLE / NO CLEAR ROUTE")); return; }
+   const bool Found=AIState==EWarehouseAIState::NavigatePickup ? PlanPickupTravelTo(Goal,false) : PlanAutonomousRoute(Goal);
+   if (!Found) { StopFor(TEXT("OBSTACLE / NO CLEAR ROUTE")); return; }
    bRouteStarted=true;
   }
   if (FollowRoute(Speed,Dt)) Next(Done,Message);
@@ -1502,7 +1549,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    bObservedTargetValid=false;
    bHasRecognizedTargetPose=false;
    PickupApproachDistanceCm=220.f;
-   RecoveryAttempts=0;ForkInsertionRetries=0;ObservedRouteReplans=0;ObservedRouteProgress=GetActorLocation();
+   RecoveryAttempts=0;ForkInsertionRetries=0;BlockedPickupFaces=0;ObservedRouteReplans=0;ObservedRouteProgress=GetActorLocation();
    WaitSeconds=0;ProgressLocation=GetActorLocation();
    Next(EWarehouseAIState::ValidateJob,TEXT("WORK ORDER RECEIVED")); ReportJob(TEXT("ACCEPTED"),ActiveJob.SourceSystem);
   }
@@ -1595,6 +1642,13 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   // This stacker has no certified mast tilt actuator. Reject tilted pallets instead of inventing one.
   if (FMath::Abs(ObservedPallet.Rotator().Pitch)>.5f || FMath::Abs(ObservedPallet.Rotator().Roll)>.5f)
   { FaultAI(TEXT("PALLET TILT EXCEEDS FORK ALIGNMENT RANGE")); break; }
+  if (!RackApproachClear(ObservedPallet,true))
+  {
+   BlockedPickupFaces|=1u<<PickupEntryQuarterTurns;
+   ReportJob(TEXT("PICKUP_ENTRY_BLOCKED"),FString::Printf(TEXT("Observed corridor blocked at %d degrees"),PickupEntryQuarterTurns*90));
+   Next(EWarehouseAIState::PlanPickup,TEXT("PICKUP CORRIDOR BLOCKED - SELECT ANOTHER FACE"));
+   break;
+  }
   Next(EWarehouseAIState::AlignVehicle,TEXT("ALIGN VEHICLE TO PALLET"));
   break;
  case EWarehouseAIState::AlignVehicle:

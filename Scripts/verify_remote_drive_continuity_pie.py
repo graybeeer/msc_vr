@@ -8,6 +8,7 @@ inputs, including repeated steering changes. -RemoteRun=name preserves a report.
 -RemotePivotOnly checks held A/D separately; -RemotePivotPulse checks 0.5s presses.
 """
 import json
+import math
 import re
 import time
 import traceback
@@ -124,6 +125,8 @@ phase = 'start'
 at = 0
 rig = dummy = auto = game = None
 origin = None
+origin_yaw = 0
+straight_results = []
 speeds = []
 rows = []
 scan_times = []
@@ -134,16 +137,26 @@ sensor_flags = ('safety_scanner_healthy', 'fork_sensor_healthy', 'localization_h
 
 
 def enter(name, now):
-    global phase, at, origin, speeds
+    global phase, at, origin, origin_yaw, speeds
     phase, at = name, now
     origin = rig.get_actor_location()
+    origin_yaw = rig.get_actor_rotation().yaw
     speeds = []
     print('MANUAL_DRIVE_PHASE', name, now)
 
 
+def check_straight(max_cross_cm, max_yaw_deg):
+    samples = [row for row in rows if row['phase'] == phase]
+    yaw_rad = math.radians(origin_yaw)
+    cross = max(abs((row['y'] - origin.y) * math.cos(yaw_rad) - (row['x'] - origin.x) * math.sin(yaw_rad)) for row in samples)
+    yaw = max(abs((row['yaw'] - origin_yaw + 180) % 360 - 180) for row in samples)
+    straight_results.append(dict(phase=phase, peak_cross_track_cm=cross, peak_heading_error_deg=yaw))
+    assert cross <= max_cross_cm and yaw <= max_yaw_deg, (phase, cross, yaw)
+
+
 def finish(ok, detail):
     report = dict(passed=ok, detail=detail, phase=phase, samples=rows, autonomous_scan_times=scan_times,
-                  combined_cases=combined_results,
+                  combined_cases=combined_results, straight_cases=straight_results,
                   scope='Native C++ rig in unsaved Entry; direct input API, actual Chaos contact. No OS input claim.')
     path = Path(unreal.Paths.project_saved_dir()) / 'Testing/RemoteDriveContinuity_20261016.json'
     run = re.search(r'-RemoteRun=([A-Za-z0-9_-]+)', command, re.I)
@@ -230,6 +243,19 @@ def tick(dt):
                 else:enter('pivot_left',now)
             return
         if combined:
+            if phase == 'straight_after_changes':
+                rig.set_remote_input(1, 0, 0)
+                if age >= 3:
+                    check_straight(14, 5)
+                    enter('straight_reverse', now)
+                return
+            if phase == 'straight_reverse':
+                rig.set_remote_input(-1, 0, 0)
+                if age >= 4:
+                    assert speed < -165, ('Full reverse failed to reach travel speed', speed)
+                    check_straight(14, 3)
+                    enter('combined_brake', now)
+                return
             if phase == 'combined_brake':
                 rig.set_remote_input(0, 0, 0)
                 if age >= 1.5:
@@ -253,10 +279,13 @@ def tick(dt):
                 points = [p for p in rows if p['phase'] == phase]
                 distance = sum(((b['x']-a['x'])**2+(b['y']-a['y'])**2)**.5 for a, b in zip(points, points[1:]))
                 assert distance > 100, ('No physical travel', phase, distance) # A full circle can finish near its start.
-                combined_results.append(dict(phase=phase, min_signed_speed_cm_s=min(combined_speeds), yaw_degrees=combined_yaw, distance_cm=distance))
+                peak_rate = max(abs(p['yaw_rate_deg_s']) for p in points)
+                combined_results.append(dict(phase=phase, min_signed_speed_cm_s=min(combined_speeds), yaw_degrees=combined_yaw,
+                    peak_yaw_rate_deg_s=peak_rate, distance_cm=distance))
+                assert peak_rate < 65, ('Rolling steering too abrupt', phase, peak_rate)
                 combined_speeds.clear()
                 combined_yaw = 0
-                enter(combined_cases[index+1][0] if index+1 < len(combined_cases) else 'combined_brake', now)
+                enter(combined_cases[index+1][0] if index+1 < len(combined_cases) else 'straight_after_changes', now)
             return
         if phase == 'immediate':
             rig.set_remote_input(1, 0, 0)
@@ -278,6 +307,7 @@ def tick(dt):
                 return
             assert min(speeds) > 50 and max(speeds) >= 165, ('Periodic stop / speed', speeds)
             assert rig.get_actor_location().x > 300, 'Did not cross the physical slab seam'
+            check_straight(12, 2.5)
             print('REMOTE_CONTINUOUS_DRIVE_PASSED', 'minimum/max cm/s', min(speeds), max(speeds))
             enter('brake', now)
         elif phase == 'brake':
@@ -321,6 +351,7 @@ def tick(dt):
             if age < 2.5:
                 return
             assert origin.x - rig.get_actor_location().x > 80, ('Could not reverse out of actual contact', rig.status)
+            check_straight(15, 4)
             enter('pivot_brake', now)
         elif phase == 'pivot_brake':
             rig.set_remote_input(0, 0, 0)
@@ -337,7 +368,7 @@ def tick(dt):
             enter('curve', now)
         elif phase == 'curve':
             rig.set_remote_input(.5, -.35, 0)
-            # Leaving a 90-degree pivot requires real 120deg/s spindle travel
+            # Leaving a 90-degree pivot requires finite spindle travel
             # and acceleration. Measure continuity after that physical settling.
             if age > 1.8:
                 speeds.append(abs(speed))

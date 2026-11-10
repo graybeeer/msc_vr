@@ -51,6 +51,7 @@ Unreal Engine 5.8 기반 PC용 무인 지게차 교육 시뮬레이션이다. �
 | 실제 운반 속도·중량별/교통별 시간 측정·제조사 사양 비교 | `Scripts/verify_transport_benchmark_pie.py`, `verify_forklift_handling_pie.py` | 기존 실물 리그/Chaos 운반 검사를 재사용해 실제 경로 거리·주행/정렬/승강·대기·재시도와 속도를 기록. `-BenchGroup=flat -BenchSeed=202 -BenchRepeats=2`는 같은 형상의50/500/1000kg, `-StressCases`/`-NarrowWidth`는 다중 차량/문 폭. 결과 `Saved/Testing/TransportBenchmark_20261031/`, 운용 검증은 `AUTONOMY.md`, 사양은 `VNSL14_SPEC.md` |
 | 좁은 통로 계획 여유·실제 화물 기준 바닥 하역·운반 시간 비교 | `WarehouseForkliftAI::PlanAutonomousRoute`/`TryPlanAutonomousRoute`/`FollowRoute`/`AlignUnload`, `Scripts/verify_forklift_handling_pie.py` | 기본25cm 계획 실패 때10/3cm 재계획·좁은 구간 요청30cm/s, 실제 접촉/1초 관측/원격 제외 유지. 기준은 `AUTONOMY.md`, 같은 배치 A/B·좁은 문 검사는 `Saved/Testing/HandlingImprovements_20261031/` |
 | 팔레트 접근점 재선정·막힌 객체 이름·기둥 앞 재정렬·포크 진입 허용치 | `WarehouseForkliftAI::PlanPickupApproach`/`AlignVehicle`/`InsertFork`, `WarehouseForklift::MoveToLine`, `WarehouseForkliftPerception::PerceivedBoxClear`/`NavigationClearForDiagnostics`, `WarehouseForkliftRecovery` | `Scripts/diagnose_pickup_approach_pie.py`는 저장 맵의 로그 좌표에서 외곽/실제 부품을 비교하는 진단이며 반대 방향 포즈가 실제 삽입 가능하다는 뜻은 아님. `verify_pickup_reposition_pie.py -ForkCaptureComparison`은50/200kg·좁은 접근·벽 보류·회전 팔레트 집기와 실제 구멍 판정을 비교한다. 회전 사례는 기존 바닥 하역 문제와 분리하여 집기/인출까지만 검사. 기준은 `AUTONOMY.md`, 결과는 `Saved/Testing/PickupApproach_20261103/` |
+| 로그의 기둥 옆 상단 랙 집기·회전 후 직선 접근 | `WarehouseForkliftAI::PlanPickupTravelTo`, `Scripts/verify_logged_column_pickup_pie.py` | 저장 맵의 지게차 2호·상단 팔레트·기둥으로 `-ColumnLogCase=2/4 -ColumnLogRun=name` 재현. 실행 기록과 범위는 `AUTONOMY.md` |
 | 작업 완전 중지·기존 짐 하역 후 새 지시·운반 불가 보류·입출고 탭/차량 스크롤 | `WarehouseForkliftWorkControl.cpp`, `WarehouseForkliftAI`, `WarehouseInboundZone`, `WarehouseShippingSystem`, `WarehouseFocusDirector`, `WarehouseFocusUI` | 중지/물리 정리와 보류 기준은 `AUTONOMY.md`, 조작은 `WAREHOUSE.md`; 검사 `verify_forklift_work_control_pie.py`(기본 바닥/원격, `-RetainedInsertOnly`, `-RetainedRackLoad`, `-RetainedBlockedDrop`), `verify_work_control_dispatch_pie.py`, `verify_focus_ui_pie.py` |
 | 랙 팔레트 즉시 집기·랙 E 즉시 적재·바닥/선반 즉시 안착 | `msc_vrCharacter::FindCarryTarget`/`CanPlaceHeldGroup`/`TryPlaceOnRack`/`TryPlaceOnSurface`/`TryPlaceOnPallet`, `WarehouseLayoutInventory::RackSlotsFor`, `verify_instant_rack_carry_pie.py` | 플레이어만 최종 실형상·수평 받침을 검사해 즉시 이동. 현재 적재 자리·미등록 랙의 실제 데크 형상을 사용하며 빈 공간이 없으면 손에 유지. `-RackGeometryOnly`는 후자의 검사. 보행 중 스윕과 놓은 뒤 물리는 유지. 기존 경계 검사는 `verify_arcade_carry_placement_pie.py`, 기준은 `PHYSICS.md` |
 | 바닥 비충돌 충전기 전선·실내 작업자 외부 배치 | `WarehouseChargerWiring`, `WarehouseWorker::RelocateIndoorWorkers`, `relocate_warehouse_workers_outside.py`, `verify_floor_wiring_workers_pie.py` | 전선 공통 기준은 `COLLISION_POLICY.md`, 배선은 `WAREHOUSE_SERVICES_MODEL.md`, 역할/배치는 `WAREHOUSE.md`; 시작·건물 편집 시 현재 외곽·실제 지지와 빈 공간을 확인 |
@@ -357,6 +358,7 @@ msc_vr/
     verify_layout_inventory_pie.py
     verify_load_aware_localization_pie.py
     verify_localization_improvements_pie.py
+    verify_logged_column_pickup_pie.py
     verify_mapped_elevator_transport_pie.py
     verify_mcp.py
     verify_mezzanine.py

@@ -18,6 +18,7 @@ env=dict(__file__=str(source),__name__='__rack_neighbor_fixture__')
 exec(compile(ast.Module(body=tree.body[:end],type_ignores=[]),str(source),'exec'),env)
 actors,editor,level=(env[n] for n in ('actors','editor','level'))
 command=unreal.SystemLibrary.get_command_line()
+column_pickup='-rackcolumnpickup' in command.lower()
 match=re.search(r'-RackSide=(front|back)',command,re.I)
 side=match.group(1).lower() if match else 'front'
 round_trip='-rackroundtrip' in command.lower()
@@ -69,6 +70,8 @@ env['strength'].set_editor_property('objects',specs)
 for label,pos,size in [('N',(0,2500,140),(6400,20,280)),('S',(0,-2500,140),(6400,20,280)),
                        ('E',(3200,0,140),(20,5000,280)),('W',(-3200,0,140),(20,5000,280))]:
     env['cube']('RackMap'+label,pos,size).tags=['WarehouseMapStructure']
+if column_pickup:
+    env['cube']('PickupColumn',(425,249,120),(20,30,240)).tags=['WarehouseMapStructure']
 phase='start';live=None;began=time.monotonic();rows=[];baseline={};last=-1;last_state=None;stopped_at=None;accepted_at=None
 
 def vector(p):return [p.x,p.y,p.z]
@@ -127,6 +130,9 @@ def tick(dt):
             last=now;last_state=vehicle.ai_state
         if vehicle.completed_job_ids:
             assert case=='normal','Unsafe rack insertion was reported complete'
+            if column_pickup:
+                selected=[r.detail for r in vehicle.job_reports if r.result=='PICKUP_ENTRY_SELECTED']
+                assert selected and not selected[0].startswith('Pallet entry 0 degrees'),selected
             if phase=='retrieve':
                 goal=unreal.Vector(2400 if side=='front' else 0,1500,0)
                 assert_unit_in_slot(goal)
