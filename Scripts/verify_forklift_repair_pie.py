@@ -123,7 +123,7 @@ def tick(dt):
             v.end_remote_control(operator)
             next(j for j in v.get_components_by_class(unreal.PhysicsConstraintComponent)
                  if j.get_name() == 'InnerMastHydraulicJoint').break_constraint()
-            s.apply_impact(v, 3000)
+            s.apply_impact(v, 4800)
             assert v.get_editor_property('mechanical_failure') and s.has_failed(v)
             assert str(v.get_interaction_text()).startswith('지게차 7호\n'), 'Failed interaction lost its vehicle number'
             assert '상태:고장, E:수리 후 재배치' in str(v.get_interaction_text())
@@ -180,7 +180,7 @@ def tick(dt):
                 assert now - at < 250, ('Actual pickup timeout', v.status)
                 return
             original = {name: live[name].get_actor_location() for name in ('ExportBPallet', 'ExportBBox')}
-            s.apply_impact(v, 3000)
+            s.apply_impact(v, 4800)
             assert v.get_editor_property('mechanical_failure') and v.get_supported_pallet() == b
             assert v.repair_and_reset(), v.status
             assert_repaired(v)

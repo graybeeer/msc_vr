@@ -517,11 +517,14 @@ void AWarehouseDamageSystem::ApplyImpact(AActor* Object,float EnergyJ)
  const int32 I=IndexOf(Object);
  if (I==INDEX_NONE) return;
  auto& Spec=Objects[I];
- const float Yield=FMath::Max(1.f,Spec.ImpactYieldJ);
+ // Keep the new baseline in older maps and cloned layout profiles as well.
+ const bool Forklift=Spec.Failure==EWarehouseFailure::Machine && Object->IsA<AWarehouseForklift>();
+ const float Yield=FMath::Max(Forklift ? 800.f : 1.f,Spec.ImpactYieldJ);
  if (EnergyJ<=Yield) return;
  Spec.LastDamageSeconds=GetWorld()->GetTimeSeconds();
  if (Spec.bFailed) return;
- Spec.Damage=FMath::Clamp(Spec.Damage+(EnergyJ-Yield)/FMath::Max(1.f,Spec.ImpactFailureJ-Yield),0.f,1.f);
+ const float Failure=FMath::Max(Forklift ? 4800.f : 1.f,Spec.ImpactFailureJ);
+ Spec.Damage=FMath::Clamp(Spec.Damage+(EnergyJ-Yield)/FMath::Max(1.f,Failure-Yield),0.f,1.f);
  ShowDamage(I);
  if (Spec.Damage>=1.f) Fail(I);
 }

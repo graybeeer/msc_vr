@@ -27,7 +27,8 @@ bool AWarehouseForklift::TryHybridReplanHere(EWarehouseAIState From)
  if (From==EWarehouseAIState::NavigatePickup && !RackApproachClear(TaskSourcePose(),true)) return false;
  const FTransform Goal=From==EWarehouseAIState::NavigatePickup ? PalletApproach(TaskSourcePose(),PickupApproachDistanceCm,true) :
   From==EWarehouseAIState::NavigateDelivery ? PalletApproach(ActiveJob.Destination,220) : IdlePose;
- const bool Found=From==EWarehouseAIState::NavigatePickup ? PlanPickupTravelTo(Goal,false) : PlanAutonomousRoute(Goal);
+ const bool Found=From==EWarehouseAIState::NavigatePickup ? PlanPickupTravelTo(Goal,false) :
+  From==EWarehouseAIState::NavigateDelivery && ActiveJob.SourceSystem==TEXT("FMS-COMPUTER") ? PlanDeliveryApproach() : PlanAutonomousRoute(Goal);
  if (!Found) return false;
  ++HybridRouteReplans;++DetourCount;
  ReportJob(TEXT("REPLANNED"),TEXT("SENSED OBSTACLE - NEW ROUTE FROM HERE"));

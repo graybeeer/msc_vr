@@ -43,7 +43,12 @@ def tick(dt):
             unreal.GameplayStatics.get_player_controller(world,0).set_simulation_speed(4)
         strength=live['ShippingStrength'];v=live['ShippingAGV']
         if phase=='settle' and now>3:
-            for a,e in ((v,2000),(live['RecoveryProbe1'],1400),(live['RecoveryProbe2'],1000),(live['OtherShipmentBox'],840)):strength.apply_impact(a,e)
+            strength.apply_impact(v,800)
+            assert damage('Recovery0')==0
+            strength.apply_impact(v,2400)
+            assert abs(damage('Recovery0')-.4)<.0001 and not strength.has_failed(v)
+            checks.append('Legacy profile ignores 800 J and survives the old 2400 J single-impact failure threshold')
+            for a,e in ((v,2400),(live['RecoveryProbe1'],2800),(live['RecoveryProbe2'],2000),(live['OtherShipmentBox'],840)):strength.apply_impact(a,e)
             assert abs(damage('Recovery0')-.8)<.0001
             enter('delay',now)
         elif phase=='delay' and now-at>=9:
@@ -55,7 +60,7 @@ def tick(dt):
             assert abs(damage('Recovery1')-.5)<.0001 and abs(damage('Recovery2')-.3)<.0001
             assert abs(damage('OtherShipmentBox')-.8)<.0001
             checks.append('Default rate 0.25 percentage points/s; 50%/30% vehicle damage and cargo damage are unchanged')
-            strength.apply_impact(v,420);restart_damage=damage('Recovery0');enter('restart',now)
+            strength.apply_impact(v,840);restart_damage=damage('Recovery0');enter('restart',now)
         elif phase=='restart' and now-at>=5:
             assert abs(damage('Recovery0')-restart_damage)<.0001
             checks.append('A new damaging impact restarts the quiet delay')
@@ -64,12 +69,12 @@ def tick(dt):
             assert abs(damage('Recovery0')-.5)<.0001,damage('Recovery0')
             assert abs(damage('Recovery1')-.5)<.0001 and abs(damage('Recovery2')-.3)<.0001
             checks.append('Long recovery stops exactly at 50% without healing below the floor')
-            strength.apply_impact(v,3000);assert strength.has_failed(v)
+            strength.apply_impact(v,4800);assert strength.has_failed(v)
             enter('failed',now)
         elif phase=='failed' and now-at>=13:
             assert .5<damage('Recovery0')<1
             assert strength.has_failed(v) and v.get_editor_property('mechanical_failure')
-            strength.apply_impact(v,800);restart_damage=damage('Recovery0');enter('failed_quiet',now)
+            strength.apply_impact(v,840);restart_damage=damage('Recovery0');enter('failed_quiet',now)
         elif phase=='failed_quiet' and now-at>=5:
             assert abs(damage('Recovery0')-restart_damage)<.0001
             assert strength.has_failed(v) and v.get_editor_property('mechanical_failure')

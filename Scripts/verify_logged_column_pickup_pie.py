@@ -1,8 +1,8 @@
 """Run a reported column-side upper-rack pickup on the saved warehouse in PIE.
 
--ColumnLogRun=name labels the report. -ColumnLogCase=4 uses the second logged
-start point and pallet yaw. Its start heading is assumed from the first case.
-Scene setup is performed before PIE. Completion requires real load withdrawal.
+-ColumnLogRun=name labels the report. Cases 2/4 check real load withdrawal.
+Cases 3/6 extend the same upper-rack scene through the two reported outbound
+routes. Scene setup is performed before PIE and the start headings are inferred.
 """
 import json
 from pathlib import Path
@@ -17,11 +17,14 @@ level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 command = unreal.SystemLibrary.get_command_line()
-case = 4 if '-columnlogcase=4' in command.lower() else 2
+case_arg = re.search(r'-ColumnLogCase=([2346])\b', command, re.I)
+case = int(case_arg[1]) if case_arg else 2
+full_delivery = case in (3, 6)
+destination = {3: (-1020, -1570, 0), 6: (-800, -1395, 0)}.get(case, (2250, 1150, 0))
 run = re.search(r'-ColumnLogRun=([A-Za-z0-9_-]+)', command, re.I)
 out = Path(unreal.Paths.project_saved_dir()) / 'Testing/LoggedColumnPickup_20261110' / (run[1] if run else 'Current')
 out.mkdir(parents=True, exist_ok=True)
-report = dict(passed=False, case=case, samples=[], saved_map_written=False, runtime_pose_forced=False)
+report = dict(passed=False, case=case, destination=destination, samples=[], saved_map_written=False, runtime_pose_forced=False)
 started = time.monotonic()
 phase = 'start'
 vehicle = None
@@ -59,13 +62,18 @@ def setup():
             a.set_editor_property('idle_parking_enabled', False)
             a.set_editor_property('pending_jobs', [])
     rig = next(a for a in saved if isinstance(a, unreal.WarehouseForklift) and a.vehicle_name == '지게차 2호')
-    start = unreal.Vector(2249.520, 1149.785, .1) if case == 2 else unreal.Vector(2579.913, -650.223, .1)
+    if full_delivery:
+        start, heading = unreal.Vector(-579.612, -1397.445, .1), 180
+    elif case == 2:
+        start, heading = unreal.Vector(2249.520, 1149.785, .1), 0
+    else:
+        start, heading = unreal.Vector(2579.913, -650.223, .1), 0
     rig.set_actor_location(start, False, True)
-    rig.set_actor_rotation(unreal.Rotator(yaw=0), True)
+    rig.set_actor_rotation(unreal.Rotator(yaw=heading), True)
     if case == 4:
         pallet.set_actor_location(unreal.Vector(214.217638, 62.517432, 140), False, True)
         pallet.set_actor_rotation(unreal.Rotator(yaw=2.437714), True)
-    report.update(vehicle_label=rig.get_actor_label(), start=xyz(start), start_yaw=0,
+    report.update(vehicle_label=rig.get_actor_label(), start=xyz(start), start_yaw=heading,
                   pillar={a.get_actor_label(): xyz(a.get_actor_location()) for a in saved
                           if a.get_actor_label() in ('MZ_L2_Column_500_0', 'WS_RubberColumnWrap_450_4')})
     assert len(report['pillar']) == 2, report['pillar']
@@ -100,7 +108,9 @@ def tick(dt):
                           if a.get_actor_label() == report['saved_pallet']['label'])
             report['settled_source'] = dict(xyz=xyz(pallet.get_actor_location()), yaw=pallet.get_actor_rotation().yaw)
             assert vehicle.submit_job(unreal.WarehouseWorkOrder(job_id='LOGGED-COLUMN-PICKUP', pallet=pallet,
-                                      destination=unreal.Transform(location=unreal.Vector(2250, 1150, 0)))), vehicle.status
+                                      source_system='FMS-COMPUTER' if full_delivery else 'FMS-SIM',
+                                      destination=unreal.Transform(location=unreal.Vector(*destination),
+                                                                   rotation=unreal.Rotator(yaw=180 if case == 6 else 0)))), vehicle.status
             vehicle.toggle_power()
             phase, accepted_at = 'transport', now
         if now-last >= .25:
@@ -108,7 +118,10 @@ def tick(dt):
             report['samples'].append(dict(t=now, state=str(vehicle.ai_state), status=vehicle.status,
                 xyz=xyz(vehicle.get_actor_location()), yaw=vehicle.get_actor_rotation().yaw,
                 yaw_rate=vehicle.root_component.get_physics_angular_velocity_in_degrees().z, speed=vehicle.current_speed_cm))
-        if vehicle.ai_state == unreal.WarehouseAIState.TRAVEL_HEIGHT:
+        if full_delivery and any(r.result == 'COMPLETED' for r in vehicle.job_reports):
+            assert not vehicle.get_supported_pallet()
+            finish(True, 'Physical rack pickup and delivery to the outbound slot completed')
+        elif not full_delivery and vehicle.ai_state == unreal.WarehouseAIState.TRAVEL_HEIGHT:
             assert vehicle.get_supported_pallet() and vehicle.get_load_mass_kg() > 0
             finish(True, 'Physical rack pickup, lift and loaded withdrawal completed')
         elif vehicle.ai_state == unreal.WarehouseAIState.FAULT or any(r.result == 'DEFERRED' for r in vehicle.job_reports):
