@@ -30,6 +30,11 @@ static uint32 WarehouseNavigationQueryCount=0;
 #include "PhysicsEngine/BodySetup.h"
 #include "HAL/IConsoleManager.h"
 
+static TAutoConsoleVariable<float> CVarFollowLookAheadGain(TEXT("Warehouse.Follow.LookAheadGain"),1.2f,TEXT("Route follower look-ahead per cm/s of speed on a straight stretch (bends keep 0.8, 40-145 cm)."));
+static TAutoConsoleVariable<float> CVarFollowLookAheadMin(TEXT("Warehouse.Follow.LookAheadMin"),80.f,TEXT("Straight-stretch minimum look-ahead, cm."));
+static TAutoConsoleVariable<float> CVarFollowLookAheadMax(TEXT("Warehouse.Follow.LookAheadMax"),220.f,TEXT("Straight-stretch maximum look-ahead, cm."));
+static TAutoConsoleVariable<float> CVarFollowLagSeconds(TEXT("Warehouse.Follow.LagSeconds"),.25f,TEXT("Route follower steers from the pose predicted this far ahead (steering slew and joint lag; 2026-11-11: route crossings 5 -> 2, peak steering 25 -> 19 deg on the same route); 0 is the plain pure pursuit."));
+static TAutoConsoleVariable<float> CVarFollowStraightBendDeg(TEXT("Warehouse.Follow.StraightBendDeg"),0.f,TEXT("Route heading change within the long look-ahead below which the stretch counts as straight; 0 disables."));
 static TAutoConsoleVariable<int32> CVarOptUnloadSpeed(TEXT("Warehouse.Opt.UnloadSpeed"),1,TEXT("1: faster approach into the unload slot and faster fork withdrawal."));
 static TAutoConsoleVariable<int32> CVarOptPivotRate(TEXT("Warehouse.Opt.PivotRate"),1,TEXT("1: turn on the spot at up to 0.4 rad/s (0.3 loaded); 0: the old 0.15-0.2 rad/s caps."));
 static TAutoConsoleVariable<int32> CVarOptIntermediatePivot(TEXT("Warehouse.Opt.IntermediatePivot"),1,TEXT("1: no exact stop-and-creep fit at a lane corner that is followed by another stretch of route."));
@@ -1214,13 +1219,49 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
  RouteIndex=FMath::Min(RouteIndex,PlannedRoute.Num()-1);
  while (RouteIndex+1<PlannedRoute.Num() && !PlannedRoute[RouteIndex+1].bPivot && PlannedRoute[RouteIndex+1].bReverse==PlannedRoute[RouteIndex].bReverse &&
         FVector::DistSquared2D(Pose.GetLocation(),PlannedRoute[RouteIndex+1].Pose.GetLocation())<FVector::DistSquared2D(Pose.GetLocation(),PlannedRoute[RouteIndex].Pose.GetLocation())) ++RouteIndex;
- const float LookAhead=FMath::Clamp(FMath::Abs(CurrentSpeedCm)*.8f,40.f,145.f);
- int32 Aim=RouteIndex;
+ // Pure pursuit on this rear-steered truck: the steering slew and joint lag behind a short look-ahead made the truck
+ // cross the route by +-9 cm every 2.5-3 s at travel speed, swinging the forks left and right (2026-11-11).
+ // Look further only where the route ahead is straight (nothing to cut); bends keep the short look-ahead.
+ const float Speed2D=FMath::Abs(CurrentSpeedCm);
+ const float ShortLook=FMath::Clamp(Speed2D*.8f,40.f,145.f);
+ const float LongLook=FMath::Clamp(Speed2D*CVarFollowLookAheadGain.GetValueOnGameThread(),
+  CVarFollowLookAheadMin.GetValueOnGameThread(),CVarFollowLookAheadMax.GetValueOnGameThread());
+ auto AimAt=[&](float Reach,float& OutAhead)
+ {
+  int32 Index=RouteIndex;OutAhead=0;
+  while (Index+1<PlannedRoute.Num() && !PlannedRoute[Index+1].bPivot && OutAhead<Reach && PlannedRoute[Index+1].bReverse==PlannedRoute[Index].bReverse)
+  { OutAhead+=FVector::Dist2D(PlannedRoute[Index].Pose.GetLocation(),PlannedRoute[Index+1].Pose.GetLocation()); ++Index; }
+  return Index;
+ };
  float Ahead=0;
- while (Aim+1<PlannedRoute.Num() && !PlannedRoute[Aim+1].bPivot && Ahead<LookAhead && PlannedRoute[Aim+1].bReverse==PlannedRoute[Aim].bReverse)
- { Ahead+=FVector::Dist2D(PlannedRoute[Aim].Pose.GetLocation(),PlannedRoute[Aim+1].Pose.GetLocation()); ++Aim; }
+ int32 Aim=AimAt(ShortLook,Ahead);
+ if (LongLook>ShortLook)
+ {
+  float LongAhead=0;
+  const int32 LongAim=AimAt(LongLook,LongAhead);
+  float Bend=0;
+  for (int32 I=RouteIndex;I<LongAim;++I)
+   Bend=FMath::Max(Bend,FMath::Abs(FMath::FindDeltaAngleDegrees(PlannedRoute[RouteIndex].Pose.Rotator().Yaw,PlannedRoute[I+1].Pose.Rotator().Yaw)));
+  if (Bend<CVarFollowStraightBendDeg.GetValueOnGameThread()) { Aim=LongAim;Ahead=LongAhead; }
+ }
+ // Steering reaches the tyre a few tenths of a second after it is commanded. Steering from where the truck will be by
+ // then, instead of where it is, stops the follower overshooting the route and crossing it again (fork sway).
+ FTransform SteerFrom=Pose;
+ const float Lag=FMath::Clamp(CVarFollowLagSeconds.GetValueOnGameThread(),0.f,1.f);
+ // Full-margin travel routes only (not precision or corridor routes, which run at clearance 0): on a reduced-clearance route the few cm the prediction changes the line by were enough to
+ // touch a floor pallet beside the lane (2026-11-11, 3 cm route); those stretches run at 0.3 m/s and barely sway.
+ if (Lag>0.f && ChassisBody && FMath::Abs(CurrentSpeedCm)>20.f && RouteClearanceCm>=25.f)
+ {
+  const float YawRate=ChassisBody->GetPhysicsAngularVelocityInDegrees().Z;
+  const float Travel=CurrentSpeedCm*Lag;
+  const float MidYaw=Pose.Rotator().Yaw+YawRate*Lag*.5f;
+  SteerFrom=FTransform(FRotator(0,Pose.Rotator().Yaw+YawRate*Lag,0),Pose.GetLocation()+FRotator(0,MidYaw,0).Vector()*Travel);
+  float Extra=0;
+  while (Aim+1<PlannedRoute.Num() && !PlannedRoute[Aim+1].bPivot && Extra<FMath::Abs(Travel) && PlannedRoute[Aim+1].bReverse==PlannedRoute[Aim].bReverse)
+  { Extra+=FVector::Dist2D(PlannedRoute[Aim].Pose.GetLocation(),PlannedRoute[Aim+1].Pose.GetLocation()); ++Aim; }
+ }
  const auto& Step=PlannedRoute[Aim];
- const FVector Local=Pose.InverseTransformPosition(Step.Pose.GetLocation());
+ const FVector Local=SteerFrom.InverseTransformPosition(Step.Pose.GetLocation());
  const float Sign=Step.bReverse ? -1.f : 1.f;
  const float Limit=bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(180.f,EmptyTravelSpeedCm);
  float Desired=FMath::Min(FMath::Min(Speed,Limit),FMath::Sqrt(240.f*Remaining));
