@@ -266,17 +266,20 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  const bool ManualPivot=Manual && Turning;
  const bool ManualTravel=Manual && !Turning && !FMath::IsNearlyZero(RemoteForward);
  const bool ManualStraight=ManualTravel && FMath::IsNearlyZero(RemoteSteering);
- // Hold the tyre sideways and reverse its rolling direction to reverse yaw.
- // Slewing steering by 180 degrees for each tiny correction scrubbed the
- // chassis away from the alignment pose and delayed the next correction.
- const float RequestedSteering=Turning ? -PI*.5f : -FMath::Atan(Wheelbase*DesiredCurvature);
- // A stop holds the steering position instead of straightening a rolling tyre.
- if (bSteeringHealthy && (Turning || !FMath::IsNearlyZero(DesiredDriveSpeed)))
+ const bool ManualCentering=Manual && !Turning && !ManualTravel && FMath::IsNearlyZero(RemoteSteering);
+ // From center, turn the spindle toward the requested manual pivot. If it is
+ // already sideways, keep the closer side and reverse wheel roll instead.
+ const bool ReversePivotWheel=ManualPivot && (SteeringAngle>PI/6.f ||
+  (SteeringAngle>=-PI/6.f && DesiredTurnRate<0.f));
+ const float RequestedSteering=ManualCentering ? 0.f : Turning ? (ReversePivotWheel ? PI*.5f : -PI*.5f) : -FMath::Atan(Wheelbase*DesiredCurvature);
+ // Remote release centers the real spindle while the drive axle brakes.
+ if (bSteeringHealthy && (ManualCentering || Turning || !FMath::IsNearlyZero(DesiredDriveSpeed)))
  {
   if (ManualTravel && !ManualStraight)
    SteeringAngle=FMath::FInterpTo(SteeringAngle,RequestedSteering,Dt,4.f);
   else
-   SteeringAngle=FMath::FInterpConstantTo(SteeringAngle,RequestedSteering,Dt,FMath::DegreesToRadians(ManualPivot ? 720.f : 120.f));
+   SteeringAngle=FMath::FInterpConstantTo(SteeringAngle,RequestedSteering,Dt,
+    FMath::DegreesToRadians(ManualPivot ? 720.f : (ManualCentering || ManualStraight) ? 240.f : 120.f));
  }
  auto* Drive=Wheels[0].Get();
  const FVector Axle=Drive->GetRightVector();
@@ -288,8 +291,8 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  // A short manual A/D press must not expire during the old 0.75s steering
  // ramp. Respond faster with the existing finite 500Nm spindle motor; keep
  // real axle readiness, tyre contacts and release braking. Autonomy is unchanged.
- const float SteeringStiffness=ManualPivot || ManualStraight ? 40000000.f : 20000000.f;
- const float SteeringDamping=ManualStraight ? 3000000.f : 2000000.f;
+ const float SteeringStiffness=ManualCentering ? 60000000.f : (ManualPivot || ManualStraight ? 40000000.f : 20000000.f);
+ const float SteeringDamping=ManualCentering || ManualStraight ? 3000000.f : 2000000.f;
  float CurrentStiffness,CurrentDamping,CurrentLimit;
  SteeringJoint->ConstraintInstance.GetAngularDriveParams(CurrentStiffness,CurrentDamping,CurrentLimit);
  if (CurrentStiffness!=SteeringStiffness || CurrentDamping!=SteeringDamping)
@@ -344,7 +347,7 @@ void AWarehouseForklift::UpdatePhysicalRig(float Dt)
  // Wheel RPM alone cannot measure tyre slip. Close the travel loop on the
  // actual chassis velocity as well, without adding a force to the chassis.
  const float SpeedCorrection=FMath::Clamp((DriveSpeedTarget-CurrentSpeedCm)*2.f,-60.f,60.f);
- const float DesiredSpin=Braking ? 0.f : (Turning ? DesiredTurnRate*Wheelbase/Radius : (DriveSpeedTarget+SpeedCorrection)/(Radius*FMath::Max(.2f,FMath::Cos(SteeringAngle))));
+ const float DesiredSpin=Braking ? 0.f : (Turning ? DesiredTurnRate*Wheelbase/Radius*(ReversePivotWheel ? -1.f : 1.f) : (DriveSpeedTarget+SpeedCorrection)/(Radius*FMath::Max(.2f,FMath::Cos(SteeringAngle))));
  const float Limit=Braking ? FMath::Max(1.f,BrakeTorqueNm) : FMath::Min(FMath::Max(1.f,DriveTorqueNm),FMath::Max(1.f,DrivePowerWatts)/FMath::Max(1.f,FMath::Abs(Spin)));
  // Solve the finite axle motor each physics substep. A game-tick explicit
  // RPM torque loop could alternate wheel spin at creep/pivot speed, especially

@@ -123,7 +123,7 @@ if combined or pivot_only:
 started = time.monotonic()
 phase = 'start'
 at = 0
-rig = dummy = auto = game = None
+rig = dummy = auto = game = wheel = None
 origin = None
 origin_yaw = 0
 straight_results = []
@@ -145,13 +145,20 @@ def enter(name, now):
     print('MANUAL_DRIVE_PHASE', name, now)
 
 
-def check_straight(max_cross_cm, max_yaw_deg):
+def check_straight(max_cross_cm, max_yaw_deg, after=0):
     samples = [row for row in rows if row['phase'] == phase]
-    yaw_rad = math.radians(origin_yaw)
-    cross = max(abs((row['y'] - origin.y) * math.cos(yaw_rad) - (row['x'] - origin.x) * math.sin(yaw_rad)) for row in samples)
-    yaw = max(abs((row['yaw'] - origin_yaw + 180) % 360 - 180) for row in samples)
-    straight_results.append(dict(phase=phase, peak_cross_track_cm=cross, peak_heading_error_deg=yaw))
+    selected = [row for row in samples if row['time'] >= at+after]
+    x, y, heading = (selected[0][k] for k in ('x','y','yaw')) if after else (origin.x, origin.y, origin_yaw)
+    yaw_rad = math.radians(heading)
+    cross = max(abs((row['y'] - y) * math.cos(yaw_rad) - (row['x'] - x) * math.sin(yaw_rad)) for row in selected)
+    yaw = max(abs((row['yaw'] - heading + 180) % 360 - 180) for row in selected)
+    peak_steering = max(row['steering_deg'] for row in selected)
+    release_yaw = max(abs((row['yaw'] - origin_yaw + 180) % 360 - 180) for row in samples)
+    straight_results.append(dict(phase=phase, peak_cross_track_cm=cross, peak_heading_error_deg=yaw,
+        after_seconds=after, peak_steering_deg=peak_steering, peak_release_yaw_deg=release_yaw))
     assert cross <= max_cross_cm and yaw <= max_yaw_deg, (phase, cross, yaw)
+    if after:
+        assert peak_steering < 4.5, ('Wheel did not stay near center', phase, peak_steering)
 
 
 def finish(ok, detail):
@@ -174,11 +181,14 @@ def finish(ok, detail):
 
 
 def tick(dt):
-    global phase, rig, dummy, auto, game, last_scan, contact_since, yaw_start
+    global phase, rig, dummy, auto, game, wheel, last_scan, contact_since, yaw_start
     global combined_yaw, previous_yaw
     try:
         assert time.monotonic() - started < 180, ('Manual regression timeout', phase)
         if phase == 'start':
+            profile = re.search(r'-RemoteSteeringProfile=([0123])\b', command, re.I)
+            if profile:
+                unreal.SystemLibrary.execute_console_command(editor.get_editor_world(), 'Warehouse.Remote.SteeringProfile ' + profile[1])
             level.editor_request_begin_play()
             phase = 'wait'
             return
@@ -191,6 +201,7 @@ def tick(dt):
                 return
             live = {a.get_actor_label(): a for a in unreal.GameplayStatics.get_all_actors_of_class(game, unreal.Actor)}
             rig, dummy, auto = [live[n] for n in ('ManualVehicle', 'ManualOperator', 'ScanVehicle')]
+            wheel = next(c for c in rig.get_components_by_class(unreal.StaticMeshComponent) if c.get_name() == 'DriveWheel')
             assert rig.begin_remote_control(dummy), rig.status
             rig.set_remote_input(0 if pivot_only else 1, 0, 0)
             previous_yaw = rig.get_actor_rotation().yaw
@@ -209,11 +220,14 @@ def tick(dt):
             last_scan = count
         age = now - at
         speed = rig.current_speed_cm
+        axle, body_right = wheel.get_right_vector(), rig.get_actor_right_vector()
+        centered = axle.x*body_right.x + axle.y*body_right.y + axle.z*body_right.z
+        steering_deg = math.degrees(math.acos(max(-1, min(1, centered))))
         if not rows or now - rows[-1]['time'] >= .1:
             rows.append(dict(time=now, phase=phase, x=rig.get_actor_location().x,
                              y=rig.get_actor_location().y, yaw=rig.get_actor_rotation().yaw,
                              yaw_rate_deg_s=rig.root_component.get_physics_angular_velocity_in_degrees().z,
-                             speed=speed, status=rig.status))
+                             speed=speed, steering_deg=steering_deg, status=rig.status))
         if pivot_only:
             direction = 1 if phase == 'pivot_right' else -1 if phase == 'pivot_left' else 0
             rig.set_remote_input(0, direction, 0)
@@ -225,18 +239,21 @@ def tick(dt):
                 combined_results.append(dict(phase=phase,yaw_degrees=combined_yaw))
                 combined_yaw=0
                 enter('right_brake' if direction==1 else 'left_brake',now)
-            elif not direction and age>=2:
+            elif not direction and age>=3:
                 assert abs(speed)<5, ('Pivot release did not brake',speed)
                 # A single instantaneous angular sample includes native tyre/
                 # spindle settling. Bound measured heading drift as well as
                 # linear braking, without zeroing any physical velocity.
+                assert steering_deg < 3, ('Drive wheel did not recenter on release', phase, steering_deg)
                 settled=[p for p in rows if p['phase']==phase and p['time']>=now-.5]
                 release=[p for p in rows if p['phase']==phase]
                 signed=lambda yaw:(yaw-release[0]['yaw']+180)%360-180
-                assert max(abs(signed(p['yaw'])) for p in release)<5, 'Unbounded heading drift after release'
+                peak_release_yaw = max(abs(signed(p['yaw'])) for p in release)
+                # A sustained pivot is still at full yaw rate when released.
+                assert peak_release_yaw < (5 if pivot_pulse else 8), ('Unbounded heading drift after release', phase, peak_release_yaw)
                 changes=[signed(p['yaw']) for p in settled]
                 assert max(changes)-min(changes)<1, 'Heading did not settle after release'
-                combined_results.append(dict(phase=phase,settled_heading_span_deg=max(changes)-min(changes),
+                combined_results.append(dict(phase=phase,settled_heading_span_deg=max(changes)-min(changes),final_steering_deg=steering_deg,peak_release_yaw_deg=peak_release_yaw,
                     final_yaw_rate_deg_s=rig.root_component.get_physics_angular_velocity_in_degrees().z))
                 combined_yaw=0
                 if phase=='left_brake':finish(True,('Both 0.5s A/D-only presses' if pivot_pulse else 'Both held A/D-only pivots')+' and release brakes; actual native rig, no scanner queries')
@@ -254,6 +271,17 @@ def tick(dt):
                 if age >= 4:
                     assert speed < -165, ('Full reverse failed to reach travel speed', speed)
                     check_straight(14, 3)
+                    enter('reverse_steer_prep', now)
+                return
+            if phase == 'reverse_steer_prep':
+                rig.set_remote_input(-1, -1, 0)
+                if age >= 1.5:
+                    enter('reverse_after_release', now)
+                return
+            if phase == 'reverse_after_release':
+                rig.set_remote_input(-1, 0, 0)
+                if age >= 3:
+                    check_straight(8, 3, after=.65)
                     enter('combined_brake', now)
                 return
             if phase == 'combined_brake':
