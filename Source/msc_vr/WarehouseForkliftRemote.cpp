@@ -15,6 +15,10 @@
 #include "PhysicsEngine/BodyInstance.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "HAL/IConsoleManager.h"
+
+static TAutoConsoleVariable<int32> CVarRemoteSteeringProfile(TEXT("Warehouse.Remote.SteeringProfile"),3,
+ TEXT("Manual W/S without steering: 0 legacy line hold, 1 centered, 2 limited correction, 3 center before holding the line."));
 
 namespace
 {
@@ -304,24 +308,32 @@ void AWarehouseForklift::AdvanceRemote(float Dt)
   {
    const float Limit=bSupportingPallet ? FMath::Min(100.f,LoadedTravelSpeedCm) : FMath::Min(180.f,EmptyTravelSpeedCm);
    float Curvature=RemoteSteering/FMath::Max(117.3f,MinimumTurningRadiusCm);
-   if (bPhysicsReady && FMath::IsNearlyZero(RemoteSteering))
+   const int32 SteeringProfile=CVarRemoteSteeringProfile.GetValueOnGameThread();
+   if (bPhysicsReady && FMath::IsNearlyZero(RemoteSteering) && SteeringProfile!=1)
    {
     const float Yaw=GetActorRotation().Yaw;
-    const FVector Axle=(Wheels[1]->GetComponentLocation()+Wheels[2]->GetComponentLocation())*.5f;
-    if (!RemoteStraightYaw.IsSet())
-    {
-     RemoteStraightYaw=Yaw;
-     RemoteStraightAxleOrigin=Axle;
-    }
-    // Hold the line selected by the operator at the start of this straight input.
-    // The rear steering motor corrects drift without applying chassis yaw directly.
-    const float Direction=FMath::Sign(FMath::Abs(CurrentSpeedCm)>10.f ? CurrentSpeedCm : RemoteForward);
-    const FVector Right=FRotationMatrix(FRotator(0,RemoteStraightYaw.GetValue(),0)).GetUnitAxis(EAxis::Y);
-    const float CrossTrack=FVector::DotProduct(RemoteStraightAxleOrigin-Axle,Right);
-    const float TargetYaw=RemoteStraightYaw.GetValue()+FMath::RadiansToDegrees(FMath::Atan(Direction*CrossTrack/200.f));
-    const float YawError=FMath::FindDeltaAngleDegrees(Yaw,TargetYaw);
     const float YawRate=ChassisBody->GetPhysicsAngularVelocityInDegrees().Z;
-    Curvature=Direction*FMath::Clamp(FMath::DegreesToRadians(YawError-.65f*YawRate)/130.f,-1.f/450.f,1.f/450.f);
+    // Let the finite steering motor center before selecting a straight-line heading.
+    // Capturing the heading mid-turn can command a counter-turn as soon as A/D is released.
+    const bool CenterFirst=SteeringProfile==3 && !RemoteStraightYaw.IsSet() &&
+     (FMath::Abs(YawRate)>5.f || FMath::Abs(SteeringAngle)>FMath::DegreesToRadians(2.f));
+    if (!CenterFirst)
+    {
+     const FVector Axle=(Wheels[1]->GetComponentLocation()+Wheels[2]->GetComponentLocation())*.5f;
+     if (!RemoteStraightYaw.IsSet())
+     {
+      RemoteStraightYaw=Yaw;
+      RemoteStraightAxleOrigin=Axle;
+     }
+     // Correct drift through the rear steering motor rather than setting chassis yaw.
+     const float Direction=FMath::Sign(FMath::Abs(CurrentSpeedCm)>10.f ? CurrentSpeedCm : RemoteForward);
+     const FVector Right=FRotationMatrix(FRotator(0,RemoteStraightYaw.GetValue(),0)).GetUnitAxis(EAxis::Y);
+     const float CrossTrack=FVector::DotProduct(RemoteStraightAxleOrigin-Axle,Right);
+     const float TargetYaw=RemoteStraightYaw.GetValue()+FMath::RadiansToDegrees(FMath::Atan(Direction*CrossTrack/200.f));
+     const float YawError=FMath::FindDeltaAngleDegrees(Yaw,TargetYaw);
+     const float LimitCurvature=SteeringProfile==0 ? 1.f/450.f : 1.f/1500.f;
+     Curvature=Direction*FMath::Clamp(FMath::DegreesToRadians(YawError-.65f*YawRate)/130.f,-LimitCurvature,LimitCurvature);
+    }
    }
    if (!CommandDrive(RemoteForward*Limit,Curvature,Dt)) return;
   }
