@@ -478,6 +478,25 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
       *BelowWheel.ImpactPoint.ToString(),*BelowWheel.ImpactNormal.ToString(),SeamInsetAttempted,*SeamRayPoint.ToString(),
       SeamBearingHit,*AtSeam.ImpactPoint.ToString(),*AtSeam.ImpactNormal.ToString());
    }
+   // A tyre rolling over the seam between two coplanar floor slabs can touch the next slab's side face
+   // (normal Z 0.44-0.69 at WH_InboundFloor, 2026-11-10) and was braked as an obstacle. Treat it as a seam
+   // only when the floor under the wheel is a different static slab whose top is level (0.5 cm) with the
+   // touched slab's top and the contact lies within 2 cm below that top: a real kerb stands higher.
+   if (!LiftOnly && Wheels.Contains(Part) && PartDelta.Z>=-.001f && Hit.Normal.Z<=.9f && Hit.GetComponent() &&
+       !Hit.GetComponent()->IsSimulatingPhysics())
+   {
+    const UPrimitiveComponent* Surface=Hit.GetComponent();
+    const float Top=Surface->Bounds.Origin.Z+Surface->Bounds.BoxExtent.Z;
+    FCollisionQueryParams Under(SCENE_QUERY_STAT(SlabSeamEdge),false,this);
+    Under.AddIgnoredActors(GetPhysicalLoads());
+    const float Radius=Part->GetStaticMesh()->GetBoundingBox().GetExtent().Z*Part->GetComponentScale().GetAbs().Z;
+    const FVector Centre=Part->GetComponentLocation();
+    FHitResult Below;
+    if (GetWorld()->LineTraceSingleByChannel(Below,Centre,Centre-FVector(0,0,Radius+5.f),ECC_Visibility,Under) &&
+        Below.GetComponent() && Below.GetComponent()!=Surface && !Below.GetComponent()->IsSimulatingPhysics() &&
+        Below.ImpactNormal.Z>.98f && FMath::Abs(Below.ImpactPoint.Z-Top)<.5f && Top-Hit.ImpactPoint.Z<2.f && Hit.ImpactPoint.Z<=Top+.5f)
+     continue;
+   }
    // An existing contact must allow separating or sliding motion, including withdrawing
    // a jammed tine. Inward motion still brakes; native contact is never disabled.
    const float Into=FVector::DotProduct(PartDelta,Hit.Normal);
