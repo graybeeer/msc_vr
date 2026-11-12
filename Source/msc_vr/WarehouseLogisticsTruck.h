@@ -85,6 +85,8 @@ public:
  UPROPERTY(EditInstanceOnly,BlueprintReadWrite,Category="Logistics") TArray<TObjectPtr<AWarehousePallet>> InitialPallets;
  UFUNCTION(BlueprintPure,Category="Logistics") bool IsReady() const;
  UFUNCTION(BlueprintCallable,Category="Logistics") bool TransferUnit(AWarehousePallet* Pallet,int32 SlotIndex,bool IntoTruck,FTransform WorldDestination);
+ // Shipping has verified the physical handoff. Release ownership without moving any freight.
+ bool RecordInboundHandover(AWarehousePallet* Pallet,const TArray<TObjectPtr<AActor>>& ReceivedCargo,bool bPalletReceived);
  UFUNCTION(BlueprintCallable,Category="Logistics") bool Depart();
  UFUNCTION(BlueprintPure,Category="Logistics") bool IsUnitOnTruck(AWarehousePallet* Pallet) const;
  UFUNCTION(BlueprintPure,Category="Logistics") float PayloadMassKg() const;

@@ -51,6 +51,7 @@ struct FWarehouseRoutePoint
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly) bool bReverse = false;
  UPROPERTY(VisibleAnywhere, BlueprintReadOnly) bool bPivot = false;
  // Stored on the first point so replacing or restoring a route also replaces its escape origin.
- TOptional<FVector> LoadedEscapeOrigin;
- static constexpr float LoadedEscapeRadiusCm=90.f;
+ TOptional<FVector> EscapeOrigin;
+ static constexpr float EscapeRadiusCm=90.f;
+ bool bDeliveryStaging=false;
 };

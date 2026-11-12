@@ -10,6 +10,7 @@ class UInputMappingContext;
 class UUserWidget;
 class SWidget;
 class SBox;
+class FWorldSceneViewExtension;
 class ACameraActor;
 class UAudioComponent;
 class USoundWaveProcedural;
@@ -36,6 +37,7 @@ public:
 	Amsc_vrPlayerController();
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") float MouseSensitivity = 1.f;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") float ViewFOV = 90.f;
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings", meta=(ClampMin="-2", ClampMax="2")) float BrightnessOffset = 0.f;
 	// What forklifts 1 and 2 sense (LiDAR view), drawn top left. Chosen in the F1 menu's AI view settings and kept between sessions.
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bShowForklift1AIView = false;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bShowForklift2AIView = false;
@@ -44,6 +46,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bAIViewForkSide = false;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bAIViewAccumulate = true;
 	UFUNCTION(BlueprintCallable, Category="Settings") void OpenAIViewSettings();
+	UFUNCTION(BlueprintCallable, Category="Settings") void OpenGraphicsSettings();
 	UFUNCTION(BlueprintCallable, Category="Settings") void ApplyAIViewSettings();
 	UFUNCTION(BlueprintCallable, Category="Settings") void ToggleWarehouseMenu();
 	UFUNCTION(BlueprintCallable, Category="Play mode") bool OpenPlayMode(int32 StageIndex);
@@ -115,6 +118,8 @@ protected:
 	bool ShouldUseTouchControls() const;
 	void UpdateInputMode();
 	void CloseWarehouseMenu();
+	void OpenWarehouseSettings();
+	void ShowSettingsPanel(const TSharedRef<SWidget>& Panel,float Width,float OverlayOpacity);
 	void UpdateObserverCamera();
 	FText GetCargoReadout() const;
 	TSharedPtr<SWidget> CargoReadoutWidget;
@@ -139,6 +144,7 @@ protected:
 	float ObserverVisibilityElapsed = 0;
 	double ObserverLastWall=0;
 	TSharedPtr<SWidget> MenuWidget;
+	TSharedPtr<FWorldSceneViewExtension,ESPMode::ThreadSafe> ExposureView;
 	TSharedPtr<SWidget> ComputerWidget;
 	TSharedPtr<SWidget> ExperimentWidget;
 	TSharedPtr<SWidget> PlayWidget;

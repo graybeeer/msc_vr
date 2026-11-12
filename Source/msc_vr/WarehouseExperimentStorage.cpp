@@ -582,6 +582,7 @@ bool WarehouseExperimentStorage::FinalizeAfterBeginPlay(UWorld* World,const TSha
   else if (Pallet->ReceivingState==EWarehouseReceivingState::Quarantined && Pallet->ReceivingStatus.IsEmpty())
    Pallet->ReceivingStatus=TEXT("품질 확인 후 재검수 요청 필요");
  }
+ for (TActorIterator<AWarehouseLayoutEditor> It(World);It;++It) It->CaptureInitialCargoPositions();
  UWarehouseChargerWiring::RefreshConnections(World);
  return true;
 }

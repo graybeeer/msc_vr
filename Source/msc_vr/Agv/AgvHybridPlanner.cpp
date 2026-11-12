@@ -514,13 +514,14 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 	FWarehouseNavigationQuery EscapeQuery = Query;
 	EscapeQuery.Envelope = Query.Envelope.ExpandBy(FVector(5.0 - Margin, 5.0 - Margin, 0.0));
 	const bool bStartBlocked = !NavigationClear(Start, &Query);
-	const bool bLoadedDeparture = bStartBlocked && bSupportingPallet &&
-		(AIState==EWarehouseAIState::PlanDelivery || AIState==EWarehouseAIState::NavigateDelivery);
-	constexpr double EscapeCm = FWarehouseRoutePoint::LoadedEscapeRadiusCm;
+	const bool bTrackDeparture = bStartBlocked && (AIState==EWarehouseAIState::PlanDelivery || AIState==EWarehouseAIState::NavigateDelivery ||
+		AIState==EWarehouseAIState::PlanPickup || AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::RecoverReplan ||
+		AIState==EWarehouseAIState::PlanParking || AIState==EWarehouseAIState::NavigateParking);
+	constexpr double EscapeCm = FWarehouseRoutePoint::EscapeRadiusCm;
 	const auto FullyClear = [&](const FTransform& Pose)
 	{
 		const bool bEscape = bStartBlocked && FVector2D::DistSquared(FVector2D(Pose.GetLocation()), StartXY) < EscapeCm * EscapeCm;
-		if (bEscape && bLoadedDeparture)
+		if (bEscape && bTrackDeparture)
 		{
 			return (!FleetCoordinator || FleetCoordinator->PlanningClear(this, Query.Envelope.TransformBy(Pose.ToMatrixWithScale()))) &&
 				PhysicalPoseClear(Pose, true);
@@ -948,6 +949,6 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 		return false;
 	}
 	OutRoute = MoveTemp(BestRoute);
-	if (bLoadedDeparture && !OutRoute.IsEmpty()) OutRoute[0].LoadedEscapeOrigin=Start.GetLocation();
+	if (bTrackDeparture && !OutRoute.IsEmpty()) OutRoute[0].EscapeOrigin=Start.GetLocation();
 	return true;
 }

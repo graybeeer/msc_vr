@@ -165,7 +165,7 @@ bool AWarehousePallet::ConfirmInbound(const TArray<AActor*>& Loads,bool Refresh)
   Joint->SetAngularBreakable(true,FMath::Max(1.f,WrapBreakTorqueNm)*10000.f); // Nm -> kg cm² / s².
   Joint->OnConstraintBroken.AddDynamic(this,&AWarehousePallet::OnWrapJointBroken);
   Joint->SetConstrainedComponents(Body,NAME_None,Box->GetCargoBody(),NAME_None);
-  Box->WrappedPallet=this;WrapJoints.Add(Joint);
+  Box->TornWrapPallet.Reset();Box->WrappedPallet=this;WrapJoints.Add(Joint);
  }
  ReceiptState=EWarehouseReceiptState::Confirmed;
  ReceivingState=EWarehouseReceivingState::Accepted;ReceivingStatus=TEXT("입고 검수 완료 · 수락 재고");
@@ -174,10 +174,15 @@ bool AWarehousePallet::ConfirmInbound(const TArray<AActor*>& Loads,bool Refresh)
  return true;
 }
 
-void AWarehousePallet::BuildWrapFilm()
+void AWarehousePallet::ClearWrapFilm()
 {
  for (USplineMeshComponent* Part:WrapFilm) if (Part) Part->DestroyComponent();
  WrapFilm.Reset();
+}
+
+void AWarehousePallet::BuildWrapFilm()
+{
+ ClearWrapFilm();
  auto* Material=WrapMaterial.LoadSynchronous();
  auto* Sheet=LoadObject<UStaticMesh>(nullptr,TEXT("/Engine/BasicShapes/Plane"));
  if (!Material || !Sheet) return;
@@ -267,9 +272,34 @@ void AWarehousePallet::TearWrap()
  ReceivingState=EWarehouseReceivingState::Quarantined;ReceivingStatus=TEXT("랩 파손 · 적재 확인 후 재검수 요청 필요 [WRAP_TORN]");
  for (UPhysicsConstraintComponent* Joint:WrapJoints) if (Joint) Joint->DestroyComponent();
  WrapJoints.Reset();
- for (AWarehouseCargo* Box:WrappedCargo) if (IsValid(Box)) { Box->WrappedPallet.Reset();Box->GetCargoBody()->WakeAllRigidBodies(); }
+ for (AWarehouseCargo* Box:WrappedCargo) if (IsValid(Box))
+ { Box->TornWrapPallet=this;Box->WrappedPallet.Reset();Box->GetCargoBody()->WakeAllRigidBodies(); }
  BuildWrapFilm();WrappedCargo.Reset();bWrapBreakPending=false;SetActorTickEnabled(false);
  UE_LOG(LogTemp,Warning,TEXT("PALLET_WRAP_TORN %s - inspection required"),*GetName());
+}
+
+AWarehousePallet* AWarehousePallet::FindTornWrap(AActor* Target)
+{
+ auto* Pallet=Cast<AWarehousePallet>(Target);
+ if (const auto* Cargo=Cast<AWarehouseCargo>(Target))
+ {
+  Pallet=Cargo->TornWrapPallet.Get();
+  if (Pallet)
+  {
+   const FVector Local=Pallet->GetActorTransform().InverseTransformPosition(Cargo->GetActorLocation());
+   if (FMath::Abs(Local.X)>60 || FMath::Abs(Local.Y)>60 || Local.Z<0 || Local.Z>215) return nullptr;
+  }
+ }
+ return IsValid(Pallet) && Pallet->ReceiptState==EWarehouseReceiptState::WrapTorn && !Pallet->WrapFilm.IsEmpty() &&
+  !Pallet->ActorHasTag(TEXT("LogisticsInTransit")) && !Pallet->ActorHasTag(TEXT("PlayerHeldCargo")) ? Pallet : nullptr;
+}
+
+bool AWarehousePallet::RemoveTornWrap()
+{
+ if (!HasAuthority() || FindTornWrap(this)!=this) return false;
+ ClearWrapFilm();
+ ReceivingStatus=TEXT("찢어진 랩 제거 · 재검수 필요");
+ return true;
 }
 
 void AWarehousePallet::Tick(float Dt)

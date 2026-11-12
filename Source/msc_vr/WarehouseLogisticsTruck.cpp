@@ -235,13 +235,13 @@ void AWarehouseLogisticsTruck::AdvanceDockService(float DeltaSeconds)
 FBox AWarehouseLogisticsTruck::UnitBounds(const FUnit& Unit,const FTransform& PalletPose,const FTransform& Reference)
 {
  FBox Result(ForceInit);
- const FTransform Current=Unit.Pallet.IsValid() ? Unit.Pallet->GetActorTransform():FTransform::Identity;
  for (const auto& Member:Unit.Members) if (auto* Actor=Member.Actor.Get())
  {
-  const FBox Box=PhysicalLocalBounds(Actor,Current);
+  const FBox Box=PhysicalLocalBounds(Actor,Actor->GetActorTransform());
   if (!Box.IsValid) continue;
+  const FTransform Goal=Member.RelativePose*PalletPose;
   for (int32 I=0;I<8;++I)
-   Result+=Reference.InverseTransformPosition(PalletPose.TransformPosition(FVector(I&1 ? Box.Max.X:Box.Min.X,I&2 ? Box.Max.Y:Box.Min.Y,I&4 ? Box.Max.Z:Box.Min.Z)));
+   Result+=Reference.InverseTransformPosition(Goal.TransformPosition(FVector(I&1 ? Box.Max.X:Box.Min.X,I&2 ? Box.Max.Y:Box.Min.Y,I&4 ? Box.Max.Z:Box.Min.Z)));
  }
  return Result;
 }
@@ -369,6 +369,37 @@ bool AWarehouseLogisticsTruck::Transfer(AWarehousePallet* Pallet,int32 SlotIndex
   if (!PalletLocal.IsValid) return Fail(TEXT("팔레트의 실제 충돌 크기를 확인할 수 없습니다."));
   const FVector Bottom(PalletLocal.GetCenter().X,PalletLocal.GetCenter().Y,PalletLocal.Min.Z);
   const FTransform Goal(Slot.GetRotation(),Slot.GetLocation()-Slot.GetRotation().RotateVector(Bottom*Initial.GetScale3D()),Initial.GetScale3D());
+  if (InitialCargo && Unit.Members.Num()>4 && Unit.Joints.IsEmpty())
+  {
+   // Initial truck stock is kinematic in transit but loose after unloading.
+   // Place small cartons in three low stacks with the broadest bases below.
+   struct FCarton { int32 Index;FBox Bounds; };
+   TArray<FCarton> Cartons;
+   const double LaneWidth=(PalletLocal.GetSize().X-4.)/3.;
+   for (int32 I=1;I<Unit.Members.Num();++I)
+   {
+    const FBox Bounds=PhysicalLocalBounds(Unit.Members[I].Actor.Get(),Initial);
+    if (!Bounds.IsValid || Bounds.GetSize().X>LaneWidth-2. || Bounds.GetSize().Y>PalletLocal.GetSize().Y-4.) break;
+    Cartons.Add({I,Bounds});
+   }
+   if (Cartons.Num()==Unit.Members.Num()-1)
+   {
+    const auto OriginalMembers=Unit.Members;
+    Cartons.StableSort([](const FCarton& A,const FCarton& B)
+    { return A.Bounds.GetSize().X*A.Bounds.GetSize().Y>B.Bounds.GetSize().X*B.Bounds.GetSize().Y; });
+    double Tops[3]={PalletLocal.Max.Z,PalletLocal.Max.Z,PalletLocal.Max.Z};
+    for (const auto& Carton:Cartons)
+    {
+     int32 Lane=0;
+     for (int32 I=1;I<3;++I) if (Tops[I]<Tops[Lane]) Lane=I;
+     const FVector Center=Carton.Bounds.GetCenter();
+     const FVector At(PalletLocal.GetCenter().X+(Lane-1)*LaneWidth,PalletLocal.GetCenter().Y,Tops[Lane]+.2);
+     Unit.Members[Carton.Index].RelativePose.AddToTranslation(At-FVector(Center.X,Center.Y,Carton.Bounds.Min.Z));
+     Tops[Lane]=At.Z+Carton.Bounds.GetSize().Z;
+    }
+    if (!FitsSlot(Unit,Goal,SlotIndex)) Unit.Members=OriginalMembers;
+   }
+  }
   if (!FitsSlot(Unit,Goal,SlotIndex)) return Fail(TEXT("팔레트·화물이 적재 자리보다 크거나 다른 화물과 겹칩니다."));
   for (const auto& Member:Unit.Members) if (auto* Actor=Member.Actor.Get()) Actor->Tags.AddUnique(TransitTag);
   for (const auto& Body:Unit.Bodies) if (auto* Component=Body.Body.Get()) Component->SetSimulatePhysics(false);
@@ -387,9 +418,39 @@ bool AWarehouseLogisticsTruck::Transfer(AWarehousePallet* Pallet,int32 SlotIndex
   const FTransform Goal(WorldDestination.GetRotation(),WorldDestination.GetLocation()-WorldDestination.GetRotation().RotateVector(Bottom*Pallet->GetActorScale3D()),Pallet->GetActorScale3D());
   MoveUnit(Unit,Goal);RestoreUnit(Unit);Units.RemoveAt(Index);ManifestPallets.Remove(Pallet);
  }
- State=EWarehouseTruckState::Loading;TransferRemaining=FMath::Max(.1f,TransferIntervalSeconds);
- Status=IntoTruck ? TEXT("NPC 상차 중"):TEXT("NPC 하역 중");
+ const bool bLastUnload=!IntoTruck && Units.IsEmpty();
+ State=bLastUnload ? EWarehouseTruckState::AtDock : EWarehouseTruckState::Loading;
+ TransferRemaining=bLastUnload ? 0.f : FMath::Max(.1f,TransferIntervalSeconds);
+ Status=IntoTruck ? TEXT("NPC 상차 중") : bLastUnload ? TEXT("하역 완료") : TEXT("NPC 하역 중");
  UE_LOG(LogTemp,Log,TEXT("LOGISTICS_UNIT_TRANSFER truck=%s pallet=%s into=%d"),*TruckId,*Pallet->GetName(),IntoTruck);
+ return true;
+}
+
+bool AWarehouseLogisticsTruck::RecordInboundHandover(AWarehousePallet* Pallet,const TArray<TObjectPtr<AActor>>& ReceivedCargo,bool bPalletReceived)
+{
+ if (!HasAuthority() || !IsReady() || !IsValid(Pallet)) return false;
+ const int32 Index=Units.IndexOfByPredicate([&](const FUnit& Unit){return Unit.Pallet.Get()==Pallet;});
+ if (Index==INDEX_NONE)
+  return !ManifestPallets.Contains(Pallet) && !Pallet->ActorHasTag(TransitTag) &&
+   !ReceivedCargo.ContainsByPredicate([](const auto& Cargo){return !IsValid(Cargo) || Cargo->ActorHasTag(TransitTag);});
+ auto& Unit=Units[Index];
+ if (!ManifestPallets.Contains(Pallet) || Unit.Members.ContainsByPredicate([&](const FUnitMember& Member)
+  { const auto* Actor=Member.Actor.Get();return !IsValid(Actor) || (Actor!=Pallet && !ReceivedCargo.Contains(Actor)); })) return false;
+ if (bPalletReceived)
+ {
+  RestoreUnit(Unit);Units.RemoveAt(Index);ManifestPallets.Remove(Pallet);return true;
+ }
+ // An empty pallet can ride out with the truck if it remains in its secured slot.
+ if (Pallet->PayloadMassKg>0 || !Pallet->ActorHasTag(TransitTag) ||
+     !PoseMatches(Pallet->GetActorTransform(),Unit.LocalPalletPose*GetActorTransform())) return false;
+ if (!Unit.Joints.IsEmpty()) { Pallet->TearWrap();Unit.Joints.Reset(); }
+ FUnit Released;
+ for (const auto& Member:Unit.Members) if (Member.Actor.Get()!=Pallet) Released.Members.Add(Member);
+ for (const auto& Body:Unit.Bodies) if (Body.Body.IsValid() && Body.Body->GetOwner()!=Pallet) Released.Bodies.Add(Body);
+ RestoreUnit(Released);
+ Unit.Members.RemoveAll([Pallet](const auto& Member){return Member.Actor.Get()!=Pallet;});
+ Unit.Bodies.RemoveAll([Pallet](const auto& Body){return !Body.Body.IsValid() || Body.Body->GetOwner()!=Pallet;});
+ Unit.MassKg=Pallet->PalletMassKg;
  return true;
 }
 

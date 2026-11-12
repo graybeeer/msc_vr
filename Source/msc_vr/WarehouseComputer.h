@@ -19,6 +19,7 @@ struct FWarehouseInventoryItem
  UPROPERTY(BlueprintReadOnly) float MassKg=0;
  UPROPERTY(BlueprintReadOnly) bool bReserved=false;
  UPROPERTY(BlueprintReadOnly) FString ReceiptStatus;
+ UPROPERTY(BlueprintReadOnly) FString OutboundTruckId;
 };
 USTRUCT(BlueprintType)
 struct FWarehouseComputerTask

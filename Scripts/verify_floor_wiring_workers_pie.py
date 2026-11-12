@@ -85,6 +85,7 @@ def tick(dt):
             floor_z = int((station.get_actor_location().z + 20) // 400) * 400
             horizontal = [(a, b) for a, b in zip(points, points[1:]) if (unreal.Vector(a.x-b.x, a.y-b.y, 0)).length() > .2]
             assert horizontal and all(abs(a.z-floor_z-2.1) < .2 and abs(b.z-floor_z-2.1) < .2 for a, b in horizontal), [str(p) for p in points]
+            assert all(abs(a.x-b.x) < 1.1 or abs(a.y-b.y) < 1.1 for a, b in horizontal), [str(p) for p in points]
             routes.append(dict(charger=station.get_actor_label(), points=[[p.x,p.y,p.z] for p in points]))
         cables = [a for a in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.Actor) if a.actor_has_tag('ChargerSupplyCable')]
         assert len(cables) == len(stations)

@@ -488,10 +488,10 @@ bool AWarehouseForklift::NavigationClear(const FTransform& Pose,const FWarehouse
   StraightPickup=Local.X>=-PickupStraightLengthCm-10.f && Local.X<=3.f && FMath::Abs(Local.Y)<=7.f &&
    FMath::Abs(FMath::FindDeltaAngleDegrees(Guide.Rotator().Yaw,Pose.Rotator().Yaw))<=5.f;
  }
- const bool LoadedEscape=!bPlanningRoute && AIState==EWarehouseAIState::NavigateDelivery && bSupportingPallet &&
-  !PlannedRoute.IsEmpty() && PlannedRoute[0].LoadedEscapeOrigin.IsSet() &&
-  FVector::DistSquared2D(Pose.GetLocation(),PlannedRoute[0].LoadedEscapeOrigin.GetValue())<FMath::Square(FWarehouseRoutePoint::LoadedEscapeRadiusCm);
- const bool PhysicalEscape=BoxBlocked && (LegacyEscape || ObservedPickupEscape || PrecisionPickupEnd || StraightPickup || LoadedEscape) && PhysicalPoseClear(Pose,true);
+ const bool RouteEscape=!bPlanningRoute && (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery ||
+  AIState==EWarehouseAIState::NavigateParking) && !PlannedRoute.IsEmpty() && PlannedRoute[0].EscapeOrigin.IsSet() &&
+  FVector::DistSquared2D(Pose.GetLocation(),PlannedRoute[0].EscapeOrigin.GetValue())<FMath::Square(FWarehouseRoutePoint::EscapeRadiusCm);
+ const bool PhysicalEscape=BoxBlocked && (LegacyEscape || ObservedPickupEscape || PrecisionPickupEnd || StraightPickup || RouteEscape) && PhysicalPoseClear(Pose,true);
  if (PhysicalEscape) NavigationBlockDetail.Reset();
  if (BoxBlocked && !PhysicalEscape)
  {
@@ -923,10 +923,10 @@ bool AWarehouseForklift::TryPlanAutonomousRoute(const FTransform& Goal,float Cle
 bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
 {
  if (PlannedRoute.IsEmpty()) { BrakeDrive(); return true; }
- if (AIState==EWarehouseAIState::NavigateDelivery && PlannedRoute[0].LoadedEscapeOrigin.IsSet())
+ if (PlannedRoute[0].EscapeOrigin.IsSet())
  {
-  auto& Origin=PlannedRoute[0].LoadedEscapeOrigin;
-  if (FVector::DistSquared2D(GetActorLocation(),Origin.GetValue())>=FMath::Square(FWarehouseRoutePoint::LoadedEscapeRadiusCm)) Origin.Reset();
+  auto& Origin=PlannedRoute[0].EscapeOrigin;
+  if (FVector::DistSquared2D(GetActorLocation(),Origin.GetValue())>=FMath::Square(FWarehouseRoutePoint::EscapeRadiusCm)) Origin.Reset();
   else Speed=FMath::Min(30.f,Speed);
  }
  if (AIState==EWarehouseAIState::NavigatePickup && PickupStraightGoal.IsSet() &&
@@ -1828,9 +1828,28 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   if (!WaitForDestinationClear(Dt)) break;
   if (PlanDeliveryApproach())
   { Next(EWarehouseAIState::NavigateDelivery,TEXT("NAVIGATION TO DESTINATION")); bRouteStarted=true; }
+ else if (bSupportingPallet && FVector::Dist2D(GetActorLocation(),TaskSourcePose().GetLocation())<PickupApproachDistanceCm+60.f)
+ {
+  // Leave the rack before solving the distant delivery approach. The same
+  // loaded footprint, floor and fleet checks apply to this short route.
+  const FVector Exit=GetActorLocation()-GetActorForwardVector().GetSafeNormal2D()*280.f;
+  const FRotator Heading(0,GetActorRotation().Yaw,0);
+  for (float Side : {0.f,90.f,-90.f})
+  {
+   if (!PlanAutonomousRoute(FTransform(Heading,Exit+Heading.RotateVector(FVector(0,Side,0)))) || PlannedRoute.IsEmpty()) continue;
+   PlannedRoute.Last().bDeliveryStaging=true;
+   Next(EWarehouseAIState::NavigateDelivery,TEXT("CLEAR RACK AISLE BEFORE DELIVERY"));bRouteStarted=true;break;
+  }
+  if (AIState==EWarehouseAIState::PlanDelivery) StopFor(TEXT("OBSTACLE / NO DELIVERY ROUTE"));
+ }
   else StopFor(TEXT("OBSTACLE / NO DELIVERY ROUTE"));
   break;
  case EWarehouseAIState::NavigateDelivery:
+  if (!PlannedRoute.IsEmpty() && PlannedRoute.Last().bDeliveryStaging)
+  {
+   if (FollowRoute(LoadedTravelSpeedCm,Dt)) Next(EWarehouseAIState::PlanDelivery,TEXT("AISLE CLEAR - PLAN LOADED ROUTE"));
+   break;
+  }
   Route(PalletApproach(ActiveJob.Destination,220),EWarehouseAIState::AlignUnload,TEXT("ALIGN UNLOADING POSITION"),LoadedTravelSpeedCm);
   break;
  case EWarehouseAIState::AlignUnload:

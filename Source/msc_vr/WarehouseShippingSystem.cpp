@@ -16,10 +16,27 @@
 
 namespace
 {
+ constexpr double InboundDepartureDelaySeconds=240.;
+
  bool Finished(const FWarehouseShipment& S)
  { return S.State==EWarehouseShipmentState::Completed || S.State==EWarehouseShipmentState::Cancelled; }
  FTransform SlotPose(const FWarehouseShippingZone& Z,int32 Slot)
  { return Z.Slots[Slot]*Z.Anchor->GetActorTransform(); }
+ bool CargoInsideInboundZone(AActor* Actor,const FWarehouseShippingZone& Zone,double Height)
+ {
+  if (!IsValid(Actor)) return false;
+  const auto& Frame=Zone.Anchor->GetActorTransform();
+  const FBox Area(FVector(-Zone.HalfSize.X,-Zone.HalfSize.Y,-5.),FVector(Zone.HalfSize.X,Zone.HalfSize.Y,Height));
+  if (!Area.IsInsideOrOn(Frame.InverseTransformPosition(Actor->GetActorLocation()))) return false;
+  const FBox Bounds=AWarehouseDamageSystem::GetPhysicalBounds(Actor);
+  if (!Bounds.IsValid) return false;
+  for (int32 I=0;I<8;++I)
+  {
+   const FVector Corner(I&1 ? Bounds.Max.X:Bounds.Min.X,I&2 ? Bounds.Max.Y:Bounds.Min.Y,I&4 ? Bounds.Max.Z:Bounds.Min.Z);
+   if (!Area.IsInsideOrOn(Frame.InverseTransformPosition(Corner))) return false;
+  }
+  return true;
+ }
  bool Held(const AActor* Context,AWarehousePallet* P,const TArray<TObjectPtr<AActor>>& Cargo)
  {
   for (TActorIterator<Amsc_vrCharacter> It(Context->GetWorld());It;++It)
@@ -299,10 +316,25 @@ void AWarehouseShippingSystem::RefreshShipping()
 void AWarehouseShippingSystem::Advance(FWarehouseShipment& S,const FWarehouseShippingZone& Z)
 {
  auto* Truck=S.Truck.Get();const double Now=GetWorld()->GetTimeSeconds();
+ const bool bInbound=S.Direction==EWarehouseShipmentDirection::Inbound;
+ if (bInbound && Z.bInbound && Truck->IsReady() && Truck->GetVisitId()==S.TruckVisitId)
+ {
+  const double Height=FMath::Max(Z.HalfSize.Z,Truck->LoadSlotSizeCm.Z);
+  for (auto& L:S.Lines) if (!L.bArrived && IsValid(L.Pallet))
+  {
+   const bool bPalletReceived=CargoInsideInboundZone(L.Pallet,Z,Height);
+   if ((L.Cargo.IsEmpty() && !bPalletReceived) ||
+       L.Cargo.ContainsByPredicate([&](const auto& Cargo){return !CargoInsideInboundZone(Cargo,Z,Height);}) ||
+       Held(this,L.Pallet,L.Cargo) || !Truck->RecordInboundHandover(L.Pallet,L.Cargo,bPalletReceived)) continue;
+   L.bArrived=true;L.bLoaded=false;L.Status=TEXT("입고 구역 실물 확인 · 인계 등록");
+   S.bRecoveredInboundHandover=true;
+  }
+ }
  // Layout and inventory can change while a visit is waiting. Revalidate before
  // either dispatch or transfer indexes a reserved staging slot or pallet.
  for (auto& L:S.Lines)
  {
+  if (bInbound && L.bArrived) continue;
   if (!IsValid(L.Pallet) || !Z.Slots.IsValidIndex(L.StagingSlot))
   {
    for (auto& Line:S.Lines) { Line.PreparationStartedAt=-1;Line.bPrepared=false; }
@@ -390,12 +422,23 @@ void AWarehouseShippingSystem::Advance(FWarehouseShipment& S,const FWarehouseShi
  S.State=Transferred ? EWarehouseShipmentState::Transferring : All ? EWarehouseShipmentState::WaitingTruck : EWarehouseShipmentState::Preparing;
  S.Status=S.Direction==EWarehouseShipmentDirection::Outbound ? TEXT("출고 준비 · 지게차 운반") : TEXT("입고 하역 대기");
  if (S.Direction==EWarehouseShipmentDirection::Outbound && !All) return;
+ const bool Complete=!S.Lines.ContainsByPredicate([bInbound](const auto& L) { return bInbound ? !L.bArrived : !L.bLoaded; });
+ if (Complete && bInbound && S.bRecoveredInboundHandover)
+ {
+  if (S.InboundDepartureAt<0) S.InboundDepartureAt=Now+InboundDepartureDelaySeconds;
+  if (Now<S.InboundDepartureAt)
+  {
+   S.Status=TEXT("입고 물품 인계 완료 · 출차 대기");
+   S.WaitReason=FString::Printf(TEXT("자동 출차까지 %d초"),FMath::CeilToInt(S.InboundDepartureAt-Now));return;
+  }
+ }
  if (!Truck->IsReady())
  { S.WaitReason=Truck->Status.IsEmpty() ? TEXT("지정 도크의 트럭 준비를 기다립니다.") : Truck->Status;return; }
- const bool Complete=S.Lines.ContainsByPredicate([&](const auto& L) { return S.Direction==EWarehouseShipmentDirection::Outbound ? !L.bLoaded : !L.bArrived; })==false;
  if (Complete)
  {
-  const bool ManifestCorrect=S.Direction==EWarehouseShipmentDirection::Inbound ? Truck->ManifestPallets.IsEmpty() :
+  const bool ManifestCorrect=bInbound ? Truck->ManifestPallets.IsEmpty() ||
+   (S.bRecoveredInboundHandover && !Truck->ManifestPallets.ContainsByPredicate([&](AWarehousePallet* P)
+    { return !IsValid(P) || P->PayloadMassKg>0 || !Truck->IsUnitOnTruck(P) || !Truck->GetUnitCargo(P).IsEmpty(); })) :
    Truck->ManifestPallets.Num()==S.Lines.Num() && !Truck->ManifestPallets.ContainsByPredicate([&](AWarehousePallet* P) { return !S.Lines.ContainsByPredicate([&](const auto& L) { return L.Pallet==P && L.bLoaded; }); });
   if (!ManifestCorrect) { S.WaitReason=TEXT("트럭 적재 명세가 배송편과 일치하지 않습니다.");return; }
   S.State=EWarehouseShipmentState::ReadyToDepart;S.Status=TEXT("명세 확인 완료 · 출발 준비");
@@ -413,7 +456,15 @@ void AWarehouseShippingSystem::Advance(FWarehouseShipment& S,const FWarehouseShi
   if (In && !ZonePlacementClear(Z,L.StagingSlot,L.Pallet,S.WaitReason)) return;
   if (!Truck->TransferUnit(L.Pallet,L.TruckSlot,!In,In ? SlotPose(Z,L.StagingSlot) : FTransform::Identity))
   { S.WaitReason=Truck->Status;return; }
-  if (In) { L.bArrived=true;L.bLoaded=false;L.Status=TEXT("입고 구역 인계 완료 · NPC 검수 대기"); }
+  if (In)
+  {
+   L.bArrived=true;L.bLoaded=false;L.Status=TEXT("입고 구역 인계 완료 · NPC 검수 대기");
+   if (auto* Layout=AWarehouseLayoutEditor::Find(this))
+   {
+    Layout->RememberCargoPosition(L.Pallet);
+    for (AActor* Cargo:L.Cargo) Layout->RememberCargoPosition(Cargo);
+   }
+  }
   else { L.bLoaded=true;L.Status=TEXT("트럭 상차 완료"); }
   S.State=EWarehouseShipmentState::Transferring;S.Status=In ? TEXT("NPC 하역 중 · 한 팔레트씩 인계") : TEXT("NPC 상차 중 · 한 팔레트씩 적재");
   S.NextTransferAt=Now+FMath::Max(.1f,Truck->TransferIntervalSeconds);

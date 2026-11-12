@@ -57,6 +57,7 @@ public:
  void WakeStackAbove();
  // Runtime unit-load membership; independent Chaos bodies are never welded.
  TWeakObjectPtr<AWarehousePallet> WrappedPallet;
+ TWeakObjectPtr<AWarehousePallet> TornWrapPallet;
  UFUNCTION(BlueprintPure,Category="Inbound") AWarehousePallet* GetWrappedPallet() const;
 private:
  UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> Body;

@@ -20,6 +20,7 @@
 #include "WarehouseDamageSystem.h"
 #include "WarehousePhysics.h"
 #include "WarehouseLayoutInventory.h"
+#include "WarehouseExperimentSubsystem.h"
 #include "WarehouseWaitingBay.h"
 #include "msc_vrCharacter.h"
 #include "Components/PrimitiveComponent.h"
@@ -28,6 +29,7 @@
 #include "PhysicsEngine/BodySetup.h"
 #include "PhysicsEngine/PhysicsConstraintComponent.h"
 #include "Engine/World.h"
+#include "Engine/GameInstance.h"
 #include "EngineUtils.h"
 #include "Engine/OverlapResult.h"
 #include "GameFramework/PlayerController.h"
@@ -42,6 +44,8 @@ namespace
  }
  bool InsideXY(const FBox& Box,FVector Point)
  { return Point.X>=Box.Min.X && Point.X<=Box.Max.X && Point.Y>=Box.Min.Y && Point.Y<=Box.Max.Y; }
+ bool IsCargo(AActor* Actor)
+ { return IsValid(Actor) && (Actor->IsA<AWarehousePallet>() || Actor->IsA<AWarehouseCargo>()); }
  bool IsShaft(const AActor* Actor)
  { return Actor && (Actor->IsA<AWarehouseElevator>() || Actor->IsA<AWarehousePalletLift>()); }
  bool OnlyBoxSurfaceContact(UPrimitiveComponent* Part,UPrimitiveComponent* Surface)
@@ -428,11 +432,11 @@ bool AWarehouseLayoutEditor::BeginDrag(AActor* HitActor,FVector FloorPoint)
  Status=FString::Printf(TEXT("%d개 요소 이동 중 · 충돌 꺼짐 · 같은 층 · 놓으면 검사"),Moving.Num());
  return true;
 }
-void AWarehouseLayoutEditor::CaptureMoving(const TArray<AActor*>& Members)
+void AWarehouseLayoutEditor::CaptureMoving(const TArray<AActor*>& Members,bool bSuspendWiring)
 {
  // Wiring is derived from the final arrangement, never dragged as cargo or
  // allowed to block its own charger/structure placement transaction.
- UWarehouseChargerWiring::SetSuspended(this,true);
+ if (bSuspendWiring) UWarehouseChargerWiring::SetSuspended(this,true);
  Moving.Reset();
  for (AActor* A:Members)
  {
@@ -564,6 +568,160 @@ void AWarehouseLayoutEditor::RefreshAfterEdit(bool PublishTaskLocation)
  for (TActorIterator<AWarehouseShippingSystem> It(GetWorld());It;++It) It->RefreshLayoutCatalog();
  for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It) It->RefreshAfterLayout(PublishTaskLocation);
  for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) It->RefreshState();
+}
+
+void AWarehouseLayoutEditor::RememberCargoPosition(AActor* Actor)
+{
+ if (!IsCargo(Actor) || Actor->ActorHasTag(TEXT("LogisticsInTransit")) ||
+     Actor->ActorHasTag(TEXT("PlayerHeldCargo")) || GroupOf(Actor).ToString().StartsWith(TEXT("LayoutGroup:TruckDock"))) return;
+ CargoResetPositions.Add(Actor,Actor->GetActorTransform());
+}
+
+void AWarehouseLayoutEditor::CaptureInitialCargoPositions()
+{
+ CargoResetPositions.Reset();
+ for (TActorIterator<AWarehousePallet> It(GetWorld());It;++It) RememberCargoPosition(*It);
+ for (TActorIterator<AWarehouseCargo> It(GetWorld());It;++It) RememberCargoPosition(*It);
+}
+
+bool AWarehouseLayoutEditor::TryResetCargoGroup(const TArray<AActor*>& Members,const FTransform& Destination,int32 Floor)
+{
+ TGuardValue<int32> TargetFloor(FloorIndex,Floor);
+ CaptureMoving(Members,false);
+ const FTransform Original=Moving[0].Pose;
+ for (const auto& Member:Moving)
+  Member.Actor->SetActorTransform(Member.Pose.GetRelativeTransform(Original)*Destination,false,nullptr,ETeleportType::TeleportPhysics);
+ bool bClear=PlacementClear();
+ if (bClear && Members[0]->IsA<AWarehousePallet>())
+ {
+  const FBox Base=AWarehouseDamageSystem::GetPhysicalBounds(Members[0]);
+  FCollisionQueryParams Query(SCENE_QUERY_STAT(CargoResetSupport));
+  Query.AddIgnoredActors(Members);
+  int32 Supported=0;
+  if (Base.IsValid) for (double X:{.2,.5,.8}) for (double Y:{.2,.5,.8})
+  {
+   FHitResult Hit;
+   const FVector Point(FMath::Lerp(Base.Min.X,Base.Max.X,X),FMath::Lerp(Base.Min.Y,Base.Max.Y,Y),Base.Min.Z+3.);
+   if (!GetWorld()->LineTraceSingleByChannel(Hit,Point,Point-FVector(0,0,10),ECC_Visibility,Query) || Hit.ImpactNormal.Z<=.95f) continue;
+   const auto* Support=Hit.GetActor();
+   if (Support && !Support->IsA<AWarehouseForklift>() && !Support->IsA<APawn>() &&
+       !Support->IsA<AWarehouseConveyor>() && !Support->IsA<AWarehouseLogisticsTruck>() && !IsShaft(Support)) ++Supported;
+  }
+  bClear=Supported>=3;
+  if (!bClear) Status=TEXT("팔레트 아래의 수평 받침이 부족합니다.");
+ }
+ if (bClear) for (auto& Member:Moving) for (auto& Part:Member.Parts) { Part.Linear=FVector::ZeroVector;Part.Angular=FVector::ZeroVector; }
+ Restore(!bClear);
+ Moving.Reset();
+ return bClear;
+}
+
+int32 AWarehouseLayoutEditor::ResetScatteredCargo()
+{
+ const auto* Experiments=GetGameInstance() ? GetGameInstance()->GetSubsystem<UWarehouseExperimentSubsystem>() : nullptr;
+ if (!HasAuthority() || bDragging || bMarqueeSelecting || (Experiments && (Experiments->bLoading || Experiments->bBatchRunning)))
+ { Status=TEXT("진행 중인 배치 편집이나 실험이 끝난 뒤 물품을 초기화하세요.");return 0; }
+ auto* Strength=AWarehouseDamageSystem::Find(this);
+ if (!Strength) { Status=TEXT("물품의 받침과 충돌을 확인할 수 없습니다.");return 0; }
+ Strength->EnsureSupportSnapshot();
+ TArray<AActor*> Cargo;
+ TSet<AActor*> Protected,Stacked,Relocated;
+ TArray<FVector> ReservedDestinations;
+ TMap<AActor*,TArray<AActor*>> Stacks;
+ for (TActorIterator<AWarehousePallet> It(GetWorld());It;++It)
+ {
+  Cargo.Add(*It);
+  if (It->bWrapping) Protected.Add(*It);
+ }
+ for (TActorIterator<AWarehouseCargo> It(GetWorld());It;++It) Cargo.Add(*It);
+ for (TActorIterator<Amsc_vrCharacter> It(GetWorld());It;++It) Protected.Append(It->GetHeldCargoGroup());
+ for (TActorIterator<AWarehouseForklift> It(GetWorld());It;++It)
+ {
+  Protected.Add(It->ActiveJob.Pallet);Protected.Add(It->GetSupportedPallet());
+  Protected.Append(It->GetPhysicalLoads());
+  if (!It->ActiveJob.JobId.IsEmpty()) ReservedDestinations.Add(It->ActiveJob.Destination.GetLocation());
+  for (const auto& Job:It->PendingJobs)
+  { Protected.Add(Job.Pallet);ReservedDestinations.Add(Job.Destination.GetLocation()); }
+ }
+ for (TActorIterator<AWarehouseShippingSystem> It(GetWorld());It;++It) for (const auto& Shipment:It->Shipments)
+  if (Shipment.State!=EWarehouseShipmentState::Completed && Shipment.State!=EWarehouseShipmentState::Cancelled)
+   for (const auto& Line:Shipment.Lines) { Protected.Add(Line.Pallet);for (AActor* Box:Line.Cargo) Protected.Add(Box); }
+ for (const auto& Spec:Strength->Objects) if (Spec.Failure==EWarehouseFailure::Rack && !Spec.bFailed && !Spec.Members.IsEmpty())
+  Protected.Append(Strength->GetSupportedActors(Spec.Members[0],false));
+ for (AActor* Actor:Cargo)
+ {
+  auto& Loads=Stacks.Add(Actor,Strength->GetSupportedActors(Actor,false));
+  Loads.RemoveAll([](AActor* Load){return !IsCargo(Load);});
+  if (auto* Pallet=Cast<AWarehousePallet>(Actor)) for (auto* Box:Pallet->GetWrappedCargo()) Loads.AddUnique(Box);
+  Stacked.Append(Loads);
+ }
+ const auto Slots=AWarehouseLayoutInventory::Find(this)->RackSlotsFor();
+ TArray<AWarehouseInboundZone*> InboundZones;
+ for (TActorIterator<AWarehouseInboundZone> It(GetWorld());It;++It) InboundZones.Add(*It);
+ const auto CanMove=[&](AActor* Actor)
+ {
+  return IsValid(Actor) && !Protected.Contains(Actor) && !Relocated.Contains(Actor) && !Actor->IsHidden() && !Actor->GetAttachParentActor() &&
+   !Actor->ActorHasTag(TEXT("LogisticsInTransit")) && !Actor->ActorHasTag(TEXT("PlayerHeldCargo")) &&
+   !Actor->ActorHasTag(TEXT("LayoutFixed")) && !HandledByPalletLift(Actor) && !HandledByConveyorTransfer(Actor);
+ };
+ int32 Moved=0,Blocked=0;
+ for (AActor* Actor:Cargo)
+ {
+  if (Stacked.Contains(Actor) || !CanMove(Actor)) continue;
+  const FBox Bounds=AWarehouseDamageSystem::GetPhysicalBounds(Actor);
+  if (!Bounds.IsValid) continue;
+  const int32 Floor=FMath::Clamp(FMath::RoundToInt(Bounds.Min.Z/400.),0,3);
+  if (Bounds.Min.Z>Floor*400.+10. || Bounds.Min.Z<Floor*400.-25.) continue;
+  const auto* Plan=CargoResetPositions.Find(Actor);
+  if (Plan && FVector::DistSquared(Actor->GetActorLocation(),Plan->GetLocation())<=FMath::Square(12.) &&
+      Actor->GetActorQuat().AngularDistance(Plan->GetRotation())<FMath::DegreesToRadians(10.)) continue;
+  const auto* Body=Cast<UStaticMeshComponent>(Actor->GetRootComponent());
+  if (!Body || !Body->GetStaticMesh()) continue;
+  TArray<AActor*> Members={Actor};Members.Append(Stacks.FindChecked(Actor));
+  if (Members.ContainsByPredicate([&](AActor* Item){return !CanMove(Item);})) continue;
+  const FBox Mesh=Body->GetStaticMesh()->GetBoundingBox();
+  const FVector Bottom(Mesh.GetCenter().X,Mesh.GetCenter().Y,Mesh.Min.Z);
+  const FVector Scale=Actor->GetActorScale3D();
+  const FVector Half=Mesh.GetExtent()*Scale.GetAbs();
+  const auto Try=[&](FTransform Destination,int32 DestinationFloor)
+  {
+   Destination.SetScale3D(Scale);
+   const FVector Base=Destination.TransformPosition(Bottom);
+   if (ReservedDestinations.ContainsByPredicate([&](FVector Reserved)
+       {return FMath::Abs(Reserved.Z-Base.Z)<15. && FVector::Dist2D(Reserved,Base)<60.+FMath::Max(Half.X,Half.Y);})) return false;
+   return TryResetCargoGroup(Members,Destination,DestinationFloor);
+  };
+  bool bPlaced=Plan && Try(*Plan,FMath::Clamp(FMath::FloorToInt((Plan->GetLocation().Z+10.)/400.),0,3));
+  if (!bPlaced && Plan)
+   UE_LOG(LogTemp,Verbose,TEXT("CARGO_RESET_PLAN_BLOCKED %s pose=%s reason=%s"),
+    *Actor->GetActorNameOrLabel(),*Plan->GetLocation().ToCompactString(),*Status);
+  const auto At=[&](FVector Point,FQuat Rotation)
+  { return FTransform(Rotation,Point+FVector(0,0,.15)-Rotation.RotateVector(Bottom*Scale),Scale); };
+  for (const auto* Zone:InboundZones)
+  {
+   if (bPlaced || FMath::Abs(Zone->GetActorLocation().Z-Floor*400.)>10.) continue;
+   const double Step=FMath::Max(65.,FMath::Max(Half.X,Half.Y)*2.+10.);
+   for (double Y=-Zone->HalfSizeCm.Y+Step*.5;!bPlaced && Y<=Zone->HalfSizeCm.Y-Step*.5;Y+=Step)
+    for (double X=-Zone->HalfSizeCm.X+Step*.5;!bPlaced && X<=Zone->HalfSizeCm.X-Step*.5;X+=Step)
+     bPlaced=Try(At(Zone->GetActorTransform().TransformPosition(FVector(X,Y,0)),Zone->GetActorQuat()),Floor);
+  }
+  for (const auto& Slot:Slots)
+  {
+   if (bPlaced) break;
+   if (FMath::FloorToInt((Slot.Pose.GetLocation().Z+10.)/400.)==Floor && Half.X<=55.5 && Half.Y<=55.5)
+    bPlaced=Try(At(Slot.Pose.GetLocation(),Slot.Pose.GetRotation()),Floor);
+  }
+  if (!bPlaced) { ++Blocked;continue; }
+  Moved+=Members.Num();
+  for (AActor* Item:Members) { Relocated.Add(Item);RememberCargoPosition(Item); }
+ }
+ if (Moved)
+ {
+  Strength->GetSupportedActors(Cargo[0],true);
+  for (TActorIterator<AWarehouseComputer> It(GetWorld());It;++It) It->RefreshState();
+ }
+ Status=FString::Printf(TEXT("물품 %d개 정돈 · 배치 공간 부족 %d묶음"),Moved,Blocked);
+ return Moved;
 }
 AWarehouseConveyor* AWarehouseLayoutEditor::GetSelectedConveyor() const
 { return SelectedActors.Num()==1 ? Cast<AWarehouseConveyor>(SelectedActors[0]) : nullptr; }
@@ -1026,6 +1184,7 @@ bool AWarehouseLayoutEditor::EndDrag(bool Commit)
    RefreshAfterEdit(!ConveyorsOnly);
   }
   else UpdateReferences();
+  for (const auto& Member:Moving) RememberCargoPosition(Member.Actor.Get());
   ++MovedCount;Status=TEXT("배치 적용 · 충돌 복원 · 작업 위치와 경로 갱신");
  }
  else if (!Commit) Status=TEXT("이동 취소 · 원래 위치와 충돌 복원");

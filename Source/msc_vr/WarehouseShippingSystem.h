@@ -67,6 +67,8 @@ struct FWarehouseShipment
  UPROPERTY(BlueprintReadOnly) double ElapsedSeconds=0;
  double NextTransferAt=0;
  double NextDispatchAt=0;
+ double InboundDepartureAt=-1;
+ bool bRecoveredInboundHandover=false;
 };
 
 /** Manifest and handover control. Only truck handling is a cinematic shortcut. */
