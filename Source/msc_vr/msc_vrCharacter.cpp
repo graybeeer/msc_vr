@@ -303,6 +303,7 @@ void Amsc_vrCharacter::ToggleCarry()
 		Lift->TryInteract(Floor);
 		return;
 	}
+	if (auto* Torn=AWarehousePallet::FindTornWrap(Target);Torn && Torn->RemoveTornWrap()) return;
 	if (auto* Pallet=Cast<AWarehousePallet>(Target)) { TryPickupPallet(Pallet); return; }
 	AWarehouseCargo* Best = Cast<AWarehouseCargo>(Target);
 	if (!Best)
@@ -392,6 +393,7 @@ void Amsc_vrCharacter::BeginPlay()
  Movement->MinAnalogWalkSpeed=0.f;
  Movement->bOrientRotationToMovement=false;
  Movement->bUseControllerDesiredRotation=false;
+ Movement->bIgnoreBaseRotation=true;
  Movement->bEnablePhysicsInteraction=true;
  Movement->InitialPushForceFactor=50.f;
  Movement->PushForceFactor=250.f;

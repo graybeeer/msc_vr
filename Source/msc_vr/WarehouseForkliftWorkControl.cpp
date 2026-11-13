@@ -296,7 +296,7 @@ bool AWarehouseForklift::TryDeferCurrentWork(const FString& Reason,const FString
 {
  // A damaged vehicle, an occupied lift or retained freight cannot safely switch jobs.
  if (!HasAuthority() || !bAutonomousMode || IsRemoteControlled() || ActiveJob.JobId.IsEmpty() ||
-     bSupportingPallet || bFloorTransfer || bWorkStopRequested || bWorkStopNeedsRecovery ||
+     bSupportingPallet || !IsLiftAtTravelHeight() || bFloorTransfer || bWorkStopRequested || bWorkStopNeedsRecovery ||
      !CheckSystems().IsEmpty() || (IsValid(Elevator) && Elevator->ReservedVehicle==this) || HasRetainedForkContact()) return false;
  // The current truck must actually have room to work elsewhere. Real jams retain the existing emergency stop.
  if (!NavigationClear(GetActorTransform())) return false;

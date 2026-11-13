@@ -56,6 +56,9 @@ public:
  FBox GetSelectionBounds(AActor* Actor) const { return GroupBounds(Actor); }
  UFUNCTION(BlueprintCallable,Category="Layout") void ClearSelection();
  UFUNCTION(BlueprintCallable,Category="Layout") void NotifyStructureChanged() { RefreshAfterEdit(false); }
+ UFUNCTION(BlueprintCallable,Category="Layout") int32 ResetScatteredCargo();
+ void RememberCargoPosition(AActor* Actor);
+ void CaptureInitialCargoPositions();
  UFUNCTION(BlueprintPure,Category="Layout|Conveyor") class AWarehouseConveyor* GetSelectedConveyor() const;
  UFUNCTION(BlueprintCallable,Category="Layout|Conveyor") bool ConfigureSelectedConveyor(float YawDegrees,float InclineDegrees,float BaseHeightCm,float LengthCm,float WidthCm,float SpeedCm);
  UFUNCTION(BlueprintPure,Category="Layout|Conveyor") bool CanConnectSelectedConveyors() const;
@@ -76,7 +79,7 @@ public:
  virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 private:
  friend class AWarehouseBuildingLayout;
- void CaptureMoving(const TArray<AActor*>& Members);
+ void CaptureMoving(const TArray<AActor*>& Members,bool bSuspendWiring=true);
  struct FPart
  {
   TWeakObjectPtr<class USceneComponent> Component;
@@ -93,6 +96,8 @@ private:
  };
  struct FMember { TWeakObjectPtr<AActor> Actor;FTransform Pose;TArray<FPart> Parts;bool Collision=true; };
  TArray<FMember> Moving;
+ TMap<TWeakObjectPtr<AActor>,FTransform> CargoResetPositions;
+ bool TryResetCargoGroup(const TArray<AActor*>& Members,const FTransform& Destination,int32 Floor);
  UPROPERTY(Transient) TArray<TObjectPtr<AActor>> SelectedActors;
  TArray<FBox> ReferenceAreas,ShaftReferenceAreas;
  TArray<int32> MovingZones;

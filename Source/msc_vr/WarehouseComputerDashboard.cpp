@@ -237,6 +237,8 @@ private:
     .OnGenerateRow_Lambda([this](TSharedPtr<FWarehouseInventoryItem> Item,const TSharedRef<STableViewBase>& Owner)
     {
      return SNew(STableRow<TSharedPtr<FWarehouseInventoryItem>>,Owner).Padding(FMargin(4,10))
+      [SNew(SBorder).Padding(6,4).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+       .BorderBackgroundColor_Lambda([Item]() { return Item->OutboundTruckId.IsEmpty() ? FLinearColor::Transparent : WarehouseUIStyle::OutboundRow; })
       [SNew(SHorizontalBox)
        +SHorizontalBox::Slot().AutoWidth().Padding(0,0,10,0).VAlign(VAlign_Center)
         [SNew(SCheckBox).IsChecked_Lambda([this,Item]() { return InventoryList->IsItemSelected(Item) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
@@ -247,7 +249,10 @@ private:
         +SVerticalBox::Slot().AutoHeight().Padding(0,3,0,0)[Live([Item]() { return Item->ReceiptStatus; },13,Muted)]]
        +SHorizontalBox::Slot().FillWidth(.45f).Padding(8,0,0,0)[SNew(SVerticalBox)
         +SVerticalBox::Slot().AutoHeight()[Live([Item]() { return Item->Location; },15,WarehouseUIStyle::Accent)]
-        +SVerticalBox::Slot().AutoHeight().Padding(0,3,0,0)[Live([Item]() { return FString::Printf(TEXT("%.1f kg · %s"),Item->MassKg,Item->bReserved ? TEXT("예약 / 운반 중") : Item->Pallet ? TEXT("팔레트 적재") : TEXT("개별 상자")); },14,Muted)]]];
+        +SVerticalBox::Slot().AutoHeight().Padding(0,3,0,0)[Live([Item]() { return FString::Printf(TEXT("%.1f kg · %s"),Item->MassKg,Item->bReserved ? TEXT("예약 / 운반 중") : Item->Pallet ? TEXT("팔레트 적재") : TEXT("개별 상자")); },14,Muted)]
+        +SVerticalBox::Slot().AutoHeight().Padding(0,3,0,0)[SNew(STextBlock).Font(WarehouseUIStyle::Font(14,true)).AutoWrapText(true).ColorAndOpacity(WarehouseUIStyle::Warning)
+         .Visibility_Lambda([Item]() { return Item->OutboundTruckId.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+         .Text_Lambda([Item]() { return FText::FromString(TEXT("출고 예정 · ")+Item->OutboundTruckId); })]]]];
     })]
    +SVerticalBox::Slot().AutoHeight().Padding(0,8,0,0)[Action(TEXT("선택 해제"),[this]() { InventoryList->ClearSelection(); },[this]() { return InventoryList && InventoryList->GetNumItemsSelected()>0; })]);
  }

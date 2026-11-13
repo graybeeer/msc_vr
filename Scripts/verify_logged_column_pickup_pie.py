@@ -1,8 +1,9 @@
 """Run a reported column-side upper-rack pickup on the saved warehouse in PIE.
 
 -ColumnLogRun=name labels the report. Cases 2/4 check real load withdrawal.
-Cases 3/6 extend the same upper-rack scene through the two reported outbound
-routes. Scene setup is performed before PIE and the start headings are inferred.
+Cases 3/6/7 extend the upper-rack scene through outbound delivery. Case 7
+starts near the rack in the second QA session, with the forks at travel height.
+Scene setup is performed before PIE and the start headings are inferred.
 """
 import json
 from pathlib import Path
@@ -17,10 +18,10 @@ level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 command = unreal.SystemLibrary.get_command_line()
-case_arg = re.search(r'-ColumnLogCase=([2346])\b', command, re.I)
+case_arg = re.search(r'-ColumnLogCase=([23467])\b', command, re.I)
 case = int(case_arg[1]) if case_arg else 2
-full_delivery = case in (3, 6)
-destination = {3: (-1020, -1570, 0), 6: (-800, -1395, 0)}.get(case, (2250, 1150, 0))
+full_delivery = case in (3, 6, 7)
+destination = {3: (-1020, -1570, 0), 6: (-800, -1395, 0), 7: (-800, -1395, 0)}.get(case, (2250, 1150, 0))
 run = re.search(r'-ColumnLogRun=([A-Za-z0-9_-]+)', command, re.I)
 out = Path(unreal.Paths.project_saved_dir()) / 'Testing/LoggedColumnPickup_20261110' / (run[1] if run else 'Current')
 out.mkdir(parents=True, exist_ok=True)
@@ -62,7 +63,9 @@ def setup():
             a.set_editor_property('idle_parking_enabled', False)
             a.set_editor_property('pending_jobs', [])
     rig = next(a for a in saved if isinstance(a, unreal.WarehouseForklift) and a.vehicle_name == '지게차 2호')
-    if full_delivery:
+    if case == 7:
+        start, heading = unreal.Vector(7.261, -1144.868, .1), -171.4
+    elif full_delivery:
         start, heading = unreal.Vector(-579.612, -1397.445, .1), 180
     elif case == 2:
         start, heading = unreal.Vector(2249.520, 1149.785, .1), 0
@@ -110,7 +113,7 @@ def tick(dt):
             assert vehicle.submit_job(unreal.WarehouseWorkOrder(job_id='LOGGED-COLUMN-PICKUP', pallet=pallet,
                                       source_system='FMS-COMPUTER' if full_delivery else 'FMS-SIM',
                                       destination=unreal.Transform(location=unreal.Vector(*destination),
-                                                                   rotation=unreal.Rotator(yaw=180 if case == 6 else 0)))), vehicle.status
+                                                                   rotation=unreal.Rotator(yaw=180 if case in (6, 7) else 0)))), vehicle.status
             vehicle.toggle_power()
             phase, accepted_at = 'transport', now
         if now-last >= .25:

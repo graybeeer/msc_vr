@@ -11,6 +11,7 @@ namespace WarehouseUIStyle
  inline const FLinearColor Text=FLinearColor::White;
  inline const FLinearColor Accent(.3f,.8f,.85f);
  inline const FLinearColor Warning(1.f,.8f,.25f);
+ inline const FLinearColor OutboundRow(.48f,.27f,.04f,.42f);
  inline const FLinearColor DangerPanel(.35f,.015f,.01f,.96f);
  inline const FMargin PanelPadding(16), LabelPadding(12,6);
  inline FSlateFontInfo Font(int32 Size=BodySize,bool Bold=false)

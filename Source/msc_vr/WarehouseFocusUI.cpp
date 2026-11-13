@@ -16,6 +16,7 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Views/SListView.h"
 #if WITH_EDITOR && !UE_BUILD_SHIPPING
+#include "Algo/Count.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Components/PrimitiveComponent.h"
@@ -120,7 +121,7 @@ TSharedRef<SWidget> Action(const FString& Title,TFunction<void()> Callback,TFunc
 struct FReadyPallet
 {
  TWeakObjectPtr<AWarehousePallet> Pallet;
- FString Product,Location;
+ FString Product,Location,OutboundLabel;
  float MassKg=0;
  int32 Cartons=0;
  bool bReserved=false;
@@ -265,7 +266,8 @@ public:
   if(Command==TEXT("layout")) OpenLayout();
   Refresh();
   const FString Directory=FPaths::ProjectSavedDir()/TEXT("Testing/FocusUI");IFileManager::Get().MakeDirectory(*Directory,true);
-  const FString Json=FString::Printf(TEXT("{\"focus_screen\":true,\"fleet\":%d,\"pallets\":%d,\"tasks\":%d,\"manual_operations\":%s,\"stage\":%d,\"outbound_visible\":%s,\"inbound_selected\":%s,\"fleet_scroll_offset\":%.2f}"),DisplayedFleet.Num(),Pallets.Num(),TaskItems.Num(),Director.IsValid() && Director->IsManualOperations() ? TEXT("true") : TEXT("false"),IsCampaign() ? Stage->StageIndex : 0,IsCampaign() ? TEXT("false") : TEXT("true"),bInbound ? TEXT("true") : TEXT("false"),FleetScroll.IsValid() ? FleetScroll->GetScrollOffset() : 0.f);
+  const int32 Marked=Algo::CountIf(Pallets,[](const auto& Item){return !Item->OutboundLabel.IsEmpty();});
+  const FString Json=FString::Printf(TEXT("{\"focus_screen\":true,\"fleet\":%d,\"pallets\":%d,\"tasks\":%d,\"manual_operations\":%s,\"stage\":%d,\"outbound_visible\":%s,\"inbound_selected\":%s,\"fleet_scroll_offset\":%.2f,\"outbound_marked\":%d}"),DisplayedFleet.Num(),Pallets.Num(),TaskItems.Num(),Director.IsValid() && Director->IsManualOperations() ? TEXT("true") : TEXT("false"),IsCampaign() ? Stage->StageIndex : 0,IsCampaign() ? TEXT("false") : TEXT("true"),bInbound ? TEXT("true") : TEXT("false"),FleetScroll.IsValid() ? FleetScroll->GetScrollOffset() : 0.f,Marked);
   FFileHelper::SaveStringToFile(Json,*(Directory/TEXT("State.json")),FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
  }
 #endif
@@ -354,13 +356,19 @@ private:
  TSharedRef<ITableRow> PalletRow(TSharedPtr<FReadyPallet> Item,const TSharedRef<STableViewBase>& Owner)
  {
   return SNew(STableRow<TSharedPtr<FReadyPallet>>,Owner).Padding(FMargin(0,4))
+   [SNew(SBorder).Padding(8,4).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+    .BorderBackgroundColor_Lambda([Item](){return Item->OutboundLabel.IsEmpty() ? FLinearColor::Transparent : WarehouseUIStyle::OutboundRow;})
    [SNew(SHorizontalBox)
-    +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,5,10,5)[SNew(STextBlock).Font(WarehouseUIStyle::Font(16)).AutoWrapText(true)
-     .Text_Lambda([Item](){return FText::FromString(FString::Printf(TEXT("%s\n%s · %d상자 · %.0f kg%s"),*Item->Product,*LocationLabel(Item->Location),Item->Cartons,Item->MassKg,Item->bReserved ? TEXT(" · 운반 예약됨") : TEXT("")));})]
+    +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,5,10,5)[SNew(SVerticalBox)
+     +SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(WarehouseUIStyle::Font(16)).AutoWrapText(true)
+      .Text_Lambda([Item](){return FText::FromString(FString::Printf(TEXT("%s\n%s · %d상자 · %.0f kg%s"),*Item->Product,*LocationLabel(Item->Location),Item->Cartons,Item->MassKg,Item->bReserved ? TEXT(" · 운반 예약됨") : TEXT("")));})]
+     +SVerticalBox::Slot().AutoHeight().Padding(0,3,0,0)[SNew(STextBlock).Font(WarehouseUIStyle::Font(15,true)).ColorAndOpacity(WarehouseUIStyle::Warning)
+      .Visibility_Lambda([Item](){return Item->OutboundLabel.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible;})
+      .Text_Lambda([Item](){return FText::FromString(Item->OutboundLabel);})]]
     +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).WidthOverride(100)[SNew(SButton).IsFocusable(false).ContentPadding(FMargin(8,10))
      .IsEnabled_Lambda([Item](){return Item->Pallet.IsValid() && !Item->bReserved;})
      .OnClicked_Lambda([this,Item](){RequestTransport(Item);return FReply::Handled();})
-     [SNew(STextBlock).Font(WarehouseUIStyle::Font(16)).Text_Lambda([this](){return FText::FromString(bInbound ? TEXT("입고 운반") : TEXT("출고 운반"));})]]]];
+     [SNew(STextBlock).Font(WarehouseUIStyle::Font(16)).Text_Lambda([this](){return FText::FromString(bInbound ? TEXT("입고 운반") : TEXT("출고 운반"));})]]]]];
  }
  void Refresh()
  {
@@ -381,7 +389,11 @@ private:
    {
     auto Item=Previous.FindRef(TWeakObjectPtr<AWarehousePallet>(Pallet));if(!Item.IsValid()) Item=MakeShared<FReadyPallet>();
     Item->Pallet=Pallet;Item->Product=Cargo.Product;Item->Location=Cargo.Location;Item->Cartons=0;Item->MassKg=0;
-    Item->bReserved=Director.IsValid() && (bInbound ? Director->IsInboundPending(Pallet) : Director->IsOutboundPending(Pallet));
+    const bool PendingOutbound=!bInbound && Director.IsValid() && Director->IsOutboundPending(Pallet);
+    Item->bReserved=bInbound ? Director.IsValid() && Director->IsInboundPending(Pallet) : PendingOutbound;
+    Item->OutboundLabel.Reset();
+    if (!bInbound && !Cargo.OutboundTruckId.IsEmpty()) Item->OutboundLabel=TEXT("출고 예정 · ")+Cargo.OutboundTruckId;
+    else if (PendingOutbound) Item->OutboundLabel=TEXT("출고 요청 · 트럭 배정 대기");
     Pallets.Add(Item);Current.Add(Pallet,Item);Existing=Current.Find(Pallet);
    }
    (*Existing)->Cartons++;(*Existing)->MassKg+=Cargo.MassKg;(*Existing)->bReserved|=Cargo.bReserved;

@@ -7,6 +7,7 @@
 #include "WarehouseDamageSystem.h"
 #include "WarehouseInboundZone.h"
 #include "WarehouseShippingSystem.h"
+#include "WarehouseLogisticsTruck.h"
 #include "WarehouseWorker.h"
 #include "WarehouseLayoutInventory.h"
 #include "msc_vrCharacter.h"
@@ -175,6 +176,16 @@ void AWarehouseComputer::RefreshState()
  auto* Strength=AWarehouseDamageSystem::Find(this);
  TMap<AWarehouseCargo*,AWarehousePallet*> Owners;TMap<AWarehousePallet*,FString> Racks;
  const auto* Shipping=AWarehouseShippingSystem::Find(this);
+ TMap<AWarehousePallet*,FString> OutboundTrucks;
+ if (Shipping) for (const auto& Shipment:Shipping->Shipments)
+ {
+  if (Shipment.Direction!=EWarehouseShipmentDirection::Outbound ||
+      Shipment.State==EWarehouseShipmentState::Completed || Shipment.State==EWarehouseShipmentState::Cancelled ||
+      !IsValid(Shipment.Truck) || Shipment.Truck->GetVisitId()!=Shipment.TruckVisitId) continue;
+  for (const auto& Line:Shipment.Lines)
+   if (IsValid(Line.Pallet) && !Line.bLoaded && !Line.bOperatorStopped)
+    OutboundTrucks.Add(Line.Pallet,Shipment.Truck->TruckId.IsEmpty() ? Shipment.Truck->GetActorNameOrLabel() : Shipment.Truck->TruckId);
+ }
  if (Strength)
  {
   Strength->EnsureSupportSnapshot();
@@ -206,6 +217,7 @@ void AWarehouseComputer::RefreshState()
   FWarehouseInventoryItem Item;Item.Cargo=*It;Item.Pallet=Owners.FindRef(*It);
   Item.CargoId=It->CargoId.IsNone() ? It->GetName() : It->CargoId.ToString();Item.Product=It->CargoKind.ToString();Item.MassKg=It->GrossMassKg;
   Item.Location=Locate(Item.Pallet ? static_cast<AActor*>(Item.Pallet.Get()) : *It);
+  Item.OutboundTruckId=OutboundTrucks.FindRef(Item.Pallet);
   if (Item.Pallet && Racks.Contains(Item.Pallet) && !Item.Location.Contains(TEXT("운반 중"))) Item.Location=Racks[Item.Pallet];
   Item.bReserved=Item.Pallet && (Claimed(Item.Pallet) || (Shipping && !Shipping->GetPalletShipment(Item.Pallet).IsEmpty()));Inventory.Add(Item);
   Inventory.Last().ReceiptStatus=Item.Pallet ? Item.Pallet->GetReceiptDescription().ToString() : TEXT("개별 상자");

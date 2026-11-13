@@ -18,6 +18,7 @@
 #include "GameFramework/GameUserSettings.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/Engine.h"
+#include "SceneViewExtension.h"
 #include "EngineUtils.h"
 #include "WarehousePallet.h"
 #include "WarehouseCargo.h"
@@ -65,6 +66,31 @@
 
 namespace
 {
+class FWarehouseExposureView final : public FWorldSceneViewExtension
+{
+public:
+ FWarehouseExposureView(const FAutoRegister& AutoRegister,Amsc_vrPlayerController* Player)
+  : FWorldSceneViewExtension(AutoRegister,Player->GetWorld()),Controller(Player) {}
+
+ void SetupView(FSceneViewFamily&,FSceneView& View) override
+ {
+  const auto* Player=Controller.Get();
+  const auto* LocalPlayer=Player ? Player->GetLocalPlayer() : nullptr;
+  if (LocalPlayer && !View.bIsSceneCapture && View.PlayerIndex==LocalPlayer->GetControllerId())
+   View.FinalPostProcessSettings.AutoExposureBias+=FMath::Clamp(Player->BrightnessOffset,-2.f,2.f);
+ }
+
+private:
+ TWeakObjectPtr<Amsc_vrPlayerController> Controller;
+};
+
+const FTextBlockStyle& SettingsButtonText()
+{
+ static const FTextBlockStyle Style=FTextBlockStyle(FCoreStyle::Get().GetWidgetStyle<FTextBlockStyle>("NormalText"))
+  .SetFont(WarehouseUIStyle::Font()).SetColorAndOpacity(WarehouseUIStyle::Text);
+ return Style;
+}
+
 // Slate keeps the actual down/move/up positions even if a short mouse gesture
 // falls between paused world ticks. The toolbar remains above this canvas.
 class SWarehouseLayoutCanvas:public SLeafWidget
@@ -220,6 +246,7 @@ void Amsc_vrPlayerController::BeginPlay()
 		ConstructionEditor=NewObject<UWarehouseConstructionEditor>(this);ConstructionEditor->Initialize(this); }
 	if (IsLocalPlayerController() && GetWorld()->GetGameViewport())
 	{
+		ExposureView=FSceneViewExtensions::NewExtension<FWarehouseExposureView>(this);
 		auto RemoteActive=[this]()
 		{
 			const auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn());
@@ -634,8 +661,11 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 	if (!IsLocalController() || !GetWorld()->GetGameViewport()) return;
 	if (MenuWidget.IsValid()) { CloseWarehouseMenu(); return; }
 	if (auto* OperatorCharacter=Cast<Amsc_vrCharacter>(GetPawn())) OperatorCharacter->EndRemoteControl();
-	static const FTextBlockStyle ButtonText=FTextBlockStyle(FCoreStyle::Get().GetWidgetStyle<FTextBlockStyle>("NormalText"))
-		.SetFont(WarehouseUIStyle::Font()).SetColorAndOpacity(WarehouseUIStyle::Text);
+	OpenWarehouseSettings();
+}
+
+void Amsc_vrPlayerController::OpenWarehouseSettings()
+{
 	auto Panel=SNew(SVerticalBox);
 	auto Text=[&](const FString& Label)
 	{
@@ -644,12 +674,23 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 	};
 	auto Button=[&](const FString& Label, TFunction<void()> Action)
 	{
-		Panel->AddSlot().AutoHeight().Padding(8,4)[SNew(SButton).IsFocusable(false).ContentPadding(10).TextStyle(&ButtonText)
+		Panel->AddSlot().AutoHeight().Padding(8,4)[SNew(SButton).IsFocusable(false).ContentPadding(10).TextStyle(&SettingsButtonText())
 			.Text(FText::FromString(Label)).OnClicked_Lambda([Action]() { Action(); return FReply::Handled(); })];
 	};
 	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::TitleSize,true))
 		.ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("물류창고 · 설정 / 관찰")))];
 	Button(TEXT("지게차 실시간 센서 화면"),[this]() { OpenAIViewSettings(); });
+	Button(TEXT("그래픽 설정"),[this]() { OpenGraphicsSettings(); });
+	auto CargoResetResult=SNew(STextBlock).Font(WarehouseUIStyle::Font(16)).ColorAndOpacity(WarehouseUIStyle::Accent).AutoWrapText(true);
+	Button(TEXT("물품 올바른 위치로 초기화"),[this,CargoResetResult]()
+	{
+		if (auto* Layout=AWarehouseLayoutEditor::Find(this))
+		{
+			Layout->ResetScatteredCargo();
+			CargoResetResult->SetText(FText::FromString(Layout->Status));
+		}
+	});
+	Panel->AddSlot().AutoHeight().Padding(8,0)[CargoResetResult];
 	Text(TEXT("F1: 메뉴  |  Shift: 달리기  |  Ctrl: 앉기  |  E: 집기 / 적재\nG: 바라보는 지게차의 후방 3인칭 원격 조작 / 종료\n원격: W/S 전후진 · A/D 조향·자리 회전 · 좌클릭 포크 올림 · 우클릭 내림 · Space 제동\n마우스 이동: 지게차 주변 보기 · 종료하면 플레이어 1인칭 복귀\n관찰 진입 시 재배치 모드가 켜지며 시뮬레이션이 일시정지됩니다. 하단 버튼으로 재배치를 끄면 시뮬레이션이 재개됩니다."));
 	Button(bObserverView ? TEXT("1인칭 캐릭터로 돌아가기") : TEXT("전지적 관찰 시점으로 전환"),[this]() { ToggleObserverView(); CloseWarehouseMenu(); });
 	if(auto* Director=AWarehouseFocusDirector::Find(this))
@@ -671,24 +712,50 @@ void Amsc_vrPlayerController::ToggleWarehouseMenu()
 	Text(TEXT("마우스 감도 (0.2 ~ 3.0)"));
 	Panel->AddSlot().AutoHeight().Padding(12)[SNew(SSlider).IsFocusable(false).Value((MouseSensitivity-.2f)/2.8f)
 		.OnValueChanged_Lambda([this](float V) { MouseSensitivity=.2f+V*2.8f; })];
-	Text(TEXT("시야각 FOV (70 ~ 110)"));
-	Panel->AddSlot().AutoHeight().Padding(12)[SNew(SSlider).IsFocusable(false).Value((ViewFOV-70.f)/40.f)
-		.OnValueChanged_Lambda([this](float V) { ViewFOV=70.f+V*40.f; })];
-	Panel->AddSlot().AutoHeight().Padding(8,4)[SNew(SButton).IsFocusable(false).ContentPadding(10).TextStyle(&ButtonText)
-		.Text_Lambda([]() { const int32 Q=GEngine->GetGameUserSettings()->GetOverallScalabilityLevel(); return FText::FromString(FString::Printf(TEXT("그래픽 품질: %s (클릭하여 변경)"),Q<0 ? TEXT("사용자 지정") : *FString::FromInt(Q))); })
-		.OnClicked_Lambda([]() { auto* S=GEngine->GetGameUserSettings(); S->SetOverallScalabilityLevel((S->GetOverallScalabilityLevel()+1)%4); S->ApplySettings(false); return FReply::Handled(); })];
-	Panel->AddSlot().AutoHeight().Padding(8,4)[SNew(SButton).IsFocusable(false).ContentPadding(10).TextStyle(&ButtonText)
-		.Text_Lambda([]() { return FText::FromString(GEngine->GetGameUserSettings()->IsVSyncEnabled() ? TEXT("수직 동기화: 켜짐") : TEXT("수직 동기화: 꺼짐")); })
-		.OnClicked_Lambda([]() { auto* S=GEngine->GetGameUserSettings(); S->SetVSyncEnabled(!S->IsVSyncEnabled()); S->ApplySettings(false); return FReply::Handled(); })];
 	Button(TEXT("설정 저장 · 메뉴 닫기"),[this]() { CloseWarehouseMenu(); });
 	Button(TEXT("메인 메뉴로 · 현재 진행 초기화"),[this]() { OpenPlayMode(0); });
+	ShowSettingsPanel(Panel,680.f,.72f);
+}
+
+void Amsc_vrPlayerController::OpenGraphicsSettings()
+{
+	if (IsMainMenu() || !MenuWidget.IsValid() || !GetWorld()->GetGameViewport()) return;
+	auto Panel=SNew(SVerticalBox);
+	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::TitleSize,true))
+		.ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("그래픽 설정")))];
+	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font())
+		.Text_Lambda([this]() {return FText::FromString(FString::Printf(TEXT("시야각 (FOV) · %d°"),FMath::RoundToInt(ViewFOV)));})];
+	Panel->AddSlot().AutoHeight().Padding(8,4,8,14)[SNew(SSlider).Value_Lambda([this]() {return (FMath::Clamp(ViewFOV,70.f,110.f)-70.f)/40.f;})
+		.OnValueChanged_Lambda([this](float Value) {ViewFOV=FMath::RoundToFloat(70.f+Value*40.f);})];
+	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font())
+		.Text_Lambda([this]() {return FText::FromString(FString::Printf(TEXT("밝기 · %d%%"),FMath::RoundToInt((FMath::Clamp(BrightnessOffset,-2.f,2.f)+2.f)*25.f)));})];
+	Panel->AddSlot().AutoHeight().Padding(8,4,8,14)[SNew(SSlider).Value_Lambda([this]() {return (FMath::Clamp(BrightnessOffset,-2.f,2.f)+2.f)/4.f;})
+		.OnValueChanged_Lambda([this](float Value) {BrightnessOffset=Value*4.f-2.f;})];
+	Panel->AddSlot().AutoHeight().Padding(8,4)[SNew(SButton).IsFocusable(false).ContentPadding(10).TextStyle(&SettingsButtonText())
+		.Text_Lambda([]() { const int32 Q=GEngine->GetGameUserSettings()->GetOverallScalabilityLevel(); return FText::FromString(FString::Printf(TEXT("그래픽 품질: %s (클릭하여 변경)"),Q<0 ? TEXT("사용자 지정") : *FString::FromInt(Q))); })
+		.OnClicked_Lambda([]() { auto* S=GEngine->GetGameUserSettings(); S->SetOverallScalabilityLevel((S->GetOverallScalabilityLevel()+1)%4); S->ApplySettings(false); return FReply::Handled(); })];
+	Panel->AddSlot().AutoHeight().Padding(8,4)[SNew(SButton).IsFocusable(false).ContentPadding(10).TextStyle(&SettingsButtonText())
+		.Text_Lambda([]() { return FText::FromString(GEngine->GetGameUserSettings()->IsVSyncEnabled() ? TEXT("수직 동기화: 켜짐") : TEXT("수직 동기화: 꺼짐")); })
+		.OnClicked_Lambda([]() { auto* S=GEngine->GetGameUserSettings(); S->SetVSyncEnabled(!S->IsVSyncEnabled()); S->ApplySettings(false); return FReply::Handled(); })];
+	Panel->AddSlot().AutoHeight().Padding(8,12,8,4)[SNew(SHorizontalBox)
+		+SHorizontalBox::Slot().FillWidth(1).Padding(0,0,6,0)[SNew(SButton).IsFocusable(false).ContentPadding(10).TextStyle(&SettingsButtonText())
+			.Text(FText::FromString(TEXT("설정으로 돌아가기"))).OnClicked_Lambda([this]() {OpenWarehouseSettings();return FReply::Handled();})]
+		+SHorizontalBox::Slot().FillWidth(1)[SNew(SButton).IsFocusable(false).ContentPadding(10).TextStyle(&SettingsButtonText())
+			.Text(FText::FromString(TEXT("저장하고 닫기"))).OnClicked_Lambda([this]() {CloseWarehouseMenu();return FReply::Handled();})]];
+	ShowSettingsPanel(Panel,540.f,.35f);
+}
+
+void Amsc_vrPlayerController::ShowSettingsPanel(const TSharedRef<SWidget>& Panel,float Width,float OverlayOpacity)
+{
+	auto* Viewport=GetWorld()->GetGameViewport();
+	if (MenuWidget.IsValid()) Viewport->RemoveViewportWidgetContent(MenuWidget.ToSharedRef());
 	MenuWidget=SNew(SBorder).HAlign(HAlign_Center).VAlign(VAlign_Center)
-		.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(0,0,0,.72f))
-		[SNew(SBox).WidthOverride(680).MaxDesiredHeight(760)
+		.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(0,0,0,OverlayOpacity))
+		[SNew(SBox).WidthOverride(Width).MaxDesiredHeight(760)
 			[SNew(SBorder).Padding(WarehouseUIStyle::PanelPadding).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 				.BorderBackgroundColor(WarehouseUIStyle::Panel)
 				[SNew(SScrollBox)+SScrollBox::Slot()[Panel]]]];
-	GetWorld()->GetGameViewport()->AddViewportWidgetContent(MenuWidget.ToSharedRef(),100);
+	Viewport->AddViewportWidgetContent(MenuWidget.ToSharedRef(),100);
 	UpdateInputMode();
 }
 
@@ -1102,6 +1169,9 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
  for (AActor* Roof : HiddenActors) if (Roof) Params.AddIgnoredActor(Roof);
  if (GetWorld()->LineTraceSingleByChannel(Hit,Eye,Eye+PlayerCameraManager->GetCameraRotation().Vector()*(bObserverView ? 18000.f : 400.f),ECC_Visibility,Params))
  {
+  if (!bObserverView && Hit.Distance<=300.f)
+   if (auto* Pallet=AWarehousePallet::FindTornWrap(Hit.GetActor()))
+    return FText::FromString(Pallet->GetReceiptDescription().ToString()+TEXT("\nE : 찢어진 랩 제거"));
   if (auto* Cargo=Cast<AWarehouseCargo>(Hit.GetActor())) return Cargo->GetCargoDescription();
   if (!bObserverView && Hit.Distance<=250.f)
    if (auto* Pallet=Cast<AWarehousePallet>(Hit.GetActor()))
@@ -1112,6 +1182,7 @@ FText Amsc_vrPlayerController::GetCargoReadout() const
 
 void Amsc_vrPlayerController::EndPlay(const EEndPlayReason::Type Reason)
 {
+	ExposureView.Reset();
 	if (PlayWidget.IsValid() && GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(PlayWidget.ToSharedRef());
 	PlayWidget.Reset();
 	bWarehouseEndingPlay=true;

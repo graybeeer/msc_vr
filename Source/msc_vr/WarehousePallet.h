@@ -48,6 +48,8 @@ public:
  static void InitializeRackWrapping(UWorld* World);
  // External removal/damage opens the whole unit. NPC scans never silently reseal torn film.
  UFUNCTION(BlueprintCallable,Category="Inbound") void TearWrap();
+ UFUNCTION(BlueprintCallable,Category="Inbound") bool RemoveTornWrap();
+ static AWarehousePallet* FindTornWrap(AActor* Target);
  class UStaticMeshComponent* GetPalletBody() const { return Body; }
  UFUNCTION(BlueprintCallable, Category="Editor") static void TransformCollision(class UStaticMesh* Mesh, FTransform Transform);
  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Load", meta=(ClampMin="0")) float PayloadMassKg = 0;
@@ -73,4 +75,5 @@ private:
  bool bWrapBreakPending=false;
  UFUNCTION() void OnWrapJointBroken(int32 ConstraintIndex);
  void BuildWrapFilm();
+ void ClearWrapFilm();
 };
