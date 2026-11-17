@@ -449,7 +449,8 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
     FHitResult BelowWheel,AtSeam;
     const bool WorldBearingHit=!BearingHit && Surface && !Surface->IsSimulatingPhysics() &&
      Surface->IsQueryCollisionEnabled() && Surface->GetCollisionResponseToChannel(ECC_Visibility)==ECR_Block &&
-     GetWorld()->LineTraceSingleByChannel(BelowWheel,RayStart,RayEnd,ECC_Visibility,Bearing) &&
+     (SensorDriven ? PerceivedFloorSupport(FVector(RayStart.X,RayStart.Y,GetActorLocation().Z),&BelowWheel) :
+      GetWorld()->LineTraceSingleByChannel(BelowWheel,RayStart,RayEnd,ECC_Visibility,Bearing)) &&
      BelowWheel.GetComponent() && !BelowWheel.GetComponent()->IsSimulatingPhysics() && BelowWheel.ImpactNormal.Z>.98f;
     FVector SeamRayPoint=Hit.ImpactPoint;
     bool SeamBearingHit=WorldBearingHit && Surface->LineTraceComponent(AtSeam,
@@ -458,11 +459,13 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
     if (WorldBearingHit && !SeamBearingHit)
     {
      // A convex contact can lie just beyond a shared triangle/box edge.
-     // Probe only 1mm towards this component's interior; its own native shape
-     // must still prove the upward, coplanar bearing below.
+     // Inset across the actual slab edge, even if its centre is hundreds
+     // of centimetres away along that edge. Still require native support.
      SeamInsetAttempted=true;
-     SeamRayPoint+=(Surface->Bounds.Origin-Hit.ImpactPoint).GetSafeNormal2D()*.1f;
-     SeamBearingHit=Surface->LineTraceComponent(AtSeam,
+     const FBox Interior=Surface->Bounds.GetBox().ExpandBy(FVector(-.1f,-.1f,0));
+     SeamRayPoint=Interior.GetClosestPointTo(Hit.ImpactPoint);
+     SeamRayPoint.Z=Hit.ImpactPoint.Z;
+     SeamBearingHit=FVector::DistSquared2D(SeamRayPoint,Hit.ImpactPoint)<=FMath::Square(.5f) && Surface->LineTraceComponent(AtSeam,
       SeamRayPoint+FVector(0,0,2),SeamRayPoint-FVector(0,0,2),Bearing);
     }
     if (SeamBearingHit && AtSeam.ImpactNormal.Z>.98f &&
@@ -535,7 +538,8 @@ bool AWarehouseForklift::MoveToLine(FVector Destination,float Speed,float Dt,flo
  const FVector LateralAxis=ElevatorLine ? Elevator->GetActorRightVector() : PalletLine ? PalletFrame.GetUnitAxis(EAxis::Y) : GetActorRightVector();
  if (FMath::Abs(FVector::DotProduct(Offset,LateralAxis))>LateralLimit || FMath::Abs(Offset.Z)>3)
  { StopFor(TEXT("ROUTE MISALIGNED")); return false; }
- const float Distance=FVector::DotProduct(Offset,GetActorForwardVector());
+ const FVector TravelAxis=ElevatorLine ? Elevator->GetActorForwardVector() : GetActorForwardVector();
+ const float Distance=FVector::DotProduct(Offset,TravelAxis);
  if (FMath::Abs(Distance)<ArrivalTolerance) { BrakeDrive(); return FMath::Abs(CurrentSpeedCm)<1.f; }
  if (bAutonomousMode && FleetCoordinator && !bTrafficEscape)
  {

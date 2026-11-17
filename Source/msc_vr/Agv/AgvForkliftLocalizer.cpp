@@ -5,6 +5,7 @@
 #include "WarehouseForklift.h"
 #include "WarehouseAutonomyTypes.h"
 #include "WarehousePerformance.h"
+#include "msc_vrPlayerController.h"
 #include "CanvasItem.h"
 #include "Components/PrimitiveComponent.h"
 #include "Debug/DebugDrawService.h"
@@ -1414,6 +1415,8 @@ void UAgvLocalizationSubsystem::DrawPanel(UCanvas* Canvas, APlayerController* Pl
 	{
 		return;
 	}
+	const auto* WarehousePlayer = Cast<Amsc_vrPlayerController>(Player);
+	const bool bMenuOpen = WarehousePlayer && WarehousePlayer->IsWarehouseMenuOpen();
 	// Stacked down the left edge; with both shown each one is sized to leave room for the other.
 	const int32 Shown = int32(bShowVehicle[0]) + int32(bShowVehicle[1]);
 	constexpr double Captions = 44.0;
@@ -1429,6 +1432,10 @@ void UAgvLocalizationSubsystem::DrawPanel(UCanvas* Canvas, APlayerController* Pl
 		if (bPanelAccumulate && !bPanel3D)
 		{
 			UpdatePanelGrid(Number, Vehicle);
+		}
+		if (bMenuOpen)
+		{
+			continue;
 		}
 		const double Used = bPanel3D
 			? DrawFirstPersonPanel(Canvas, Vehicle, Origin, FMath::Clamp(FMath::Min(Canvas->ClipX * 0.32, Room * 16.0 / 9.0), 200.0, 640.0), Number)

@@ -249,12 +249,14 @@ FTransform AWarehouseForklift::PalletApproach(const FTransform& Pose,float Dista
 }
 bool AWarehouseForklift::PlanPickupApproach()
 {
+ bPickupHadClearApproach=false;
  RackDeliveryQuarterTurns=0;
  const int32 PreviousFace=PickupEntryQuarterTurns;
  const float PreviousStandoff=PickupApproachDistanceCm;
  PickupApproachDistanceCm=220.f;
  const FTransform Source=TaskSourcePose();
  const FTransform Start=NavigationTransform();
+ const bool RaisedPickup=Source.GetLocation().Z-FloorBase(Source.GetLocation().Z)>5.f;
  TArray<int32> Faces{0,1,2,3};
  auto Cost=[&](int32 Face)
  {
@@ -276,10 +278,11 @@ bool AWarehouseForklift::PlanPickupApproach()
   const bool DefaultClear=NavigationClear(PalletApproach(Source,220.f,true));
   for (float Distance:{220.f,185.f,260.f,320.f})
   {
-   if (Distance!=220.f && DefaultClear) break;
+   if (Distance!=220.f && DefaultClear && !RaisedPickup) break;
    PickupApproachDistanceCm=Distance;
    const FTransform Candidate=PalletApproach(Source,Distance,true);
    if (!NavigationClear(Candidate)) continue;
+   bPickupHadClearApproach=true;
    if (++FaceSearches>2) break;
    if (!PlanPickupTravelTo(Candidate,true)) continue;
    ReportJob(TEXT("PICKUP_ENTRY_SELECTED"),FString::Printf(TEXT("Pallet entry %d degrees; standoff %.0f cm"),Face*90,Distance));
@@ -479,6 +482,13 @@ bool AWarehouseForklift::NavigationClear(const FTransform& Pose,const FWarehouse
  // against the published map / measured points instead of filling the empty
  // space around the two forks with one tall rectangular envelope.
  const bool PrecisionPickupEnd=Query->bPrecisionPickupEnd && FVector::DistSquared2D(Pose.GetLocation(),Query->PickupEnd)<=150.f*150.f;
+ // At an observed upper shelf, the travel envelope fills the gap between
+ // the low forks and the shelf. Use actual parts only for the short, slow
+ // alignment around the current vehicle and its insertion-line target.
+ const bool RaisedRackAlignment=BoxBlocked && AIState==EWarehouseAIState::AlignVehicle && !bSupportingPallet &&
+  bObservedTargetValid && ObservedPallet.GetLocation().Z-FloorBase(ObservedPallet.GetLocation().Z)>5.f &&
+  FVector::DistSquared2D(Pose.GetLocation(),GetActorLocation())<=FMath::Square(150.f) &&
+  FVector::DistSquared2D(Pose.GetLocation(),PalletApproach(ObservedPallet,185.f,true).GetLocation())<=FMath::Square(150.f);
  bool StraightPickup=false;
  if (BoxBlocked && !bPlanningRoute && AIState==EWarehouseAIState::NavigatePickup && PickupStraightGoal.IsSet() &&
      !PlannedRoute.IsEmpty() && PlannedRoute.Last().Pose.Equals(PickupStraightGoal.GetValue(),.1f))
@@ -491,7 +501,7 @@ bool AWarehouseForklift::NavigationClear(const FTransform& Pose,const FWarehouse
  const bool RouteEscape=!bPlanningRoute && (AIState==EWarehouseAIState::NavigatePickup || AIState==EWarehouseAIState::NavigateDelivery ||
   AIState==EWarehouseAIState::NavigateParking) && !PlannedRoute.IsEmpty() && PlannedRoute[0].EscapeOrigin.IsSet() &&
   FVector::DistSquared2D(Pose.GetLocation(),PlannedRoute[0].EscapeOrigin.GetValue())<FMath::Square(FWarehouseRoutePoint::EscapeRadiusCm);
- const bool PhysicalEscape=BoxBlocked && (LegacyEscape || ObservedPickupEscape || PrecisionPickupEnd || StraightPickup || RouteEscape) && PhysicalPoseClear(Pose,true);
+ const bool PhysicalEscape=BoxBlocked && (LegacyEscape || ObservedPickupEscape || PrecisionPickupEnd || RaisedRackAlignment || StraightPickup || RouteEscape) && PhysicalPoseClear(Pose,true);
  if (PhysicalEscape) NavigationBlockDetail.Reset();
  if (BoxBlocked && !PhysicalEscape)
  {
@@ -1696,6 +1706,21 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   else StopFor(TEXT("OBSTACLE / NO PICKUP ROUTE"));
   break;
  case EWarehouseAIState::NavigatePickup:
+  // At the standoff for an observed raised pallet, hand the last lateral
+  // correction to the slow alignment controller instead of hunting on the
+  // travel route. The alignment and insertion checks still decide entry.
+  if (bObservedTargetValid && TaskSourcePose().GetLocation().Z-FloorBase(TaskSourcePose().GetLocation().Z)>5.f)
+  {
+   const FTransform Standoff=PalletApproach(SensorObservedTarget,PickupApproachDistanceCm,true);
+   if (FVector::DistSquared2D(GetActorLocation(),Standoff.GetLocation())<=FMath::Square(16.f) &&
+       FMath::Abs(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,Standoff.Rotator().Yaw))<=5.f)
+   {
+    BrakeDrive();
+    if (FMath::Abs(CurrentSpeedCm)<1.f && FMath::Abs(ChassisBody->GetPhysicsAngularVelocityInDegrees().Z)<1.f)
+     Next(EWarehouseAIState::SlowApproach,TEXT("PALLET APPROACH - LOW SPEED"));
+    break;
+   }
+  }
   Route(PalletApproach(TaskSourcePose(),PickupApproachDistanceCm,true),EWarehouseAIState::SlowApproach,TEXT("PALLET APPROACH - LOW SPEED"),
    PickupApproachDistanceCm<220.f && FVector::DistSquared2D(GetActorLocation(),TaskSourcePose().GetLocation())<350.f*350.f ?
     FMath::Min(30.f,EmptyTravelSpeedCm) : EmptyTravelSpeedCm);
@@ -1724,6 +1749,8 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
  case EWarehouseAIState::AlignVehicle:
  {
   const FTransform AlignmentPose=PalletApproach(ObservedPallet,185,true);
+  const bool RaisedPickup=ObservedPallet.GetLocation().Z-AlignmentPose.GetLocation().Z>5.f;
+  const float AlignmentSpeed=RaisedPickup ? 30.f : WarehouseWorkSpeed(15,30,45,60,90);
   const FVector AlignmentOffset=AlignmentPose.GetLocation()-GetActorLocation();
   const float AlignmentYaw=FMath::Abs(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,AlignmentPose.Rotator().Yaw));
   // A short, already aligned creep does not need an infeasible tiny S curve.
@@ -1754,10 +1781,10 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
     BrakeDrive();
     if (FMath::Abs(CurrentSpeedCm)<1.f) Next(EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"));
    }
-   else if (MoveToLine(AlignmentPose.GetLocation(),WarehouseWorkSpeed(15,30,45,60,90),Dt,OptAlign ? 3.f : 1.f)) Next(EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"));
+   else if (MoveToLine(AlignmentPose.GetLocation(),AlignmentSpeed,Dt,OptAlign ? 3.f : 1.f)) Next(EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"));
   }
-  else if (OptAlign && AlignRechecks<3) { if (!bRouteStarted) ++AlignRechecks;Route(AlignmentPose,EWarehouseAIState::AlignVehicle,TEXT("ALIGN VEHICLE TO PALLET"),WarehouseWorkSpeed(15,30,45,60,90)); }
-  else Route(AlignmentPose,EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"),WarehouseWorkSpeed(15,30,45,60,90));
+  else if (OptAlign && AlignRechecks<3) { if (!bRouteStarted) ++AlignRechecks;Route(AlignmentPose,EWarehouseAIState::AlignVehicle,TEXT("ALIGN VEHICLE TO PALLET"),AlignmentSpeed); }
+  else Route(AlignmentPose,EWarehouseAIState::CorrectFork,TEXT("CORRECT FORK HEIGHT / CHECK ANGLE"),AlignmentSpeed);
   break;
  }
  case EWarehouseAIState::CorrectFork:
@@ -2240,7 +2267,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   break;
  case EWarehouseAIState::ElevatorBoard:
   if (!Elevator->CanEnter(this)) { StopFor(TEXT("OBSTACLE IN ELEVATOR / ENTRY INTERLOCK")); break; }
-  if (MovePrecise(Elevator->BoardingPose(TransferFromFloor).GetLocation(),15,Dt))
+  if (MovePrecise(Elevator->BoardingPose(TransferFromFloor).GetLocation(),25,Dt))
   {
    if (!Elevator->ConfirmBoarded(this)) { FaultAI(TEXT("ELEVATOR BOARDING POSE / LOAD ENVELOPE FAILED")); break; }
    Next(EWarehouseAIState::ElevatorRide,TEXT("BOARDING CONFIRMED - WAIT FOR CLOSED DOORS / FLOOR TRANSFER"));
@@ -2255,7 +2282,7 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   break;
  case EWarehouseAIState::ElevatorExit:
   if (!Elevator->CanExit(this)) { StopFor(TEXT("ELEVATOR EXIT INTERLOCK")); break; }
-  if (MovePrecise(Elevator->WaitingPose(TransferToFloor).GetLocation(),20,Dt))
+  if (MovePrecise(Elevator->WaitingPose(TransferToFloor).GetLocation(),30,Dt))
   {
    if (!Elevator->ConfirmExited(this)) { FaultAI(TEXT("ELEVATOR EXIT CONFIRMATION FAILED")); break; }
    bFloorTransfer=false;

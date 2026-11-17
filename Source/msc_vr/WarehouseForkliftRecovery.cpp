@@ -49,6 +49,8 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  // Route around it from where the vehicle stands: backing away blindly once ended up against a pallet behind it (2026-10-30).
  if ((Reason==TEXT("OBSTACLE ON ROUTE") || Reason==TEXT("OBSTACLE / TURN CLEARANCE")) && TryHybridReplanHere(From)) return true;
  bool AlignmentRetry=false;
+ const bool RaisedRackAlignment=From==EWarehouseAIState::AlignVehicle && IsValid(TargetPallet) &&
+  bObservedTargetValid && ObservedPallet.GetLocation().Z-FloorBase(ObservedPallet.GetLocation().Z)>5.f;
  if (From==EWarehouseAIState::AlignVehicle && IsValid(TargetPallet))
  {
   const FTransform Reference=SensorMode==EWarehouseSensorMode::Autonomous ? ObservedPallet : TargetPallet->GetActorTransform();
@@ -61,9 +63,9 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  }
  bRetryInsertion=!bSupportingPallet && !bPalletReleased && IsValid(TargetPallet) &&
   (From==EWarehouseAIState::CorrectFork ||
-   From==EWarehouseAIState::InsertFork || From==EWarehouseAIState::VerifyInsertion || AlignmentRetry);
+   From==EWarehouseAIState::InsertFork || From==EWarehouseAIState::VerifyInsertion || (AlignmentRetry && !RaisedRackAlignment));
  const bool BlockedPickupEntry=bRetryInsertion && Reason.StartsWith(TEXT("OBSTACLE"));
- if (BlockedPickupEntry) BlockedPickupFaces|=1u<<PickupEntryQuarterTurns;
+ if (BlockedPickupEntry || RaisedRackAlignment) BlockedPickupFaces|=1u<<PickupEntryQuarterTurns;
  const bool FailedDeliveryRoute=From==EWarehouseAIState::PlanDelivery && Reason==TEXT("OBSTACLE / NO DELIVERY ROUTE");
  const bool FailedPickupRoute=From==EWarehouseAIState::PlanPickup && Reason==TEXT("OBSTACLE / NO PICKUP ROUTE");
  const bool FloorAlignmentRetry=From==EWarehouseAIState::AlignUnload && Reason==TEXT("FLOOR LOAD ALIGNMENT OUTSIDE SLOT");
@@ -177,7 +179,9 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
   TGuardValue<bool> Planning(bPlanningRoute,true);
   const FTransform Goal=PalletApproach(FailedPickupRoute ? TaskSourcePose() : ActiveJob.Destination,
    FailedPickupRoute ? PickupApproachDistanceCm : 220.f,FailedPickupRoute);
-  const bool GoalClear=NavigationClear(Goal);
+  // A clear candidate on another face can still fail to connect. Report the
+  // disconnected approach instead of blaming the pillar at the default face.
+  const bool GoalClear=(FailedPickupRoute && bPickupHadClearApproach) || NavigationClear(Goal);
   const FString Detail=GoalClear ? TEXT("현재 배치에서 연결 가능한 경로를 찾지 못했습니다. 통로 폭과 랙 배치를 확인한 뒤 E로 재시도하세요.") :
    FString(TEXT("팔레트 접근 공간이 막혀 있습니다. "))+NavigationBlockDetail+TEXT(". 랙 앞 작업 공간과 팔레트 방향을 확인한 뒤 E로 재시도하세요.");
   if (!GoalClear) UE_LOG(LogTemp,Warning,TEXT("AGV_PICKUP_GOAL_BLOCKED %s goal=%s blocker=%s"),
@@ -191,12 +195,12 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  RecoveryStart=GetActorLocation();
  // A missing delivery route after rack withdrawal is not an inward contact.
  // Keep clearing the source rack instead of undoing the last reverse into it.
- RecoveryDirection=bRetryInsertion || From==EWarehouseAIState::WithdrawFork || FailedDeliveryRoute || FloorAlignmentRetry ? -1.f : -LastDriveDirection;
+ RecoveryDirection=bRetryInsertion || RaisedRackAlignment || From==EWarehouseAIState::WithdrawFork || FailedDeliveryRoute || FloorAlignmentRetry ? -1.f : -LastDriveDirection;
  if (ChargerForwardRecovery) RecoveryDirection=1.f;
  RecoveryDistance=bSupportingPallet ? 150.f : 200.f;
  // "Away from where it was driving" is not always away from what stopped it: a vehicle reversing past a pallet with its forks
  // beside it pushed that pallet round while backing off forward (2026-10-31). Take the way that is actually free of what was sensed.
- if (SensorMode==EWarehouseSensorMode::Autonomous && !bRetryInsertion && !ChargerForwardRecovery && !FloorAlignmentRetry && From!=EWarehouseAIState::WithdrawFork)
+ if (SensorMode==EWarehouseSensorMode::Autonomous && !bRetryInsertion && !RaisedRackAlignment && !ChargerForwardRecovery && !FloorAlignmentRetry && From!=EWarehouseAIState::WithdrawFork)
  {
   const FBox Body=NavigationEnvelope();
   const TArray<AActor*> Loads=GetPhysicalLoads();
