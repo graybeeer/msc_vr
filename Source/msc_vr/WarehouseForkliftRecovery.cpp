@@ -62,6 +62,8 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  bRetryInsertion=!bSupportingPallet && !bPalletReleased && IsValid(TargetPallet) &&
   (From==EWarehouseAIState::CorrectFork ||
    From==EWarehouseAIState::InsertFork || From==EWarehouseAIState::VerifyInsertion || AlignmentRetry);
+ bRecoveryForksEngaged=bRetryInsertion && (From==EWarehouseAIState::CorrectFork ||
+  From==EWarehouseAIState::InsertFork || From==EWarehouseAIState::VerifyInsertion);
  const bool BlockedPickupEntry=bRetryInsertion && Reason.StartsWith(TEXT("OBSTACLE"));
  if (BlockedPickupEntry) BlockedPickupFaces|=1u<<PickupEntryQuarterTurns;
  const bool FailedDeliveryRoute=From==EWarehouseAIState::PlanDelivery && Reason==TEXT("OBSTACLE / NO DELIVERY ROUTE");
@@ -299,6 +301,14 @@ void AWarehouseForklift::AdvanceRecovery(float Dt)
 {
  if (AIState==EWarehouseAIState::RecoverLower)
  {
+  // Before insertion the forks are not under the pallet: raising them to its height first only
+  // spent the 8 s budget (2026-11-16 rack06: 148 cm lift timed out, then the raised forks blocked deferral).
+  if (!bRecoveryForksEngaged)
+  {
+   RecoveryStart=GetActorLocation();
+   TransitionAI(EWarehouseAIState::RecoverWithdraw,TEXT("FORKS NOT ENGAGED - WITHDRAW / REALIGN"));
+   return;
+  }
   // Retry the last actual model observation; a hidden pallet may have moved.
   const float SourceZ=SensorMode==EWarehouseSensorMode::Autonomous ? ObservedPallet.GetLocation().Z : TargetPallet->GetActorLocation().Z;
   const float Height=FMath::Max(0.f,float(SourceZ-GetActorLocation().Z));

@@ -353,6 +353,10 @@ private:
  int32 ObservedRouteReplans = 0;
  FVector ObservedRouteProgress = FVector::ZeroVector;
  bool bRetryInsertion = false, bRecoveryNeedsRoute = false;
+ // Forks were inside the pallet when recovery began (not an alignment retry before insertion).
+ bool bRecoveryForksEngaged = false;
+ // Floor-slot docking: backing off to correct the heading before docking again.
+ bool bFloorDockPivoting = false;
  FString WaitObstacleReason;
  int32 RouteIndex = 0;
  UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> Carriage;

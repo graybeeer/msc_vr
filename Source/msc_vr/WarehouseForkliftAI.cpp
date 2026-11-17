@@ -2031,15 +2031,26 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    {
     bRouteStarted=false;
     if (FleetCoordinator && !FleetCoordinator->Permit(this,&Goal)) break;
+    // Do not pivot at the goal: swinging the drive wheel 90 degrees for an in-place turn twisted the
+    // truck and load further each time (2026-11-16 two: -1.6 -> -7.6 degrees, three recovery reapproaches).
+    // Back off 25 cm along the docking heading while steering out the heading error, then dock again.
+    if (FMath::Abs(Along)<.7f && FMath::Abs(YawError)>FMath::DegreesToRadians(.35f)) bFloorDockPivoting=true;
+    if (bFloorDockPivoting)
+    {
+     if (Along>=25.f || FMath::Abs(YawError)>FMath::DegreesToRadians(RelaxedFloor ? 8.f : 3.f)) bFloorDockPivoting=false;
+     else
+     {
+      constexpr float BackLookAhead=25.f;
+      const float Limit=1.f/FMath::Max(117.3f,MinimumTurningRadiusCm);
+      CommandDrive(-10.f,-FMath::Clamp(YawError/BackLookAhead,-Limit,Limit),Dt);
+      break;
+     }
+    }
     if (FMath::Abs(Along)<.7f)
     {
      BrakeDrive();
      if (FMath::Abs(CurrentSpeedCm)<1.f && ChassisBody->GetPhysicsAngularVelocityInDegrees().Size()<.5f)
-     {
-      if (FMath::Abs(YawError)>FMath::DegreesToRadians(.35f))
-       CommandTurn(FMath::Sign(YawError)*FMath::Clamp(FMath::Abs(YawError),.015f,.08f),Dt);
-      else BeginRecovery(EWarehouseAIState::AlignUnload,TEXT("FLOOR LOAD ALIGNMENT OUTSIDE SLOT"));
-     }
+      BeginRecovery(EWarehouseAIState::AlignUnload,TEXT("FLOOR LOAD ALIGNMENT OUTSIDE SLOT"));
      break;
     }
     const FVector Axle=(Wheels[1]->GetComponentLocation()+Wheels[2]->GetComponentLocation())*.5f;
