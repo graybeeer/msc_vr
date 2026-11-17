@@ -95,11 +95,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
   const bool StartBoxBlocked=!NavigationClear(FTransform(FRotator(0,GetActorRotation().Yaw,0),GetActorLocation()));
   bObservedPickupEscape=(bHasRecognizedTargetPose && FVector::Dist2D(RecoveryStart,TaskSourcePose().GetLocation())<=260.f) || StartBoxBlocked;
   bObservedEscapeFromStart=StartBoxBlocked;
-  // Only a face judged at the pallet with a fresh scan is excluded: an obstacle met metres away on the
-  // route says nothing about the rack face, and a stale snapshot reads every part check as blocked.
-  const bool FaceJudgeable=AutonomousSensorsReady() &&
-   FVector::Dist2D(GetActorLocation(),PalletApproach(TaskSourcePose(),PickupApproachDistanceCm,true).GetLocation())<=400.f;
-  const bool CurrentFaceClear=!FailedPickupRoute && (!FaceJudgeable || RackApproachClear(TaskSourcePose(),true));
+  const bool CurrentFaceClear=!FailedPickupRoute && RackApproachClear(TaskSourcePose(),true);
   if (!FailedPickupRoute && !CurrentFaceClear) BlockedPickupFaces|=1u<<PickupEntryQuarterTurns;
   const bool Found=CurrentFaceClear ? PlanPickupTravelTo(PalletApproach(TaskSourcePose(),PickupApproachDistanceCm,true),true) : PlanPickupApproach();
   if (Found)
