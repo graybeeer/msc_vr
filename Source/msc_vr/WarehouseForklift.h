@@ -288,6 +288,8 @@ private:
  bool TryHybridReplanHere(EWarehouseAIState From);
  int32 HybridRouteReplans=0;
  FVector HybridReplanProgress=FVector::ZeroVector;
+ // Waiting beside the elevator landing while another vehicle holds the reservation.
+ bool bElevatorQueued=false; FTransform ElevatorQueuePose=FTransform::Identity; double LastElevatorQueuePlanAt=-100.0;
  mutable bool bHybridGoalBlocked=false;
  int32 AlignRechecks=0;
  FString LastPlanReport;

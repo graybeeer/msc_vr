@@ -34,6 +34,8 @@ static TAutoConsoleVariable<float> CVarFollowLookAheadGain(TEXT("Warehouse.Follo
 static TAutoConsoleVariable<float> CVarFollowLookAheadMin(TEXT("Warehouse.Follow.LookAheadMin"),80.f,TEXT("Straight-stretch minimum look-ahead, cm."));
 static TAutoConsoleVariable<float> CVarFollowLookAheadMax(TEXT("Warehouse.Follow.LookAheadMax"),220.f,TEXT("Straight-stretch maximum look-ahead, cm."));
 static TAutoConsoleVariable<float> CVarFollowLagSeconds(TEXT("Warehouse.Follow.LagSeconds"),.25f,TEXT("Route follower steers from the pose predicted this far ahead (steering slew and joint lag; 2026-11-11: route crossings 5 -> 2, peak steering 25 -> 19 deg on the same route); 0 is the plain pure pursuit."));
+static TAutoConsoleVariable<float> CVarElevatorQueueBackCm(TEXT("Warehouse.Elevator.QueueBackCm"),300.f,TEXT("While another vehicle holds the elevator, wait this far behind the landing waiting point (the riding vehicle leaves the cabin onto that point). 0 waits on the point."));
+static TAutoConsoleVariable<float> CVarElevatorQueueSideCm(TEXT("Warehouse.Elevator.QueueSideCm"),250.f,TEXT("Sideways offset of that waiting spot, so the exit lane stays open; either side is tried."));
 static TAutoConsoleVariable<float> CVarFollowStraightBendDeg(TEXT("Warehouse.Follow.StraightBendDeg"),0.f,TEXT("Route heading change within the long look-ahead below which the stretch counts as straight; 0 disables."));
 static TAutoConsoleVariable<int32> CVarOptUnloadSpeed(TEXT("Warehouse.Opt.UnloadSpeed"),1,TEXT("1: faster approach into the unload slot and faster fork withdrawal."));
 static TAutoConsoleVariable<int32> CVarOptPivotRate(TEXT("Warehouse.Opt.PivotRate"),1,TEXT("1: turn on the spot at up to 0.4 rad/s (0.3 loaded); 0: the old 0.15-0.2 rad/s caps."));
@@ -1568,7 +1570,7 @@ bool AWarehouseForklift::BeginFloorTransfer(float TargetZ,EWarehouseAIState Resu
  if (!Fault.IsEmpty()) { FaultAI(Fault); return true; }
  if (!PlanAutonomousRoute(Elevator->WaitingPose(TransferFromFloor)))
  { StopFor(TEXT("NO CLEAR ROUTE TO ELEVATOR")); return true; }
- AfterElevator=Resume; bFloorTransfer=true;
+ AfterElevator=Resume; bFloorTransfer=true; bElevatorQueued=false;
  TransitionAI(EWarehouseAIState::ElevatorApproach,TEXT("NAVIGATE TO ELEVATOR WAITING POINT"));
  bRouteStarted=true; return true;
 }
@@ -1774,6 +1776,10 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
     *VehicleName,*ActiveJob.JobId,*TaskSourcePose().ToString(),*PalletApproach(TaskSourcePose(),220,true).ToString(),SensorMode==EWarehouseSensorMode::Autonomous,
     bObservedTargetValid,bObservedTargetValid ? *SensorObservedTarget.ToString() : TEXT("NONE"));
   if (BeginFloorTransfer(TaskSourcePose().GetLocation().Z,EWarehouseAIState::PlanPickup)) break;
+  // Right after braking for a recovery withdraw the snapshot can be stale, and every endpoint
+  // check then reads as blocked (2026-11-17 col2: deferred in the same frame). Wait for a fresh scan.
+  if (SensorMode==EWarehouseSensorMode::Autonomous && !AutonomousSensorsReady() && AIElapsed<5.f)
+  { BrakeDrive();SetStatus(TEXT("WAIT FRESH SCAN - PLAN PICKUP"));break; }
   if (PlanPickupApproach())
   { Next(EWarehouseAIState::NavigatePickup,TEXT("NAVIGATION TO PICKUP")); bRouteStarted=true; }
   else StopFor(TEXT("OBSTACLE / NO PICKUP ROUTE"));
@@ -2331,14 +2337,57 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   { if (IsValid(ChargingStation)) ChargingStation->Release(this); Next(EWarehouseAIState::Ready,TEXT("READY - WAITING FOR WORK ORDER")); }
   break;
  case EWarehouseAIState::ElevatorApproach:
-  Route(Elevator->WaitingPose(TransferFromFloor),EWarehouseAIState::ElevatorCall,TEXT("FMS CALL ELEVATOR"),LoadedTravelSpeedCm);
+  Route(bElevatorQueued ? ElevatorQueuePose : Elevator->WaitingPose(TransferFromFloor),EWarehouseAIState::ElevatorCall,
+   bElevatorQueued ? TEXT("WAIT BESIDE LANDING - ELEVATOR IN USE") : TEXT("FMS CALL ELEVATOR"),LoadedTravelSpeedCm);
   break;
  case EWarehouseAIState::ElevatorCall:
+ {
+  // The landing waiting point is also where a riding vehicle leaves the cabin. While another vehicle holds the
+  // reservation, wait beside and behind it so that vehicle can exit and drive away; standing on the point, or
+  // straight behind it in the exit lane, deadlocked both (2026-11-12, 2026-11-17 seed 1).
+  const float Back=CVarElevatorQueueBackCm.GetValueOnGameThread();
+  const FTransform Landing=Elevator->WaitingPose(TransferFromFloor);
+  const bool InUse=IsValid(Elevator->ReservedVehicle) && Elevator->ReservedVehicle!=this;
+  if (Back>0.f && InUse)
+  {
+   if (Elevator->ReservedVehicle->AIState!=EWarehouseAIState::Fault) AIElapsed-=Dt;
+   const FString Hold=FString::Printf(TEXT("ELEVATOR IN USE BY %s - HOLD CLEAR OF LANDING"),*Elevator->ReservedVehicle->VehicleName);
+   if (Status!=Hold) { UE_LOG(LogTemp,Log,TEXT("AGV_ELEVATOR_HOLD %s for %s queued=%d"),*VehicleName,*Elevator->ReservedVehicle->VehicleName,bElevatorQueued); SetStatus(Hold); }
+   BrakeDrive();
+   if (bElevatorQueued || FMath::Abs(CurrentSpeedCm)>=1.f || GetWorld()->GetTimeSeconds()-LastElevatorQueuePlanAt<2.0) break;
+   LastElevatorQueuePlanAt=GetWorld()->GetTimeSeconds();
+   for (const float Side : {-CVarElevatorQueueSideCm.GetValueOnGameThread(),CVarElevatorQueueSideCm.GetValueOnGameThread()})
+   {
+    FTransform Spot=Landing;Spot.SetLocation(Landing.TransformPosition(FVector(-Back,Side,0)));
+    if (!PlanAutonomousRoute(Spot)) continue;
+    bElevatorQueued=true;ElevatorQueuePose=Spot;
+    UE_LOG(LogTemp,Log,TEXT("AGV_ELEVATOR_QUEUE %s spot=%s"),*VehicleName,*Spot.GetLocation().ToCompactString());
+    TransitionAI(EWarehouseAIState::ElevatorApproach,TEXT("ELEVATOR IN USE - MOVE BESIDE LANDING"));
+    bRouteStarted=true;
+    break;
+   }
+   break;
+  }
+  if (bElevatorQueued)
+  {
+   // Free again: return to the waiting point once a way there is clear (the vehicle that left may still stand on it).
+   BrakeDrive();
+   if (FMath::Abs(CurrentSpeedCm)>=1.f || GetWorld()->GetTimeSeconds()-LastElevatorQueuePlanAt<2.0) break;
+   LastElevatorQueuePlanAt=GetWorld()->GetTimeSeconds();
+   if (AIElapsed>180.f) { FaultAI(TEXT("ELEVATOR RESERVATION TIMEOUT"));break; }
+   if (!PlanAutonomousRoute(Landing)) { SetStatus(TEXT("ELEVATOR FREE - WAIT FOR CLEAR LANDING"));break; }
+   bElevatorQueued=false;
+   UE_LOG(LogTemp,Log,TEXT("AGV_ELEVATOR_UNQUEUE %s"),*VehicleName);
+   TransitionAI(EWarehouseAIState::ElevatorApproach,TEXT("ELEVATOR FREE - NAVIGATE TO WAITING POINT"));
+   bRouteStarted=true;
+   break;
+  }
   // Continue physical low-speed alignment after route braking settles.
   if (AIElapsed>180.f) { FaultAI(TEXT("ELEVATOR RESERVATION TIMEOUT"));break; }
-  if (!MovePrecise(Elevator->WaitingPose(TransferFromFloor).GetLocation(),5,Dt)) break;
+  if (!MovePrecise(Landing.GetLocation(),5,Dt)) break;
   if (Elevator->RequestTransfer(this,TransferFromFloor,TransferToFloor)) Next(EWarehouseAIState::ElevatorWait,TEXT("WAIT FOR ARRIVAL / OPEN DOOR / ENTRY PERMISSION"));
   break;
+ }
  case EWarehouseAIState::ElevatorWait:
   if (Elevator->CanEnter(this)) Next(EWarehouseAIState::ElevatorBoard,TEXT("ENTER PLATFORM - PRECISE STOP"));
   else if (AIElapsed>180.f) FaultAI(TEXT("ELEVATOR ARRIVAL TIMEOUT"));
