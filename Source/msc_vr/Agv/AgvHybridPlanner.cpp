@@ -4,6 +4,7 @@
 #include "WarehouseForkliftNavQuery.h"
 #include "Algo/Reverse.h"
 #include "WarehouseFleetCoordinator.h"
+#include "WarehouseElevator.h"
 #include "WarehousePallet.h"
 #include "AgvShadowSensors.h"
 #include "AgvForkliftLocalizer.h"
@@ -13,6 +14,7 @@
 
 static TAutoConsoleVariable<int32> CVarHybridMemory(TEXT("Warehouse.Nav.HybridMemory"),1,TEXT("1: routes also keep off pallets the fleet saw earlier but cannot see now."));
 static TAutoConsoleVariable<int32> CVarHybridScanMemory(TEXT("Warehouse.Nav.HybridScanMemory"),1,TEXT("1: routes also keep off what the fleet's LiDARs hit off the prior map and no beam has seen gone since (10cm grid, 5 min)."));
+static TAutoConsoleVariable<int32> CVarHybridFloorHeuristic(TEXT("Warehouse.Nav.HybridFloorHeuristic"),1,TEXT("Use published floor support in the distance estimate on elevated landings."));
 
 namespace AgvHybrid
 {
@@ -164,7 +166,8 @@ namespace AgvHybrid
 	}
 
 	/** Drive time from every cell to the goal around inflated obstacles. Reports whether the start can reach the goal. */
-	static void BuildGoalTime(FGrid& Field, const FVector2D& Start, const FVector2D& Goal, double Speed)
+	static void BuildGoalTime(FGrid& Field, const FVector2D& Start, const FVector2D& Goal, double Speed,
+		TFunctionRef<bool(int32, int32)> Supported)
 	{
 		Field.GoalTime.Init(Unreached, Field.Occupied.Num());
 		int32 GX, GY, SX, SY;
@@ -204,6 +207,10 @@ namespace AgvHybrid
 						{
 							continue;
 						}
+					}
+					if ((NX != SX || NY != SY) && !Supported(NX, NY))
+					{
+						continue;
 					}
 					const float T = Item.T + (DX && DY ? Diagonal : Straight);
 					if (T < Field.GoalTime[Next])
@@ -520,7 +527,24 @@ bool AWarehouseForklift::PlanHybridRoute(const FTransform& Start, const FTransfo
 	// Receiving/job records do not reveal the current shape or pose of unseen freight.
 	// Only published structures, measured points and the fleet's last observations enter the field.
 	BuildClearance(Field);
-	BuildGoalTime(Field, StartXY, GoalXY, Spec.Speed);
+	// Mezzanine cut-outs look empty to the obstacle raster. Without a floor
+	// constraint the distance estimate sends most expansions towards that void.
+	// This is a heuristic only: the existing swept support checks still decide motion.
+	const bool bCheckUpperFloor = CVarHybridFloorHeuristic.GetValueOnGameThread() != 0 &&
+		IsValid(Elevator) && Elevator->FloorAtHeight(BaseZ)>0;
+	TArray<uint8> GridSupport;
+	if (bCheckUpperFloor) GridSupport.Init(0, Field.Occupied.Num());
+	BuildGoalTime(Field, StartXY, GoalXY, Spec.Speed, [&](int32 X, int32 Y)
+	{
+		if (!bCheckUpperFloor) return true;
+		uint8& Cached = GridSupport[Field.Index(X, Y)];
+		if (!Cached)
+		{
+			const FVector Point(Field.Origin.X+(X+.5)*CellCm, Field.Origin.Y+(Y+.5)*CellCm, BaseZ);
+			Cached = PerceivedFloorSupport(Point) ? 1 : 2;
+		}
+		return Cached == 1;
+	});
 	const double BuildMs = (FPlatformTime::Seconds() - StartedAt) * 1000.0;
 
 	// Only a positively recognized target supplies this cached catalog footprint.

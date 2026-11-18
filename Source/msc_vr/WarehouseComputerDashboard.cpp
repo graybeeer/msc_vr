@@ -189,6 +189,12 @@ private:
  bool bConfirmDeleteHeld=false;
  TSharedPtr<SEditableTextBox> NewIdInput,NewProductInput;
  float NewMass=12,NewWidth=40,NewDepth=30,NewHeight=25;
+ TSharedPtr<SEditableTextBox> PlannedProductInput;
+ TArray<TSharedPtr<FString>> PlannedProducts;
+ TSharedPtr<FString> PlannedProfile;
+ TSharedPtr<SComboBox<TSharedPtr<FString>>> PlannedProfileCombo;
+ int32 PlanDelay=60,PlanUnits=1,CancelPlanId=1;
+ FString ShippingPlanText;
 
  void Close() { if (Controller.IsValid()) Controller->CloseWarehouseComputer(); }
  TSharedRef<SWidget> CommandAction(const FString& Key,const FString& Title,TFunction<void()> Callback,TFunction<bool()> Enabled=[]() { return true; },bool Main=false)
@@ -302,6 +308,54 @@ private:
   return Truck ? FString::Printf(TEXT("%s · 도크 %s · 적재 %d개"),*Truck->TruckId,*Truck->DockId,Truck->ManifestPallets.Num()) : TEXT("트럭이 없습니다");
  }
 
+ bool CanSchedule() const { return CanUse() && Shipping.IsValid() && Shipping->CanPlanShipping(); }
+ TSharedRef<SWidget> PlanNumber(int32& Value,int32 Min,int32 Max)
+ {
+  auto* Storage=&Value;
+  return SNew(SNumericEntryBox<int32>).MinValue(Min).MaxValue(Max).AllowSpin(false).MinDesiredValueWidth(110)
+   .Font(WarehouseUIStyle::Font(16)).Value_Lambda([Storage]() -> TOptional<int32> { return *Storage; })
+   .OnValueChanged_Lambda([Storage,Min,Max](int32 Number) { *Storage=FMath::Clamp(Number,Min,Max); });
+ }
+ void RegisterPlan(bool Inbound)
+ {
+  if (!CanSchedule()) return;
+  const auto& Zone=Inbound ? SelectedInboundZone : SelectedOutboundZone;
+  const auto& Truck=Inbound ? SelectedInboundTruck : SelectedOutboundTruck;
+  if (!Zone || !Truck) return;
+  if (!Inbound && InventoryList) for (const auto& Item:InventoryList->GetSelectedItems())
+  {
+   const auto* Row=Item ? Computer->Inventory.FindByPredicate([&](const auto& Current){return Current.Cargo==Item->Cargo;}) : nullptr;
+   if (!Row || !IsValid(Row->Pallet)) { Notice=TEXT("확인 필요 · 팔레트에 실린 상자만 출고 일정에 넣을 수 있습니다.");return; }
+  }
+  Report(Shipping->ScheduleShipping(ShipmentNameInput->GetText().ToString(),*Zone,Truck->Truck.Get(),PlanDelay,
+   Inbound ? TArray<AWarehousePallet*>() : SelectedPallets(),Inbound ? PlanUnits : 0,
+   PlannedProducts.IndexOfByKey(PlannedProfile),PlannedProductInput->GetText().ToString()),true);
+ }
+ TSharedRef<SWidget> BuildShippingPlans()
+ {
+  for (int32 I=0;I<AWarehouseCargo::GetCargoProfileCount();++I)
+   PlannedProducts.Add(MakeShared<FString>(AWarehouseCargo::GenerateCargoRecipe(1,0,I,FVector(75,65,65)).ProductKind.ToString()));
+  PlannedProfile=PlannedProducts.IsEmpty() ? nullptr : PlannedProducts[0];
+  return SNew(SVerticalBox).Visibility_Lambda([this](){return CanSchedule() ? EVisibility::Visible : EVisibility::Collapsed;})
+   +SVerticalBox::Slot().AutoHeight()[Label(TEXT("입출고 예상 일정"),20,WarehouseUIStyle::Text,true)]
+   +SVerticalBox::Slot().AutoHeight().Padding(0,6)[Label(TEXT("위의 입고·출고 구역과 트럭을 사용합니다. 출고 품목은 왼쪽 재고에서 고른 팔레트 전체입니다."),14,Muted)]
+   +SVerticalBox::Slot().AutoHeight()[Label(TEXT("지금부터 작업 시작까지 (시뮬레이션 초)"),14,Muted)]
+   +SVerticalBox::Slot().AutoHeight()[PlanNumber(PlanDelay,0,86400)]
+   +SVerticalBox::Slot().AutoHeight().Padding(0,10,0,6)[CommandAction(TEXT("scheduleOutbound"),TEXT("선택 팔레트로 출고 예약"),[this]{RegisterPlan(false);},
+    [this]{return CanSchedule() && SelectedOutboundZone && SelectedOutboundTruck && InventoryList && InventoryList->GetNumItemsSelected()>0;})]
+   +SVerticalBox::Slot().AutoHeight().Padding(0,10,0,4)[Label(TEXT("입고 품목 기본 유형 · 상자 규격과 무게에 반영"),14,Muted)]
+   +SVerticalBox::Slot().AutoHeight()[StringCombo(PlannedProducts,PlannedProfile,PlannedProfileCombo,TEXT("품목 선택"))]
+   +SVerticalBox::Slot().AutoHeight().Padding(0,6)[SAssignNew(PlannedProductInput,SEditableTextBox).Font(WarehouseUIStyle::Font(16)).HintText(FText::FromString(TEXT("입고 품목 이름 · 비우면 기본 유형 이름")))]
+   +SVerticalBox::Slot().AutoHeight()[Label(TEXT("입고 팔레트 수 · 팔레트당 상자 1개"),14,Muted)]
+   +SVerticalBox::Slot().AutoHeight()[PlanNumber(PlanUnits,1,MAX_int32)]
+   +SVerticalBox::Slot().AutoHeight().Padding(0,8)[CommandAction(TEXT("scheduleInbound"),TEXT("지정한 품목으로 입고 예약"),[this]{RegisterPlan(true);},
+    [this]{return CanSchedule() && SelectedInboundZone && SelectedInboundTruck && PlannedProfile;},true)]
+   +SVerticalBox::Slot().AutoHeight().Padding(0,10,0,4)[Live([this]{return ShippingPlanText;},15)]
+   +SVerticalBox::Slot().AutoHeight()[Label(TEXT("취소할 예정 일정 번호"),14,Muted)]
+   +SVerticalBox::Slot().AutoHeight()[PlanNumber(CancelPlanId,1,MAX_int32)]
+   +SVerticalBox::Slot().AutoHeight().Padding(0,8)[CommandAction(TEXT("cancelShippingPlan"),TEXT("예정 일정 취소"),[this]{if(CanSchedule()) Report(Shipping->CancelShippingPlan(CancelPlanId),true);},[this]{return CanSchedule();})];
+ }
+
  TSharedRef<SWidget> BuildShipping()
  {
   return Panel(SNew(SScrollBox)+SScrollBox::Slot()[SNew(SVerticalBox)
@@ -325,6 +379,7 @@ private:
     { if (Shipping.IsValid()) Report(Shipping->StartInbound(SelectedInboundTruck ? SelectedInboundTruck->Truck.Get() : nullptr,SelectedInboundZone ? *SelectedInboundZone : FString()),true); },
     [this]() { return ShippingBlockReason(true).IsEmpty(); })]
    +SVerticalBox::Slot().AutoHeight()[Live([this]() { const auto Reason=ShippingBlockReason(true);return Reason.IsEmpty() ? TEXT("트럭에 실린 팔레트를 지정 구역으로 하나씩 옮깁니다.") : Reason; },14,Muted)]
+   +SVerticalBox::Slot().AutoHeight().Padding(0,24,0,8)[BuildShippingPlans()]
    +SVerticalBox::Slot().AutoHeight().Padding(0,24,0,8)[Label(TEXT("배송편 진행 현황"),20,WarehouseUIStyle::Text,true)]
    +SVerticalBox::Slot().AutoHeight()[Live([this]() { return ShipmentItems.IsEmpty() ? TEXT("아직 배송편이 없습니다.") : TEXT("배송편을 선택하면 아래에서 취소할 수 있습니다."); },14,Muted)]
    +SVerticalBox::Slot().AutoHeight().Padding(0,8)[SNew(SBox).HeightOverride(300)[SAssignNew(ShipmentList,SListView<TSharedPtr<FWarehouseShipment>>)
@@ -581,10 +636,24 @@ private:
  void RefreshShipping()
  {
   Shipping=AWarehouseShippingSystem::Find(Computer.Get());
+  ShippingPlanText=TEXT("등록된 예상 일정이 없습니다.");
   TArray<FString> Inbound,Outbound;TArray<TSharedPtr<FDashboardTruck>> Trucks;
   ShipmentItems.Reset();TSet<FString> CurrentShipments;
   if (Shipping.IsValid())
   {
+   TArray<FString> PlanRows;
+   const double Now=Shipping->GetWorld()->GetTimeSeconds();
+   for (const auto& Plan:Shipping->ShippingPlans)
+   {
+    const auto* Started=Plan.ShipmentId.IsEmpty() ? nullptr : Shipping->Shipments.FindByPredicate([&](const auto& S){return S.ShipmentId==Plan.ShipmentId;});
+    const FString State=Started ? Started->Status+(Started->WaitReason.IsEmpty() ? FString() : TEXT(" · ")+Started->WaitReason) :
+     Plan.PlannedAt>Now ? FString::Printf(TEXT("%d초 후 예정"),FMath::CeilToInt(Plan.PlannedAt-Now)) : Plan.Status;
+    PlanRows.Add(FString::Printf(TEXT("#%d · %s · %s · %s · %s\n%s · %d팔레트 · 시뮬레이션 시작 + %.0f초\n%s"),
+     Plan.Id,Plan.InboundUnits>0 ? TEXT("입고") : TEXT("출고"),*Plan.Name,*Plan.ZoneId,
+     IsValid(Plan.Truck) ? *Plan.Truck->TruckId : TEXT("트럭 없음"),*Plan.Products,
+     Plan.InboundUnits>0 ? Plan.InboundUnits : Plan.Pallets.Num(),Plan.PlannedAt,*State));
+   }
+   if (!PlanRows.IsEmpty()) ShippingPlanText=FString::Join(PlanRows,TEXT("\n\n"));
    for (const auto& Zone:Shipping->Zones) if (IsValid(Zone.Anchor) && !Zone.Slots.IsEmpty()) (Zone.bInbound ? Inbound : Outbound).AddUnique(Zone.ZoneId);
    for (AWarehouseLogisticsTruck* Truck:Shipping->Trucks) if (IsValid(Truck))
    {

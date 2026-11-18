@@ -123,7 +123,7 @@ void AWarehouseShippingSystem::RefreshLayoutCatalog()
   Zones.Add(MoveTemp(Zone));
  }
 }
-void AWarehouseShippingSystem::Tick(float Dt) { Super::Tick(Dt);RefreshShipping();AdvanceOperations(); }
+void AWarehouseShippingSystem::Tick(float Dt) { Super::Tick(Dt);RefreshShipping();AdvanceShippingPlans();AdvanceOperations(); }
 FString AWarehouseShippingSystem::GetPalletShipment(AWarehousePallet* P) const
 {
  for (const auto& S:Shipments) if (!Finished(S))
@@ -144,11 +144,13 @@ bool AWarehouseShippingSystem::CreateOutbound(const FString& Name,const TArray<A
 { return Create(Name,Pallets,ZoneId,Truck,EWarehouseShipmentDirection::Outbound); }
 bool AWarehouseShippingSystem::StartInbound(AWarehouseLogisticsTruck* Truck,const FString& ZoneId)
 {
+ if (IsValid(Truck) && ShippingPlans.ContainsByPredicate([Truck](const auto& P){return P.Truck==Truck && P.bManifestQueued && P.ShipmentId.IsEmpty();}))
+ { LastMessage=TEXT("트럭의 화물을 등록된 입고 일정에서 처리합니다.");return false; }
  TArray<AWarehousePallet*> Pallets;
  if (IsValid(Truck)) for (AWarehousePallet* P:Truck->ManifestPallets) Pallets.Add(P);
  return Create(IsValid(Truck) ? Truck->TruckId+TEXT(" 입고") : TEXT("입고"),Pallets,ZoneId,Truck,EWarehouseShipmentDirection::Inbound);
 }
-bool AWarehouseShippingSystem::Create(const FString& Name,const TArray<AWarehousePallet*>& Pallets,const FString& ZoneId,AWarehouseLogisticsTruck* Truck,EWarehouseShipmentDirection Direction)
+bool AWarehouseShippingSystem::Create(const FString& Name,const TArray<AWarehousePallet*>& Pallets,const FString& ZoneId,AWarehouseLogisticsTruck* Truck,EWarehouseShipmentDirection Direction,int32 ShippingPlanId)
 {
  auto Fail=[&](const TCHAR* Why) { LastMessage=Why;return false; };
  const auto* Zone=Zones.FindByPredicate([&](const auto& Z) { return Z.ZoneId==ZoneId; });
@@ -177,6 +179,9 @@ bool AWarehouseShippingSystem::Create(const FString& Name,const TArray<AWarehous
   if (!IsValid(P) || P->GetWorld()!=GetWorld() || Unique.Contains(P)) return Fail(TEXT("팔레트가 삭제되었거나 목록에 중복되어 있습니다."));
   Unique.Add(P);
   if (!GetPalletShipment(P).IsEmpty()) return Fail(TEXT("이미 다른 배송편에 예약된 팔레트입니다."));
+  if (Direction==EWarehouseShipmentDirection::Outbound && ShippingPlans.ContainsByPredicate([&](const auto& Plan)
+   {return Plan.Id!=ShippingPlanId && Plan.ShipmentId.IsEmpty() && Plan.Pallets.Contains(P);}))
+   return Fail(TEXT("이미 출고 일정에 예약된 팔레트입니다."));
   if (Strength->HasFailed(P) || P->ReceiptState==EWarehouseReceiptState::WrapTorn) return Fail(TEXT("파손·재검수 물류는 출고할 수 없습니다."));
   FWarehouseShipmentLine L;L.Pallet=P;L.PalletLabel=P->GetName();L.TruckSlot=S.Lines.Num();
   L.Cargo=Contents(Strength,P);

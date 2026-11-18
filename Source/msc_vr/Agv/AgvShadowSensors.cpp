@@ -14,6 +14,7 @@
 #include "WarehouseConveyor.h"
 #include "WarehouseLogisticsTruck.h"
 #include "Components/PrimitiveComponent.h"
+#include "Engine/StaticMeshActor.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "HAL/PlatformTime.h"
@@ -193,8 +194,14 @@ bool UAgvShadowSensorsComponent::IsBuildingMapComponent(const UPrimitiveComponen
 	// A conveyor roller rotates on a fixed machine axle. Its mounted envelope
 	// belongs to the facility map; independent cargo never inherits that owner.
 	if (Component->IsSimulatingPhysics() && (!Actor || !Actor->IsA<AWarehouseConveyor>())) return false;
-	if (!Actor || (!Actor->ActorHasTag(TEXT("WarehouseMapStructure")) && !Component->ComponentHasTag(TEXT("WarehouseMapStructure")) &&
-		!Actor->ActorHasTag(TEXT("LayoutType:Rack")))) return false;
+	if (!Actor) return false;
+	const bool bExplicitMap = Actor->ActorHasTag(TEXT("WarehouseMapStructure")) || Component->ComponentHasTag(TEXT("WarehouseMapStructure")) ||
+		Actor->ActorHasTag(TEXT("LayoutType:Rack"));
+	// Legacy authored mezzanines tagged their static architecture by floor.
+	// Do not depend on actor labels, which are unavailable in packaged builds.
+	const bool bLegacyMezzanine = !bExplicitMap && Actor->IsA<AStaticMeshActor>() && Component->Mobility == EComponentMobility::Static &&
+		Actor->Tags.ContainsByPredicate([](FName Tag) { return Tag==TEXT("WarehouseFloor1") || Tag==TEXT("WarehouseFloor2") || Tag==TEXT("WarehouseFloor3"); });
+	if (!bExplicitMap && !bLegacyMezzanine) return false;
 	if (Actor->IsA<APawn>() || Actor->IsA<AWarehouseWorker>() || Actor->IsA<AWarehouseCargo>() ||
 		Actor->IsA<AWarehousePallet>() || Actor->IsA<AWarehouseForklift>() || Actor->IsA<AWarehouseChargingStation>() ||
 		Actor->IsA<AWarehouseWaitingBay>() || Actor->IsA<AWarehouseElevator>() || Actor->IsA<AWarehouseLogisticsTruck>() ||
@@ -205,7 +212,7 @@ bool UAgvShadowSensorsComponent::IsBuildingMapComponent(const UPrimitiveComponen
 		const bool Facility = Name == TEXT("LayoutType:Forklift") ||
 			Name == TEXT("LayoutType:Elevator") || Name == TEXT("LayoutType:Zone") || Name == TEXT("LayoutType:Charger") ||
 			Name == TEXT("LayoutType:WaitingBay") || Name == TEXT("LayoutType:Cargo") || Name == TEXT("LayoutType:Pallet");
-		if (Facility || Name.StartsWith(TEXT("LayoutGroup:TruckDock")) ||
+		if (Facility || (!bExplicitMap && (Name.StartsWith(TEXT("LayoutType:")) || Name.StartsWith(TEXT("LayoutGroup:")))) || Name.StartsWith(TEXT("LayoutGroup:TruckDock")) ||
 			Name.StartsWith(TEXT("Logistics")) || Name == TEXT("TruckCargo") || Name == TEXT("WarehousePhysicalHuman")) return false;
 	}
 	return true;

@@ -36,7 +36,7 @@ bool AtWaitingPose(const AWarehouseForklift* Vehicle,const FTransform& Pose)
 {
  const FVector Offset=Vehicle->GetActorLocation()-Pose.GetLocation();
  // The route stops within 5 cm; allow 1 cm for finite-brake settling.
- // Floor level and a stopped vehicle remain mandatory. Cabin docking is 1 cm.
+ // Floor level and a stopped vehicle remain mandatory.
  return Offset.SizeSquared2D()<36.f && FMath::Abs(Offset.Z)<1.f && FMath::Abs(Vehicle->CurrentSpeedCm)<1.f;
 }
 void BindGuideFrames(UPhysicsConstraintComponent* Joint,UStaticMeshComponent* Anchor,UStaticMeshComponent* Body,const FTransform& WorldFrame)
@@ -857,7 +857,7 @@ bool AWarehouseElevator::FitsInside(AWarehouseForklift* Vehicle) const
    const FBox Box=Part->CalcBounds(Pose.GetRelativeTransform(GetActorTransform())).GetBox();
    if (Box.Min.X < -170 || Box.Max.X>170 || Box.Min.Y < -115 || Box.Max.Y>115 ||
        Box.Min.Z<PlatformHeight-.5f || Box.Max.Z>PlatformHeight+265.f)
-   { UE_LOG(LogTemp,Verbose,TEXT("ELEVATOR_ENVELOPE %s %s"),*Part->GetName(),*Box.ToString()); return false; }
+   { UE_CLOG(State==EWarehouseElevatorState::AwaitBoarding,LogTemp,Warning,TEXT("ELEVATOR_ENVELOPE %s floor=%d part=%s bounds=%s"),*Vehicle->VehicleName,CurrentFloor+1,*Part->GetName(),*Box.ToString()); return false; }
   }
  }
  return true;
@@ -943,13 +943,26 @@ bool AWarehouseElevator::IsCertifiedLandingSeam(AWarehouseForklift* Vehicle,cons
 }
 bool AWarehouseElevator::ConfirmBoarded(AWarehouseForklift* Vehicle)
 {
- if (!CanEnter(Vehicle) || !FitsInside(Vehicle) || !PortalClear() ||
-     FVector::Dist(Vehicle->GetActorLocation(),BoardingPose(EntryFloor).GetLocation())>1 ||
-     FVector::DotProduct(Vehicle->GetActorForwardVector(),GetActorForwardVector())<.9999 ||
-     Vehicle->GetActorUpVector().Z<.995f || FMath::Abs(Vehicle->CurrentSpeedCm)>1.f || !Vehicle->IsLiftAtTravelHeight()) return false;
+ if (!CanEnter(Vehicle)) return false;
+ const FVector Offset=BoardingPose(EntryFloor).InverseTransformPosition(Vehicle->GetActorLocation());
+ const float HeadingDot=FVector::DotProduct(Vehicle->GetActorForwardVector(),GetActorForwardVector());
+ const float HeadingLimit=FMath::Cos(FMath::DegreesToRadians(1.f));
+ const bool PoseReady=FMath::Abs(Offset.X)<=1.f && FMath::Abs(Offset.Y)<=5.f && FMath::Abs(Offset.Z)<=1.f &&
+  HeadingDot>=HeadingLimit && Vehicle->GetActorUpVector().Z>=.995f && FMath::Abs(Vehicle->CurrentSpeedCm)<=1.f;
+ const bool EnvelopeReady=FitsInside(Vehicle);
+ const bool DoorwayClear=PortalClear();
+ const bool ForkReady=Vehicle->IsLiftAtTravelHeight();
+ if (!PoseReady || !EnvelopeReady || !DoorwayClear || !ForkReady)
+ {
+  UE_LOG(LogTemp,Warning,TEXT("ELEVATOR_BOARD_REJECTED %s L%d->L%d offset=%s heading_dot=%.6f speed=%.2f pose=%d envelope=%d doorway=%d forks=%d"),
+   *Vehicle->VehicleName,EntryFloor+1,VehicleDestinationFloor+1,*Offset.ToString(),HeadingDot,Vehicle->CurrentSpeedCm,PoseReady,EnvelopeReady,DoorwayClear,ForkReady);
+  return false;
+ }
  bBoarded=true;PendingStops.AddUnique(VehicleDestinationFloor);
  // A short open-door dwell lets a person board after the stopped vehicle.
  // Normal vehicle/person safety sensing remains active during vehicle entry.
+ UE_LOG(LogTemp,Log,TEXT("ELEVATOR_BOARD_ACCEPTED %s L%d->L%d offset=%s heading_dot=%.6f"),
+  *Vehicle->VehicleName,EntryFloor+1,VehicleDestinationFloor+1,*Offset.ToString(),HeadingDot);
  SetState(EWarehouseElevatorState::AwaitExit,TEXT("BOARDING CONFIRMED - SHARED CABIN DWELL"));return true;
 }
 bool AWarehouseElevator::ConfirmExited(AWarehouseForklift* Vehicle)

@@ -384,7 +384,11 @@ bool AWarehouseForklift::PerceivedPartClear(UStaticMeshComponent* Part,const FTr
   if (!Obstacle.Component.IsValid()) return Reject(Obstacle,TEXT("published-building-missing"),FVector::ZeroVector);
   const FTransform Test=AtPublishedPose(Pose,Obstacle);
   if (Obstacle.Component->ComponentOverlapComponent(Part,Test.GetLocation(),Test.GetRotation(),FCollisionQueryParams::DefaultQueryParam))
+  {
+   if (Wheels.Contains(Part) && Obstacle.ObservedTransform.Equals(Obstacle.Component->GetComponentTransform()) &&
+       WheelBearingOnFloor(Part,Obstacle.Component.Get(),Pose,Ignored,true)) continue;
    return Reject(Obstacle,TEXT("published-building"),FVector::ZeroVector);
+  }
  }
  // PointCloudOverlapsPart uses AggGeom's bounds, which may differ from the
  // current native body's transformed bounds used for fixed-shape overlap.

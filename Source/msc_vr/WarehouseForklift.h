@@ -252,7 +252,7 @@ private:
  bool RemotePoseClear(const FTransform& Pose);
  bool PhysicalPoseClear(const FTransform& Pose,bool CheckTranslation=false) const;
  bool WheelBearingOnFloor(UStaticMeshComponent* Wheel,UPrimitiveComponent* Surface,
-  const FTransform& Candidate,const TArray<AActor*>& Ignored) const;
+  const FTransform& Candidate,const TArray<AActor*>& Ignored,bool bPublishedSupportOnly=false) const;
  bool PalletClaimedByOther(AWarehousePallet* Pallet) const;
  bool UpdateLoadSupport(float Dt);
  bool BeginFloorTransfer(float TargetZ, EWarehouseAIState Resume);
@@ -308,6 +308,7 @@ private:
  FTransform PalletApproach(const FTransform& PalletPose,float Distance,bool Pickup=false) const;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Autonomy",meta=(AllowPrivateAccess="true")) int32 PickupEntryQuarterTurns=0;
  bool PlanPickupApproach();
+ bool bPickupHadClearApproach=false;
  bool PlanPickupTravelTo(const FTransform& Goal,bool TryDetour);
  TOptional<FTransform> PickupStraightGoal;
  // Loaded exit back along the same straight pickup corridor, before the delivery route.

@@ -71,6 +71,25 @@ struct FWarehouseShipment
  bool bRecoveredInboundHandover=false;
 };
 
+USTRUCT(BlueprintType)
+struct FWarehouseShippingPlan
+{
+ GENERATED_BODY()
+ UPROPERTY(BlueprintReadOnly) int32 Id=0;
+ UPROPERTY(BlueprintReadOnly) double PlannedAt=0;
+ UPROPERTY(BlueprintReadOnly) FString Name;
+ UPROPERTY(BlueprintReadOnly) FString ZoneId;
+ UPROPERTY(BlueprintReadOnly) TObjectPtr<AWarehouseLogisticsTruck> Truck;
+ UPROPERTY(BlueprintReadOnly) TArray<TObjectPtr<AWarehousePallet>> Pallets;
+ UPROPERTY(BlueprintReadOnly) FString Products;
+ UPROPERTY(BlueprintReadOnly) FString Status;
+ UPROPERTY(BlueprintReadOnly) FString ShipmentId;
+ UPROPERTY(BlueprintReadOnly) int32 InboundUnits=0;
+ int32 ProductIndex=INDEX_NONE;
+ bool bManifestQueued=false;
+ TMap<FString,int32> OutboundQuantities;
+};
+
 /** Manifest and handover control. Only truck handling is a cinematic shortcut. */
 UCLASS()
 class MSC_VR_API AWarehouseShippingSystem : public AActor
@@ -83,6 +102,7 @@ public:
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Shipping") TArray<FWarehouseShippingZone> Zones;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Shipping") TArray<TObjectPtr<AWarehouseLogisticsTruck>> Trucks;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Shipping") TArray<FWarehouseShipment> Shipments;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Shipping") TArray<FWarehouseShippingPlan> ShippingPlans;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Shipping") FString LastMessage;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Operations",meta=(ClampMin="0.1")) float OutboundPreparationSeconds=4;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Operations",meta=(ClampMin="1")) int32 OutboundPreparationStations=1;
@@ -97,6 +117,10 @@ public:
  UFUNCTION(BlueprintPure,Category="Operations") FString GetOperationsSummary() const;
  UFUNCTION(BlueprintCallable,Category="Shipping") bool CreateOutbound(const FString& Name,const TArray<AWarehousePallet*>& Pallets,const FString& ZoneId,AWarehouseLogisticsTruck* Truck);
  UFUNCTION(BlueprintCallable,Category="Shipping") bool StartInbound(AWarehouseLogisticsTruck* Truck,const FString& ZoneId);
+ UFUNCTION(BlueprintPure,Category="Shipping") bool CanPlanShipping() const;
+ UFUNCTION(BlueprintCallable,Category="Shipping") bool ScheduleShipping(const FString& Name,const FString& ZoneId,AWarehouseLogisticsTruck* Truck,
+  int32 DelaySeconds,const TArray<AWarehousePallet*>& Pallets,int32 InboundUnits,int32 ProductIndex,const FString& ProductName);
+ UFUNCTION(BlueprintCallable,Category="Shipping") bool CancelShippingPlan(int32 Id);
  UFUNCTION(BlueprintCallable,Category="Shipping") bool CancelShipment(const FString& ShipmentId);
  UFUNCTION(BlueprintPure,Category="Shipping") FString GetPalletShipment(AWarehousePallet* Pallet) const;
  UFUNCTION(BlueprintPure,Category="Shipping") FString LocatePallet(AWarehousePallet* Pallet) const;
@@ -105,12 +129,15 @@ public:
  UFUNCTION(BlueprintCallable,Category="Shipping") void RefreshLayoutCatalog();
 private:
  int32 NextShipment=1;
+ int32 NextShippingPlan=1;
+ double NextShippingPlanCheck=0;
  double NextOperationsAt=0;
  double NextVisitAt=-1;
  TWeakObjectPtr<AWarehouseLogisticsTruck> ActiveInboundTruck;
  void AdvanceOperations();
- bool GenerateArrival(AWarehouseLogisticsTruck* Truck);
- bool Create(const FString& Name,const TArray<AWarehousePallet*>& Pallets,const FString& ZoneId,AWarehouseLogisticsTruck* Truck,EWarehouseShipmentDirection Direction);
+ void AdvanceShippingPlans();
+ bool GenerateArrival(AWarehouseLogisticsTruck* Truck,int32 Units=1,int32 ProductIndex=INDEX_NONE,int32 PlanId=0,const FString& ProductName=FString());
+ bool Create(const FString& Name,const TArray<AWarehousePallet*>& Pallets,const FString& ZoneId,AWarehouseLogisticsTruck* Truck,EWarehouseShipmentDirection Direction,int32 ShippingPlanId=0);
  bool HasHandover(const FWarehouseShipmentLine& Line,const FWarehouseShippingZone& Zone,FString& Reason) const;
  bool ZonePlacementClear(const FWarehouseShippingZone& Zone,int32 Slot,AWarehousePallet* Pallet,FString& Reason) const;
  void Advance(FWarehouseShipment& Shipment,const FWarehouseShippingZone& Zone);
