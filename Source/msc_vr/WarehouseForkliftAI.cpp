@@ -258,11 +258,20 @@ bool AWarehouseForklift::PlanPickupApproach()
  const FTransform Source=TaskSourcePose();
  const FTransform Start=NavigationTransform();
  TArray<int32> Faces{0,1,2,3};
+ // A face whose standoff has no room behind it (a narrow gap at a rack's back) leaves no
+ // withdrawal or recovery space if the bay turns out occupied on arrival. Try it last.
+ bool RearClear[4];
+ for (int32 Face:Faces)
+ {
+  PickupEntryQuarterTurns=Face;
+  // Only an exact-fit gap is demoted: an occupied 220 cm standoff is the reposition case instead.
+  RearClear[Face]=!NavigationClear(PalletApproach(Source,220.f,true)) || NavigationClear(PalletApproach(Source,260.f,true));
+ }
  auto Cost=[&](int32 Face)
  {
   const FRotator Heading(0,Source.Rotator().Yaw+Face*90.f,0);
   return FVector::Dist2D(Start.GetLocation(),Source.GetLocation()-Heading.Vector()*220.f)+
-   FMath::Abs(FMath::FindDeltaAngleDegrees(Start.Rotator().Yaw,Heading.Yaw))*2.f;
+   FMath::Abs(FMath::FindDeltaAngleDegrees(Start.Rotator().Yaw,Heading.Yaw))*2.f+(RearClear[Face] ? 0.f : 100000.f);
  };
  Faces.StableSort([&](int32 A,int32 B) { return Cost(A)<Cost(B); });
  // Bounded candidates: two per face/eight total, each with the existing
@@ -273,9 +282,11 @@ bool AWarehouseForklift::PlanPickupApproach()
   if ((BlockedPickupFaces & (1u<<Face))!=0) continue;
   PickupEntryQuarterTurns=Face;
   PickupApproachDistanceCm=220.f;
-  if (!RackApproachClear(Source,true)) continue;
+  const bool bRackClear=RackApproachClear(Source,true);
+  const bool DefaultClear=bRackClear && NavigationClear(PalletApproach(Source,220.f,true));
+  UE_LOG(LogTemp,Log,TEXT("AGV_ENTRY_CANDIDATE %s face=%d blocked_mark=%d rack_clear=%d standoff220_clear=%d"),*VehicleName,Face*90,(BlockedPickupFaces&(1u<<Face))!=0,bRackClear,DefaultClear);
+  if (!bRackClear) continue;
   int32 FaceSearches=0;
-  const bool DefaultClear=NavigationClear(PalletApproach(Source,220.f,true));
   for (float Distance:{220.f,185.f,260.f,320.f})
   {
    if (Distance!=220.f && DefaultClear) break;
