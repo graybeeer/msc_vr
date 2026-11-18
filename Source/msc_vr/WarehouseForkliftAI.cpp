@@ -449,12 +449,15 @@ bool AWarehouseForklift::RackApproachClear(const FTransform& PalletPose,bool Pic
 }
 bool AWarehouseForklift::PlanDeliveryApproach()
 {
+ // A failed search must not leave face 0 behind: recovery and the fault check then aim at that face's
+ // standoff, which for a rack is behind the rack itself (2026-11-17 seeds 6/7: NO SAFE DETOUR).
+ const int32 PreviousFace=RackDeliveryQuarterTurns;
  RackDeliveryQuarterTurns=0;
  if (!ActiveJob.bRackDestination || ActiveJob.Destination.GetLocation().Z-FloorBase(ActiveJob.Destination.GetLocation().Z)<=5.f)
  {
   const bool Outbound=ActiveJob.SourceSystem==TEXT("FMS-COMPUTER");
   if ((!Outbound || RackApproachClear(ActiveJob.Destination,false)) && PlanAutonomousRoute(PalletApproach(ActiveJob.Destination,220))) return true;
-  if (!Outbound) return false;
+  if (!Outbound) { RackDeliveryQuarterTurns=PreviousFace;return false; }
   // The square floor reservation can take a quarter-turned load. Try the
   // opposite entrance first, then the two sides if that aisle is blocked.
   for (int32 Face : {2,1,3})
@@ -466,7 +469,7 @@ bool AWarehouseForklift::PlanDeliveryApproach()
     return true;
    }
   }
-  RackDeliveryQuarterTurns=0;
+  RackDeliveryQuarterTurns=PreviousFace;
   return false;
  }
  const FTransform Start=NavigationTransform();
@@ -487,7 +490,7 @@ bool AWarehouseForklift::PlanDeliveryApproach()
   ReportJob(TEXT("DELIVERY_ENTRY_SELECTED"),FString::Printf(TEXT("Rack pallet orientation %d degrees; vehicle heading %.1f"),Face*90,PalletApproach(ActiveJob.Destination,220).Rotator().Yaw));
   return true;
  }
- RackDeliveryQuarterTurns=0;
+ RackDeliveryQuarterTurns=PreviousFace;
  return false;
 }
 FBox AWarehouseForklift::NavigationEnvelope() const

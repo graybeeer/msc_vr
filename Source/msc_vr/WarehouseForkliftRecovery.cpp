@@ -2,6 +2,7 @@
 #include "WarehousePallet.h"
 #include "WarehouseChargingStation.h"
 #include "WarehouseFleetCoordinator.h"
+#include "WarehousePhysics.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
 
@@ -182,7 +183,11 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  }
  // A clear vehicle with an unreachable destination is not physically jammed.
  // Blindly reversing cannot fix a blocked rack face or a disconnected aisle.
- if ((FailedPickupRoute || FailedDeliveryRoute) && !ChargerForwardRecovery && NavigationClear(GetActorTransform()))
+ // In a rack aisle the envelope's margin already overlaps the published rack; that is not a jam either, and
+ // backing "away" there drove the truck 1.5 m into the target pallet (2026-11-17 seed 5).
+ if ((FailedPickupRoute || FailedDeliveryRoute) && !ChargerForwardRecovery &&
+     (NavigationClear(GetActorTransform()) || (GetWorld()->GetTimeSeconds()-LastBlockingContactSeconds>=10.0 && NavigationBlockDetail.StartsWith(TEXT("고정 구조물"))) ||
+      NavigationBlockDetail.StartsWith(TEXT("대상 팔레트"))))
  {
   TGuardValue<bool> Planning(bPlanningRoute,true);
   const FTransform Goal=PalletApproach(FailedPickupRoute ? TaskSourcePose() : ActiveJob.Destination,
@@ -227,10 +232,33 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
    }
    return true;
   };
-  if (!WayFree(RecoveryDirection) && WayFree(-RecoveryDirection))
+  if (!WayFree(RecoveryDirection))
   {
-   UE_LOG(LogTemp,Log,TEXT("AGV_RECOVERY_DIRECTION_SWAPPED %s to %.0f"),*VehicleName,-RecoveryDirection);
-   RecoveryDirection=-RecoveryDirection;
+   bool Swap=WayFree(-RecoveryDirection);
+   if (!Swap)
+   {
+    // The coarse envelope already overlaps a surface sensed beside the truck, so both ways look blocked.
+    // Ask the real parts which way separates (2026-11-17 seeds 2/3: backing off forward into an outbound
+    // pallet next to the slot ended in RECOVERY WITHDRAW BLOCKED while reversing was free).
+    TArray<UStaticMeshComponent*> Parts;GetComponents(Parts);
+    if (bSupportingPallet && IsValid(TargetPallet))
+    { TArray<UStaticMeshComponent*> LoadParts;TargetPallet->GetComponents(LoadParts);Parts.Append(LoadParts); }
+    for (AActor* Load : CarriedCargo) if (bSupportingPallet && IsValid(Load))
+    { TArray<UStaticMeshComponent*> LoadParts;Load->GetComponents(LoadParts);Parts.Append(LoadParts); }
+    auto PartsSeparate=[&](float Direction)
+    {
+     const FVector Delta=GetActorForwardVector().GetSafeNormal2D()*Direction*40.f;
+     for (UStaticMeshComponent* Part : Parts)
+      if (WarehousePhysics::IsPhysicalContact(Part) && !PerceivedMotionClear(Part,Delta,Loads)) return false;
+     return true;
+    };
+    Swap=!PartsSeparate(RecoveryDirection) && PartsSeparate(-RecoveryDirection);
+   }
+   if (Swap)
+   {
+    UE_LOG(LogTemp,Log,TEXT("AGV_RECOVERY_DIRECTION_SWAPPED %s to %.0f"),*VehicleName,-RecoveryDirection);
+    RecoveryDirection=-RecoveryDirection;
+   }
   }
  }
  if (bRetryInsertion)
@@ -246,6 +274,30 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
   const float RemainingSquared=SensorRadius*SensorRadius-SideSquared;
   const float VisibleRetreat=RemainingSquared>0 ? FMath::Max(0.f,FMath::Sqrt(RemainingSquared)-Along) : 0.f;
   RecoveryDistance=FMath::Min(RecoveryDistance,VisibleRetreat);
+ }
+ // A recovery move is limited to the room the published map and the scan show. A 320 cm standoff does not
+ // exist in a rack-to-rack aisle (2026-11-17 seeds 3/5: the tail rode onto the opposite rack's base deck), and
+ // a failed realignment drove 1.5 m forward into the target pallet (seed 12). Something the truck already
+ // overlaps where it stands does not stop the move; a new blocker does. Real contact recoveries keep their
+ // full separating distance, and engaged tines must still be pulled clear.
+ // Tines still under a just-released load (fork withdraw) need the full distance too (seed 3 regression).
+ if (!bRecoveryForksEngaged && From!=EWarehouseAIState::WithdrawFork && !bPalletReleased &&
+     SensorMode==EWarehouseSensorMode::Autonomous && !Reason.Contains(TEXT("CONTACT")))
+ {
+  const FRotator Yaw(0,GetActorRotation().Yaw,0);
+  const FString StartBlocker=NavigationClear(FTransform(Yaw,GetActorLocation())) ? FString() : NavigationBlockDetail;
+  const FVector Away=GetActorForwardVector().GetSafeNormal2D()*RecoveryDirection;
+  float Free=0.f;
+  for (float Step=10.f;Step<=RecoveryDistance+.1f;Step+=10.f)
+  {
+   if (!NavigationClear(FTransform(Yaw,GetActorLocation()+Away*Step)) && (StartBlocker.IsEmpty() || NavigationBlockDetail!=StartBlocker)) break;
+   Free=Step;
+  }
+  if (Free<RecoveryDistance)
+  {
+   UE_LOG(LogTemp,Log,TEXT("AGV_RECOVERY_RETREAT_CAPPED %s %.0f -> %.0f cm (%s; start %s)"),*VehicleName,RecoveryDistance,Free,*NavigationBlockDetail,*StartBlocker);
+   RecoveryDistance=Free;
+  }
  }
  TransitionAI(bRetryInsertion ? EWarehouseAIState::RecoverLower : EWarehouseAIState::RecoverWithdraw,
   FString::Printf(TEXT("RECOVERY %d/3: %s - WITHDRAW / REALIGN"),RecoveryAttempts,*Reason));

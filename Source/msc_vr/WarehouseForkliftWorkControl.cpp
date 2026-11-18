@@ -297,9 +297,21 @@ bool AWarehouseForklift::TryDeferCurrentWork(const FString& Reason,const FString
  // A damaged vehicle, an occupied lift or retained freight cannot safely switch jobs.
  if (!HasAuthority() || !bAutonomousMode || IsRemoteControlled() || ActiveJob.JobId.IsEmpty() ||
      bSupportingPallet || !IsLiftAtTravelHeight() || bFloorTransfer || bWorkStopRequested || bWorkStopNeedsRecovery ||
-     !CheckSystems().IsEmpty() || (IsValid(Elevator) && Elevator->ReservedVehicle==this) || HasRetainedForkContact()) return false;
+     !CheckSystems().IsEmpty() || (IsValid(Elevator) && Elevator->ReservedVehicle==this) || HasRetainedForkContact())
+ {
+  UE_LOG(LogTemp,Log,TEXT("AGV_DEFER_REFUSED %s reason=%s load=%d released=%d lift=%d floor=%d stop=%d/%d systems=[%s] elevator=%d fork=%d"),*VehicleName,*Reason,
+   bSupportingPallet,bPalletReleased,IsLiftAtTravelHeight(),bFloorTransfer,bWorkStopRequested,bWorkStopNeedsRecovery,*CheckSystems(),
+   IsValid(Elevator) && Elevator->ReservedVehicle==this,HasRetainedForkContact());
+  return false;
+ }
  // The current truck must actually have room to work elsewhere. Real jams retain the existing emergency stop.
- if (!NavigationClear(GetActorTransform())) return false;
+ // Standing in a rack aisle the rectangular envelope already overlaps the published rack it legitimately
+ // drove up to (2026-11-17 seed 3). That margin overlap is not a jam: the start escape plans out of it, so
+ // only a sensed object keeps the stop.
+ const bool RecentContact=GetWorld()->GetTimeSeconds()-LastBlockingContactSeconds<10.0;
+ if (!NavigationClear(GetActorTransform()) && (RecentContact || (!NavigationBlockDetail.StartsWith(TEXT("고정 구조물")) &&
+     !NavigationBlockDetail.StartsWith(TEXT("대상 팔레트")))))
+ { UE_LOG(LogTemp,Log,TEXT("AGV_DEFER_REFUSED %s reason=%s blocked_here=%s"),*VehicleName,*Reason,*NavigationBlockDetail);return false; }
  if (IsValid(ActiveJob.Pallet)) DeferredWorkUntil.Add(ActiveJob.Pallet,GetWorld()->GetTimeSeconds()+30.);
  for (auto It=DeferredWorkUntil.CreateIterator();It;++It)
   if (!It.Key().IsValid() || It.Value()<=GetWorld()->GetTimeSeconds()) It.RemoveCurrent();

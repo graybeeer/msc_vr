@@ -289,6 +289,8 @@ private:
  int32 HybridRouteReplans=0;
  FVector HybridReplanProgress=FVector::ZeroVector;
  // Waiting beside the elevator landing while another vehicle holds the reservation.
+ // Last real blocking contact; a margin-only overlap may be deferred, an actual touch may not.
+ double LastBlockingContactSeconds=-100.0;
  bool bElevatorQueued=false; FTransform ElevatorQueuePose=FTransform::Identity; double LastElevatorQueuePlanAt=-100.0;
  mutable bool bHybridGoalBlocked=false;
  int32 AlignRechecks=0;
