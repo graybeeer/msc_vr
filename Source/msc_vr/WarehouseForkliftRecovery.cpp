@@ -2,6 +2,7 @@
 #include "WarehousePallet.h"
 #include "WarehouseChargingStation.h"
 #include "WarehouseFleetCoordinator.h"
+#include "WarehousePhysics.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
 
@@ -221,10 +222,37 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
    }
    return true;
   };
-  if (!WayFree(RecoveryDirection) && WayFree(-RecoveryDirection))
+  if (!WayFree(RecoveryDirection))
   {
-   UE_LOG(LogTemp,Log,TEXT("AGV_RECOVERY_DIRECTION_SWAPPED %s to %.0f"),*VehicleName,-RecoveryDirection);
-   RecoveryDirection=-RecoveryDirection;
+   bool bSwap=WayFree(-RecoveryDirection);
+   if (!bSwap)
+   {
+    // An envelope can overlap on both sides. Sweep the actual moving parts
+    // against the measured points and check the candidate's published structure.
+    TArray<UStaticMeshComponent*> Parts;
+    GetComponents(Parts);
+    for (AActor* Load : Loads)
+    {
+     TArray<UStaticMeshComponent*> LoadParts;
+     Load->GetComponents(LoadParts);
+     Parts.Append(LoadParts);
+    }
+    auto CanSeparate=[&](float Direction)
+    {
+     const FVector Delta=GetActorForwardVector().GetSafeNormal2D()*Direction*40.f;
+     FTransform Pose=GetActorTransform();Pose.AddToTranslation(Delta);
+     if (!PhysicalPoseClear(Pose,true) || (FleetCoordinator && !FleetCoordinator->PlanningClear(this,Body.TransformBy(Pose.ToMatrixWithScale())))) return false;
+     for (auto* Part : Parts)
+      if (WarehousePhysics::IsPhysicalContact(Part) && !PerceivedMotionClear(Part,Delta,Loads)) return false;
+     return true;
+    };
+    bSwap=!CanSeparate(RecoveryDirection) && CanSeparate(-RecoveryDirection);
+   }
+   if (bSwap)
+   {
+    UE_LOG(LogTemp,Log,TEXT("AGV_RECOVERY_DIRECTION_SWAPPED %s to %.0f"),*VehicleName,-RecoveryDirection);
+    RecoveryDirection=-RecoveryDirection;
+   }
   }
  }
  if (bRetryInsertion)
@@ -240,6 +268,27 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
   const float RemainingSquared=SensorRadius*SensorRadius-SideSquared;
   const float VisibleRetreat=RemainingSquared>0 ? FMath::Max(0.f,FMath::Sqrt(RemainingSquared)-Along) : 0.f;
   RecoveryDistance=FMath::Min(RecoveryDistance,VisibleRetreat);
+ }
+ if (SensorMode==EWarehouseSensorMode::Autonomous && !bRetryInsertion && !RaisedRackAlignment &&
+     !ChargerForwardRecovery && !bPalletReleased && From!=EWarehouseAIState::WithdrawFork && !Reason.Contains(TEXT("CONTACT")))
+ {
+  const FTransform Start(FRotator(0,GetActorRotation().Yaw,0),GetActorLocation());
+  const FVector Away=Start.GetUnitAxis(EAxis::X)*RecoveryDirection;
+  const FBox Envelope=NavigationEnvelope();
+  float Free=0.f;
+  while (Free<RecoveryDistance)
+  {
+   const float Next=FMath::Min(RecoveryDistance,Free+10.f);
+   FTransform Pose=Start;Pose.AddToTranslation(Away*Next);
+   if ((!NavigationClear(Pose) && !PhysicalPoseClear(Pose,true)) ||
+       (FleetCoordinator && !FleetCoordinator->PlanningClear(this,Envelope.TransformBy(Pose.ToMatrixWithScale())))) break;
+   Free=Next;
+  }
+  if (Free<RecoveryDistance)
+  {
+   UE_LOG(LogTemp,Log,TEXT("AGV_RECOVERY_RETREAT_CAPPED %s %.0f -> %.0f cm"),*VehicleName,RecoveryDistance,Free);
+   RecoveryDistance=Free;
+  }
  }
  TransitionAI(bRetryInsertion ? EWarehouseAIState::RecoverLower : EWarehouseAIState::RecoverWithdraw,
   FString::Printf(TEXT("RECOVERY %d/3: %s - WITHDRAW / REALIGN"),RecoveryAttempts,*Reason));

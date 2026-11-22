@@ -358,12 +358,14 @@ bool AWarehouseForklift::RackApproachClear(const FTransform& PalletPose,bool Pic
 }
 bool AWarehouseForklift::PlanDeliveryApproach()
 {
+ // Keep the last usable face for recovery if none of the new candidates connects.
+ const int32 PreviousFace=RackDeliveryQuarterTurns;
  RackDeliveryQuarterTurns=0;
  if (!ActiveJob.bRackDestination || ActiveJob.Destination.GetLocation().Z-FloorBase(ActiveJob.Destination.GetLocation().Z)<=5.f)
  {
   const bool Outbound=ActiveJob.SourceSystem==TEXT("FMS-COMPUTER");
   if ((!Outbound || RackApproachClear(ActiveJob.Destination,false)) && PlanAutonomousRoute(PalletApproach(ActiveJob.Destination,220))) return true;
-  if (!Outbound) return false;
+  if (!Outbound) { RackDeliveryQuarterTurns=PreviousFace;return false; }
   // The square floor reservation can take a quarter-turned load. Try the
   // opposite entrance first, then the two sides if that aisle is blocked.
   for (int32 Face : {2,1,3})
@@ -375,7 +377,7 @@ bool AWarehouseForklift::PlanDeliveryApproach()
     return true;
    }
   }
-  RackDeliveryQuarterTurns=0;
+  RackDeliveryQuarterTurns=PreviousFace;
   return false;
  }
  const FTransform Start=NavigationTransform();
@@ -396,7 +398,7 @@ bool AWarehouseForklift::PlanDeliveryApproach()
   ReportJob(TEXT("DELIVERY_ENTRY_SELECTED"),FString::Printf(TEXT("Rack pallet orientation %d degrees; vehicle heading %.1f"),Face*90,PalletApproach(ActiveJob.Destination,220).Rotator().Yaw));
   return true;
  }
- RackDeliveryQuarterTurns=0;
+ RackDeliveryQuarterTurns=PreviousFace;
  return false;
 }
 FBox AWarehouseForklift::NavigationEnvelope() const
@@ -1493,9 +1495,18 @@ bool AWarehouseForklift::BeginFloorTransfer(float TargetZ,EWarehouseAIState Resu
  { FaultAI(TEXT("ELEVATOR OVERLOAD (VEHICLE + LOAD)")); return true; }
  const FString Fault=Elevator->CheckInterlocks();
  if (!Fault.IsEmpty()) { FaultAI(Fault); return true; }
- if (!PlanAutonomousRoute(Elevator->WaitingPose(TransferFromFloor)))
+ const bool bOccupied=IsValid(Elevator->ReservedVehicle) && Elevator->ReservedVehicle!=this;
+ if (!bOccupied && !PlanAutonomousRoute(Elevator->WaitingPose(TransferFromFloor)))
  { StopFor(TEXT("NO CLEAR ROUTE TO ELEVATOR")); return true; }
  AfterElevator=Resume; bFloorTransfer=true;
+ ElevatorQueuePose.Reset();NextElevatorRouteAttemptAt=0;
+ if (bOccupied)
+ {
+  PlannedRoute.Reset();
+  if (FleetCoordinator) FleetCoordinator->Release(this);
+  TransitionAI(EWarehouseAIState::ElevatorCall,TEXT("ELEVATOR IN USE - KEEP LANDING CLEAR"));
+  return true;
+ }
  TransitionAI(EWarehouseAIState::ElevatorApproach,TEXT("NAVIGATE TO ELEVATOR WAITING POINT"));
  bRouteStarted=true; return true;
 }
@@ -2253,14 +2264,62 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   { if (IsValid(ChargingStation)) ChargingStation->Release(this); Next(EWarehouseAIState::Ready,TEXT("READY - WAITING FOR WORK ORDER")); }
   break;
  case EWarehouseAIState::ElevatorApproach:
-  Route(Elevator->WaitingPose(TransferFromFloor),EWarehouseAIState::ElevatorCall,TEXT("FMS CALL ELEVATOR"),LoadedTravelSpeedCm);
+  if (!ElevatorQueuePose.IsSet() && IsValid(Elevator->ReservedVehicle) && Elevator->ReservedVehicle!=this)
+  {
+   PlannedRoute.Reset();
+   if (FleetCoordinator) FleetCoordinator->Release(this);
+   Next(EWarehouseAIState::ElevatorCall,TEXT("ELEVATOR IN USE - KEEP LANDING CLEAR"));
+   break;
+  }
+  if (ElevatorQueuePose.IsSet())
+  {
+   Route(ElevatorQueuePose.GetValue(),EWarehouseAIState::ElevatorCall,TEXT("WAIT BESIDE LANDING - ELEVATOR IN USE"),LoadedTravelSpeedCm);
+   if (AIState==EWarehouseAIState::ElevatorCall && FleetCoordinator) FleetCoordinator->Release(this);
+  }
+  else Route(Elevator->WaitingPose(TransferFromFloor),EWarehouseAIState::ElevatorCall,TEXT("FMS CALL ELEVATOR"),LoadedTravelSpeedCm);
   break;
  case EWarehouseAIState::ElevatorCall:
+ {
   // Continue physical low-speed alignment after route braking settles.
   if (AIElapsed>180.f) { FaultAI(TEXT("ELEVATOR RESERVATION TIMEOUT"));break; }
-  if (!MovePrecise(Elevator->WaitingPose(TransferFromFloor).GetLocation(),5,Dt)) break;
+  const FTransform Landing=Elevator->WaitingPose(TransferFromFloor);
+  const bool bOccupied=IsValid(Elevator->ReservedVehicle) && Elevator->ReservedVehicle!=this;
+  const bool bFarFromLanding=FVector::DistSquared2D(GetActorLocation(),Landing.GetLocation())>FMath::Square(20.f);
+  if (bOccupied || ElevatorQueuePose.IsSet() || bFarFromLanding)
+  {
+   BrakeDrive();
+   const double Now=GetWorld()->GetTimeSeconds();
+   if ((bOccupied && ElevatorQueuePose.IsSet()) || FMath::Abs(CurrentSpeedCm)>=1.f || Now<NextElevatorRouteAttemptAt) break;
+   NextElevatorRouteAttemptAt=Now+2.0;
+   if (bOccupied)
+   {
+    // The landing is also the exit for the platform. Use a checked waiting point to either side.
+    PlannedRoute.Reset();
+    if (FleetCoordinator) FleetCoordinator->Release(this);
+    TGuardValue<bool> AvoidReservations(bAvoidTrafficReservations,true);
+    for (const float Side : {-250.f,250.f})
+    {
+     FTransform Candidate=Landing;
+     Candidate.SetLocation(Landing.TransformPosition(FVector(-300.f,Side,0.f)));
+     if (!PlanAutonomousRoute(Candidate)) continue;
+     ElevatorQueuePose=Candidate;
+     Next(EWarehouseAIState::ElevatorApproach,TEXT("ELEVATOR IN USE - MOVE BESIDE LANDING"));
+     bRouteStarted=true;
+     break;
+    }
+   }
+   else if (PlanAutonomousRoute(Landing))
+   {
+    ElevatorQueuePose.Reset();
+    Next(EWarehouseAIState::ElevatorApproach,TEXT("ELEVATOR FREE - NAVIGATE TO WAITING POINT"));
+    bRouteStarted=true;
+   }
+   break;
+  }
+  if (!MovePrecise(Landing.GetLocation(),5,Dt)) break;
   if (Elevator->RequestTransfer(this,TransferFromFloor,TransferToFloor)) Next(EWarehouseAIState::ElevatorWait,TEXT("WAIT FOR ARRIVAL / OPEN DOOR / ENTRY PERMISSION"));
   break;
+ }
  case EWarehouseAIState::ElevatorWait:
   if (Elevator->CanEnter(this)) Next(EWarehouseAIState::ElevatorBoard,TEXT("ENTER PLATFORM - PRECISE STOP"));
   else if (AIElapsed>180.f) FaultAI(TEXT("ELEVATOR ARRIVAL TIMEOUT"));

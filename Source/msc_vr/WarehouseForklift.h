@@ -259,6 +259,8 @@ private:
  int32 TransferFromFloor=0;
  int32 TransferToFloor=0;
  bool bFloorTransfer=false;
+ TOptional<FTransform> ElevatorQueuePose;
+ double NextElevatorRouteAttemptAt=0.0;
  void AdvanceAutonomy(float Dt);
  void ToggleAutonomy();
  void TransitionAI(EWarehouseAIState Next,const FString& Message);
