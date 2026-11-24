@@ -392,15 +392,18 @@ public:
 	/** A map for this key, building it when no vehicle has built it yet. */
 	TSharedPtr<const FAgvDistanceMap> FindOrBuildMap(uint64 Key, TFunctionRef<TSharedPtr<const FAgvDistanceMap>()> Build);
 
-	/** The top-left views of what forklifts 1 and 2 sense right now: their last scan and route. Number is 1 or 2. */
-	void SetVehiclePanelVisible(int32 Number, bool bVisible) { if (Number >= 1 && Number <= 2) bShowVehicle[Number - 1] = bVisible; }
-	bool IsVehiclePanelVisible(int32 Number) const { return Number >= 1 && Number <= 2 && bShowVehicle[Number - 1]; }
+	static constexpr int32 MaxVehiclePanels = 4;
+	void SetVehiclePanels(const TArray<AWarehouseForklift*>& Vehicles);
+	bool IsVehiclePanelVisible(const AWarehouseForklift* Vehicle) const;
+	int32 GetVehiclePanelCount() const;
+	/** Legacy settings and console shortcut resolve the original numbered vehicles. */
+	UAgvForkliftLocalizerComponent* FindPanelVehicle(int32 Number) const;
 	/** Console shortcut (agv.loc view): forklift 1's view. */
-	void SetPanelVisible(bool bVisible) { bShowVehicle[0] = bVisible; }
-	/** 3D = forklift 1's first-person view of what it believes (default); off = the 2D top view. */
+	void SetPanelVisible(bool bVisible);
+	bool IsPanelVisible() const;
+	/** First-person sensor view (default) or 2D top view. */
 	void SetPanel3D(bool b3D) { bPanel3D = b3D; }
 	bool IsPanel3D() const { return bPanel3D; }
-	bool IsPanelVisible() const { return bShowVehicle[0]; }
 	/** Off (default): sensor points only. On: also the prior map and the actual pose, for comparison. */
 	void SetPanelMap(bool bShow) { bPanelMap = bShow; }
 	bool IsPanelMap() const { return bPanelMap; }
@@ -416,25 +419,23 @@ private:
 	void Attach(AActor* Actor);
 	void OnActorSpawned(AActor* Actor);
 	void DrawPanel(UCanvas* Canvas, APlayerController* Player);
-	/** One vehicle's view with its top-left corner at Origin; returns the height it used, captions included. */
-	double DrawTopPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle, FVector2D Origin, double Size, int32 Number);
-	double DrawFirstPersonPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle, FVector2D Origin, double Width, int32 Number);
-	/** The localizer of forklift 1 or 2 by its name, else by actor name order. */
-	UAgvForkliftLocalizerComponent* FindPanelVehicle(int32 Number) const;
+	/** Draw one vehicle's sensor view and captions starting at Origin. */
+	void DrawTopPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle, FVector2D Origin, double Size, int32 Slot);
+	void DrawFirstPersonPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle, FVector2D Origin, double Width);
 	void UpdateMapTexture(const TSharedPtr<const FAgvDistanceMap>& Map);
 	/** Adds the vehicle's newest scan to its minimap grid and refreshes the grid's texture. */
-	void UpdatePanelGrid(int32 Number, UAgvForkliftLocalizerComponent* Vehicle);
+	void UpdatePanelGrid(int32 Slot, UAgvForkliftLocalizerComponent* Vehicle);
 
 	bool bEnabled = false;
 	bool bDriveOnEstimate = false;
 	/** Set by -AgvLocDrive or agv.loc drive: applies bDriveOnEstimate to vehicles spawned later as well. */
 	bool bDriveOverride = false;
-	bool bShowVehicle[2] = { false, false };
+	TWeakObjectPtr<AWarehouseForklift> PanelVehicles[MaxVehiclePanels];
 	bool bPanel3D = true;
 	bool bPanelMap = false;
 	bool bPanelFront = false;
 	bool bPanelAccumulate = true;
-	FAgvPanelGrid PanelGrids[2];
+	FAgvPanelGrid PanelGrids[MaxVehiclePanels];
 	UPROPERTY(Transient) TArray<TObjectPtr<UTexture2D>> PanelGridTextures;
 	FDelegateHandle SpawnHandle;
 	FDelegateHandle DrawHandle;

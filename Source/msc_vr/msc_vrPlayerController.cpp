@@ -759,30 +759,94 @@ void Amsc_vrPlayerController::ShowSettingsPanel(const TSharedRef<SWidget>& Panel
 	UpdateInputMode();
 }
 
+static FString SensorPanelVehicleKey(const AWarehouseForklift& Vehicle)
+{
+	const UWorld* World = Vehicle.GetWorld();
+	return UWorld::RemovePIEPrefix(World->GetOutermost()->GetName()) + TEXT(":") + Vehicle.GetPathName(World);
+}
+
 void Amsc_vrPlayerController::ApplyAIViewSettings()
 {
 	UAgvLocalizationSubsystem* Views=GetWorld() ? GetWorld()->GetSubsystem<UAgvLocalizationSubsystem>() : nullptr;
 	if (!Views) return;
-	Views->SetVehiclePanelVisible(1,bShowForklift1AIView);
-	Views->SetVehiclePanelVisible(2,bShowForklift2AIView);
+	TArray<AWarehouseForklift*> Selected;
+	for (TActorIterator<AWarehouseForklift> It(GetWorld()); It; ++It)
+		if (AIVehicleSelection.Contains(SensorPanelVehicleKey(**It))) Selected.Add(*It);
+	if (bShowForklift1AIView)
+		if (const auto* Legacy = Views->FindPanelVehicle(1)) Selected.AddUnique(Legacy->GetForklift());
+	if (bShowForklift2AIView)
+		if (const auto* Legacy = Views->FindPanelVehicle(2)) Selected.AddUnique(Legacy->GetForklift());
+	Views->SetVehiclePanels(Selected);
 	Views->SetPanel3D(bAIViewFirstPerson);
 	Views->SetPanelMap(bAIViewMapLines);
 	Views->SetPanelFront(bAIViewForkSide);
 	Views->SetPanelAccumulate(bAIViewAccumulate);
 }
 
+bool Amsc_vrPlayerController::SetAIVehiclePanel(AWarehouseForklift* Vehicle, bool bVisible)
+{
+	if (!IsLocalController() || !IsValid(Vehicle) || Vehicle->GetWorld() != GetWorld()) return false;
+	auto* Views = GetWorld()->GetSubsystem<UAgvLocalizationSubsystem>();
+	if (!Views) return false;
+	if (Views->IsVehiclePanelVisible(Vehicle) == bVisible) return true;
+	if (bVisible && Views->GetVehiclePanelCount() >= UAgvLocalizationSubsystem::MaxVehiclePanels) return false;
+	if (bShowForklift1AIView || bShowForklift2AIView)
+	{
+		for (TActorIterator<AWarehouseForklift> It(GetWorld()); It; ++It)
+			if (Views->IsVehiclePanelVisible(*It)) AIVehicleSelection.AddUnique(SensorPanelVehicleKey(**It));
+		bShowForklift1AIView = bShowForklift2AIView = false;
+	}
+	const FString Key = SensorPanelVehicleKey(*Vehicle);
+	if (bVisible) AIVehicleSelection.AddUnique(Key);
+	else AIVehicleSelection.Remove(Key);
+	ApplyAIViewSettings();
+	return Views->IsVehiclePanelVisible(Vehicle) == bVisible;
+}
+
 void Amsc_vrPlayerController::OpenAIViewSettings()
 {
 	// A separate window in place of the F1 menu; closing it (button, F1 or Esc) goes through the same menu path and saves.
 	if (!IsLocalController() || !GetWorld()->GetGameViewport()) return;
-	if (MenuWidget.IsValid()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(MenuWidget.ToSharedRef());
+	auto* Views = GetWorld()->GetSubsystem<UAgvLocalizationSubsystem>();
+	if (!Views) return;
+	ApplyAIViewSettings();
 	static const FTextBlockStyle ButtonText=FTextBlockStyle(FCoreStyle::Get().GetWidgetStyle<FTextBlockStyle>("NormalText"))
 		.SetFont(WarehouseUIStyle::Font()).SetColorAndOpacity(WarehouseUIStyle::Text);
 	auto Panel=SNew(SVerticalBox);
 	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::TitleSize,true))
 		.ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("지게차 실시간 센서 화면 설정")))];
 	Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Text).AutoWrapText(true)
-		.Text(FText::FromString(TEXT("지게차의 LiDAR가 보는 점과 계획한 경로를 화면 왼쪽 위에 표시합니다. 초록: 사전 지도와 맞는 점, 주황: 지도에 없는 물체, 파랑: 경로. 가까울수록 밝고 멀수록 어둡습니다. 평면 보기의 누적 미니맵은 지나온 곳을 쌓아 그리며, 레이저가 지나간 빈 곳은 회색, 움직여 사라진 물체는 지워집니다.")))];
+		.Text(FText::FromString(TEXT("표시할 지게차를 최대 4대 선택하세요. 초록은 지도와 일치한 점, 주황은 지도에 없는 관측점, 파랑은 계획 경로입니다.")))];
+	Panel->AddSlot().AutoHeight().Padding(8,4)[SNew(STextBlock).Font(WarehouseUIStyle::Font(18,true)).ColorAndOpacity(WarehouseUIStyle::Accent)
+		.Text_Lambda([Views]() { return FText::FromString(FString::Printf(TEXT("선택 %d / %d대"),Views->GetVehiclePanelCount(),UAgvLocalizationSubsystem::MaxVehiclePanels)); })];
+	TArray<AWarehouseForklift*> Vehicles;
+	TMap<FString,int32> NameCounts;
+	for (TActorIterator<AWarehouseForklift> It(GetWorld()); It; ++It)
+	{
+		Vehicles.Add(*It);
+		++NameCounts.FindOrAdd(It->VehicleName);
+	}
+	Vehicles.Sort([](const AWarehouseForklift& A,const AWarehouseForklift& B) {
+		return A.VehicleName == B.VehicleName ? A.GetName() < B.GetName() : A.VehicleName < B.VehicleName;
+	});
+	if (Vehicles.IsEmpty())
+		Panel->AddSlot().AutoHeight().Padding(8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(18)).Text(FText::FromString(TEXT("현재 맵에 지게차가 없습니다.")))];
+	else
+	{
+		auto List = SNew(SScrollBox).ScrollWhenFocusChanges(EScrollWhenFocusChanges::InstantScroll);
+		for (AWarehouseForklift* Vehicle : Vehicles)
+		{
+			const TWeakObjectPtr<AWarehouseForklift> WeakVehicle(Vehicle);
+			const FString Label = Vehicle->VehicleName.IsEmpty() ? Vehicle->GetName() : NameCounts.FindRef(Vehicle->VehicleName)>1 ?
+				Vehicle->VehicleName + TEXT(" · ") + Vehicle->GetName() : Vehicle->VehicleName;
+			List->AddSlot().Padding(2,5,12,5)[SNew(SCheckBox)
+				.IsChecked_Lambda([Views,WeakVehicle]() { return Views->IsVehiclePanelVisible(WeakVehicle.Get()) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+				.IsEnabled_Lambda([Views,WeakVehicle]() { return WeakVehicle.IsValid() && (Views->IsVehiclePanelVisible(WeakVehicle.Get()) || Views->GetVehiclePanelCount()<UAgvLocalizationSubsystem::MaxVehiclePanels); })
+				.OnCheckStateChanged_Lambda([this,WeakVehicle](ECheckBoxState State) { SetAIVehiclePanel(WeakVehicle.Get(),State==ECheckBoxState::Checked); })
+				[SNew(STextBlock).Font(WarehouseUIStyle::Font(18)).ColorAndOpacity(WarehouseUIStyle::Text).AutoWrapText(true).Text(FText::FromString(Label))]];
+		}
+		Panel->AddSlot().AutoHeight().Padding(8,4)[SNew(SBox).MaxDesiredHeight(172.f)[List]];
+	}
 	auto Check=[&](const FString& Label,bool Amsc_vrPlayerController::* Field)
 	{
 		Panel->AddSlot().AutoHeight().Padding(8,6)[SNew(SCheckBox)
@@ -790,21 +854,13 @@ void Amsc_vrPlayerController::OpenAIViewSettings()
 			.OnCheckStateChanged_Lambda([this,Field](ECheckBoxState State) { this->*Field=State==ECheckBoxState::Checked;ApplyAIViewSettings(); })
 			[SNew(STextBlock).Font(WarehouseUIStyle::Font(18)).ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(Label))]];
 	};
-	Check(TEXT("지게차 1호 실시간 센서 화면"),&Amsc_vrPlayerController::bShowForklift1AIView);
-	Check(TEXT("지게차 2호 실시간 센서 화면"),&Amsc_vrPlayerController::bShowForklift2AIView);
 	Check(TEXT("1인칭 시점 (끄면 위에서 본 평면)"),&Amsc_vrPlayerController::bAIViewFirstPerson);
 	Check(TEXT("1인칭을 포크 쪽(전면)에서 보기 (끄면 차체 뒤쪽)"),&Amsc_vrPlayerController::bAIViewForkSide);
 	Check(TEXT("평면 보기를 누적 미니맵으로 (끄면 지금 스캔만)"),&Amsc_vrPlayerController::bAIViewAccumulate);
 	Check(TEXT("사전 지도 선도 함께 표시 (비교용)"),&Amsc_vrPlayerController::bAIViewMapLines);
 	Panel->AddSlot().AutoHeight().Padding(8,4)[SNew(SButton).IsFocusable(false).ContentPadding(10).TextStyle(&ButtonText)
 		.Text(FText::FromString(TEXT("저장 · 닫기"))).OnClicked_Lambda([this]() { CloseWarehouseMenu();return FReply::Handled(); })];
-	MenuWidget=SNew(SBorder).HAlign(HAlign_Center).VAlign(VAlign_Center)
-		.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(0,0,0,.45f))
-		[SNew(SBox).WidthOverride(560)
-			[SNew(SBorder).Padding(WarehouseUIStyle::PanelPadding).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-				.BorderBackgroundColor(WarehouseUIStyle::Panel)[Panel]]];
-	GetWorld()->GetGameViewport()->AddViewportWidgetContent(MenuWidget.ToSharedRef(),100);
-	UpdateInputMode();
+	ShowSettingsPanel(Panel,560.f,.45f);
 }
 
 void Amsc_vrPlayerController::ToggleObserverView()

@@ -6,6 +6,7 @@
 #include "WarehouseAutonomyTypes.h"
 #include "WarehousePerformance.h"
 #include "msc_vrPlayerController.h"
+#include "Algo/Find.h"
 #include "CanvasItem.h"
 #include "Components/PrimitiveComponent.h"
 #include "Debug/DebugDrawService.h"
@@ -1237,7 +1238,7 @@ UAgvForkliftLocalizerComponent* UAgvLocalizationSubsystem::FindPanelVehicle(int3
 		{
 			continue;
 		}
-		if (It->VehicleName.Contains(FString::FromInt(Number)))
+		if (It->VehicleName == FString::Printf(TEXT("지게차 %d호"), Number))
 		{
 			return Localizer;
 		}
@@ -1245,6 +1246,56 @@ UAgvForkliftLocalizerComponent* UAgvLocalizationSubsystem::FindPanelVehicle(int3
 	}
 	Ordered.Sort([](const auto& A, const auto& B) { return A.Key < B.Key; });
 	return Ordered.IsValidIndex(Number - 1) ? Ordered[Number - 1].Value : nullptr;
+}
+
+bool UAgvLocalizationSubsystem::IsVehiclePanelVisible(const AWarehouseForklift* Vehicle) const
+{
+	if (!IsValid(Vehicle)) return false;
+	for (const auto& Panel : PanelVehicles) if (Panel.Get() == Vehicle) return true;
+	return false;
+}
+
+int32 UAgvLocalizationSubsystem::GetVehiclePanelCount() const
+{
+	int32 Count = 0;
+	for (const auto& Panel : PanelVehicles) if (Panel.IsValid()) ++Count;
+	return Count;
+}
+
+void UAgvLocalizationSubsystem::SetVehiclePanels(const TArray<AWarehouseForklift*>& Vehicles)
+{
+	PanelGridTextures.SetNum(MaxVehiclePanels);
+	for (int32 Slot = 0; Slot < MaxVehiclePanels; ++Slot)
+	{
+		if (PanelVehicles[Slot].IsValid() && Vehicles.Contains(PanelVehicles[Slot].Get())) continue;
+		PanelVehicles[Slot].Reset();
+		PanelGrids[Slot] = FAgvPanelGrid();
+		PanelGridTextures[Slot] = nullptr;
+	}
+	for (AWarehouseForklift* Vehicle : Vehicles)
+	{
+		if (!IsValid(Vehicle) || Vehicle->GetWorld() != GetWorld() || IsVehiclePanelVisible(Vehicle)) continue;
+		auto* Empty = Algo::FindByPredicate(PanelVehicles, [](const auto& Panel) { return !Panel.IsValid(); });
+		if (!Empty) break;
+		*Empty = Vehicle;
+	}
+}
+
+void UAgvLocalizationSubsystem::SetPanelVisible(bool bVisible)
+{
+	auto* First = FindPanelVehicle(1);
+	if (!First || !First->GetForklift()) return;
+	TArray<AWarehouseForklift*> Vehicles;
+	for (const auto& Panel : PanelVehicles)
+		if (Panel.IsValid() && (bVisible || Panel.Get() != First->GetForklift())) Vehicles.Add(Panel.Get());
+	if (bVisible && Vehicles.Num() < MaxVehiclePanels) Vehicles.AddUnique(First->GetForklift());
+	SetVehiclePanels(Vehicles);
+}
+
+bool UAgvLocalizationSubsystem::IsPanelVisible() const
+{
+	const auto* First = FindPanelVehicle(1);
+	return First && IsVehiclePanelVisible(First->GetForklift());
 }
 
 void UAgvLocalizationSubsystem::UpdateMapTexture(const TSharedPtr<const FAgvDistanceMap>& Map)
@@ -1291,9 +1342,9 @@ namespace AgvForkliftLoc
 	}
 }
 
-void UAgvLocalizationSubsystem::UpdatePanelGrid(int32 Number, UAgvForkliftLocalizerComponent* Vehicle)
+void UAgvLocalizationSubsystem::UpdatePanelGrid(int32 Slot, UAgvForkliftLocalizerComponent* Vehicle)
 {
-	FAgvPanelGrid& Grid = PanelGrids[Number - 1];
+	FAgvPanelGrid& Grid = PanelGrids[Slot];
 	const TSharedPtr<const FAgvDistanceMap> Map = Vehicle->GetMap();
 	const UAgvShadowSensorsComponent* Kit = Vehicle->GetSensorKit();
 	if (!Map || Map->Width <= 0)
@@ -1362,11 +1413,7 @@ void UAgvLocalizationSubsystem::UpdatePanelGrid(int32 Number, UAgvForkliftLocali
 			Grid.bDirty = true;
 		}
 	}
-	if (PanelGridTextures.Num() < 2)
-	{
-		PanelGridTextures.SetNum(2);
-	}
-	UTexture2D* Texture = PanelGridTextures[Number - 1].Get();
+	UTexture2D* Texture = PanelGridTextures[Slot].Get();
 	if (!Texture || Texture->GetSizeX() != Grid.Width || Texture->GetSizeY() != Grid.Height)
 	{
 		Texture = UTexture2D::CreateTransient(Grid.Width, Grid.Height, PF_B8G8R8A8);
@@ -1377,7 +1424,7 @@ void UAgvLocalizationSubsystem::UpdatePanelGrid(int32 Number, UAgvForkliftLocali
 		Texture->Filter = TF_Nearest;
 		Texture->AddressX = TA_Clamp;
 		Texture->AddressY = TA_Clamp;
-		PanelGridTextures[Number - 1] = Texture;
+		PanelGridTextures[Slot] = Texture;
 		Grid.bDirty = true;
 	}
 	if (!Grid.bDirty)
@@ -1411,40 +1458,52 @@ void UAgvLocalizationSubsystem::UpdatePanelGrid(int32 Number, UAgvForkliftLocali
 
 void UAgvLocalizationSubsystem::DrawPanel(UCanvas* Canvas, APlayerController* Player)
 {
-	if ((!bShowVehicle[0] && !bShowVehicle[1]) || !Canvas || !Canvas->Canvas || !Player || Player->GetWorld() != GetWorld())
-	{
-		return;
-	}
+	const int32 Shown = GetVehiclePanelCount();
+	if (Shown == 0 || !Canvas || !Canvas->Canvas || !Player || Player->GetWorld() != GetWorld()) return;
 	const auto* WarehousePlayer = Cast<Amsc_vrPlayerController>(Player);
 	const bool bMenuOpen = WarehousePlayer && WarehousePlayer->IsWarehouseMenuOpen();
-	// Stacked down the left edge; with both shown each one is sized to leave room for the other.
-	const int32 Shown = int32(bShowVehicle[0]) + int32(bShowVehicle[1]);
-	constexpr double Captions = 44.0;
-	const double Room = (Canvas->ClipY - 32.0) / Shown - Captions;
-	FVector2D Origin(16.0, 16.0);
-	for (int32 Number = 1; Number <= 2; ++Number)
+	const int32 Columns = Shown > 2 ? 2 : 1;
+	const int32 Rows = FMath::DivideAndRoundUp(Shown, Columns);
+	constexpr double Inset = 16.0, Gap = 12.0, Caption = 26.0;
+	const double Room = (Canvas->ClipY - 2.0 * Inset - (Rows - 1) * Gap) / Rows - Caption;
+	const double Aspect = bPanel3D ? 16.0 / 9.0 : 1.0;
+	const double Width = FMath::Min3(Canvas->ClipX * (Columns == 2 ? 0.25 : 0.32), Room * Aspect, bPanel3D ? 640.0 : 420.0);
+	if (Width <= 0.0) return;
+	int32 Index = 0;
+	for (int32 Slot = 0; Slot < MaxVehiclePanels; ++Slot)
 	{
-		UAgvForkliftLocalizerComponent* Vehicle = bShowVehicle[Number - 1] ? FindPanelVehicle(Number) : nullptr;
-		if (!Vehicle || !Vehicle->GetForklift())
-		{
-			continue;
-		}
-		if (bPanelAccumulate && !bPanel3D)
-		{
-			UpdatePanelGrid(Number, Vehicle);
-		}
-		if (bMenuOpen)
-		{
-			continue;
-		}
-		const double Used = bPanel3D
-			? DrawFirstPersonPanel(Canvas, Vehicle, Origin, FMath::Clamp(FMath::Min(Canvas->ClipX * 0.32, Room * 16.0 / 9.0), 200.0, 640.0), Number)
-			: DrawTopPanel(Canvas, Vehicle, Origin, FMath::Clamp(FMath::Min(Canvas->ClipY * 0.36, Room), 160.0, 420.0), Number);
-		Origin.Y += Used + 12.0;
+		AWarehouseForklift* Forklift = PanelVehicles[Slot].Get();
+		auto* Vehicle = Forklift ? Forklift->FindComponentByClass<UAgvForkliftLocalizerComponent>() : nullptr;
+		if (!Vehicle || !Vehicle->GetForklift()) continue;
+		if (bPanelAccumulate && !bPanel3D) UpdatePanelGrid(Slot, Vehicle);
+		if (bMenuOpen) continue;
+		const FVector2D Origin(Inset + (Index % Columns) * (Width + Gap), Inset + (Index / Columns) * (Width / Aspect + Caption + Gap));
+		if (bPanel3D) DrawFirstPersonPanel(Canvas, Vehicle, Origin, Width);
+		else DrawTopPanel(Canvas, Vehicle, Origin, Width, Slot);
+		++Index;
 	}
 }
 
-double UAgvLocalizationSubsystem::DrawTopPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle, FVector2D Origin, double Size, int32 Number)
+static void DrawSensorPanelCaption(UCanvas* Canvas, UAgvForkliftLocalizerComponent& Vehicle, FVector2D Origin, double Width, double Height)
+{
+	const UFont* Font = GEngine ? GEngine->GetSmallFont() : nullptr;
+	if (!Font) return;
+	auto Draw = [&](const FString& Value, double Y, bool bTitle)
+	{
+		FCanvasTextItem Item(FVector2D(Origin.X + 6.0, Y), FText::FromString(Value), Font, FLinearColor::White);
+		double TextWidth, TextHeight;
+		Canvas->StrLen(Font, Value, TextWidth, TextHeight, true);
+		if (TextWidth > 0.0) Item.Scale = FVector2D(FMath::Clamp((Width - 12.0) / TextWidth, 0.1, bTitle ? 1.15 : 1.0));
+		Item.EnableShadow(FLinearColor::Black);
+		Canvas->DrawItem(Item);
+	};
+	const auto* Forklift = Vehicle.GetForklift();
+	Draw(Forklift->VehicleName.IsEmpty() ? Forklift->GetName() : Forklift->VehicleName, Origin.Y + 4.0, true);
+	Draw(FString::Printf(TEXT("%s  err %.1f cm  match %.2f  pts %d"), *Vehicle.StatusText, Vehicle.ErrorCm, Vehicle.LastInlierRatio, Vehicle.LastMatchPoints),
+		Origin.Y + Height + 4.0, false);
+}
+
+void UAgvLocalizationSubsystem::DrawTopPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle, FVector2D Origin, double Size, int32 Slot)
 {
 	AWarehouseForklift* Forklift = Vehicle->GetForklift();
 	// A top view (world X right, Y down, as in the editor top view) centred on where the vehicle believes it is.
@@ -1496,8 +1555,8 @@ double UAgvLocalizationSubsystem::DrawTopPanel(UCanvas* Canvas, UAgvForkliftLoca
 	}
 
 	// Everything its LiDAR has seen so far.
-	const FAgvPanelGrid& Grid = PanelGrids[Number - 1];
-	UTexture2D* GridTexture = PanelGridTextures.IsValidIndex(Number - 1) ? PanelGridTextures[Number - 1].Get() : nullptr;
+	const FAgvPanelGrid& Grid = PanelGrids[Slot];
+	UTexture2D* GridTexture = PanelGridTextures[Slot].Get();
 	if (bPanelAccumulate && GridTexture && GridTexture->GetResource() && Grid.Width > 0)
 	{
 		const double Width = Grid.Width * Grid.CellCm, Height = Grid.Height * Grid.CellCm;
@@ -1547,26 +1606,10 @@ double UAgvLocalizationSubsystem::DrawTopPanel(UCanvas* Canvas, UAgvForkliftLoca
 	Line(PanelMax, FVector2D(Panel.X, PanelMax.Y), Frame, 1.f);
 	Line(FVector2D(Panel.X, PanelMax.Y), Panel, Frame, 1.f);
 
-	UFont* Font = GEngine ? GEngine->GetSmallFont() : nullptr;
-	if (Font)
-	{
-		auto Text = [&](const FString& Value, double Y, const FLinearColor& Color)
-		{
-			FCanvasTextItem Item(FVector2D(Panel.X + 6.0, Y), FText::FromString(Value), Font, Color);
-			Item.EnableShadow(FLinearColor::Black);
-			Canvas->DrawItem(Item);
-		};
-		Text(FString::Printf(TEXT("FORKLIFT %d - AI WORLD (24 m)"), Number), Panel.Y + 4.0, FLinearColor::White);
-		Text(FString::Printf(TEXT("%s  err %.1f cm  match %.2f  pts %d"), *Vehicle->StatusText, Vehicle->ErrorCm, Vehicle->LastInlierRatio, Vehicle->LastMatchPoints),
-			PanelMax.Y + 4.0, FLinearColor::White);
-		Text(bPanelMap ? TEXT("map grey | scan on map green | unmapped orange | route blue | estimate yellow | actual white")
-			: (bPanelAccumulate ? TEXT("LiDAR minimap: on map green | unmapped orange | seen empty grey | near bright, far dark")
-			: TEXT("current scan only: on map green | unmapped orange | route blue | near bright, far dark")), PanelMax.Y + 20.0, FLinearColor(0.75f, 0.78f, 0.8f, 1.f));
-	}
-	return Size + 44.0;
+	DrawSensorPanelCaption(Canvas, *Vehicle, Panel, Size, Size);
 }
 
-double UAgvLocalizationSubsystem::DrawFirstPersonPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle, FVector2D Origin, double PanelWidth, int32 Number)
+void UAgvLocalizationSubsystem::DrawFirstPersonPanel(UCanvas* Canvas, UAgvForkliftLocalizerComponent* Vehicle, FVector2D Origin, double PanelWidth)
 {
 	AWarehouseForklift* Forklift = Vehicle->GetForklift();
 	const UAgvShadowSensorsComponent* Kit = Vehicle->GetSensorKit();
@@ -1691,21 +1734,7 @@ double UAgvLocalizationSubsystem::DrawFirstPersonPanel(UCanvas* Canvas, UAgvFork
 		Item.SetColor(Frame);
 		Canvas->DrawItem(Item);
 	}
-	if (UFont* Font = GEngine ? GEngine->GetSmallFont() : nullptr)
-	{
-		auto Text = [&](const FString& Value, double Y, const FLinearColor& Color)
-		{
-			FCanvasTextItem Item(FVector2D(Panel.X + 6.0, Y), FText::FromString(Value), Font, Color);
-			Item.EnableShadow(FLinearColor::Black);
-			Canvas->DrawItem(Item);
-		};
-		Text(FString::Printf(TEXT("FORKLIFT %d - AI VIEW (%s side, on its LiDAR estimate)"), Number, bPanelFront ? TEXT("fork") : TEXT("body")), Panel.Y + 4.0, FLinearColor::White);
-		Text(FString::Printf(TEXT("%s  err %.1f cm  match %.2f  pts %d"), *Vehicle->StatusText, Vehicle->ErrorCm, Vehicle->LastInlierRatio, Vehicle->LastMatchPoints),
-			PanelMax.Y + 4.0, FLinearColor::White);
-		Text(bPanelMap ? TEXT("map structure blue | scan on map green | unmapped orange | route blue")
-			: TEXT("current scan: on map green | unmapped orange | route blue | near bright, far dark"), PanelMax.Y + 20.0, FLinearColor(0.75f, 0.78f, 0.8f, 1.f));
-	}
-	return Height + 44.0;
+	DrawSensorPanelCaption(Canvas, *Vehicle, Panel, Width, Height);
 }
 
 #if WITH_DEV_AUTOMATION_TESTS

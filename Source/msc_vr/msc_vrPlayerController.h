@@ -15,6 +15,7 @@ class ACameraActor;
 class UAudioComponent;
 class USoundWaveProcedural;
 class AWarehouseComputer;
+class AWarehouseForklift;
 class AWarehouseLayoutEditor;
 class AWarehouseSimulationClock;
 class UWarehouseTransportVisualizer;
@@ -38,9 +39,10 @@ public:
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") float MouseSensitivity = 1.f;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") float ViewFOV = 90.f;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings", meta=(ClampMin="-2", ClampMax="2")) float BrightnessOffset = 0.f;
-	// What forklifts 1 and 2 sense (LiDAR view), drawn top left. Chosen in the F1 menu's AI view settings and kept between sessions.
+	// Legacy settings are migrated on the first edit to the vehicle selection.
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bShowForklift1AIView = false;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bShowForklift2AIView = false;
+	UPROPERTY(Config) TArray<FString> AIVehicleSelection;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bAIViewFirstPerson = true;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bAIViewMapLines = false;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Settings") bool bAIViewForkSide = false;
@@ -48,6 +50,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Settings") void OpenAIViewSettings();
 	UFUNCTION(BlueprintCallable, Category="Settings") void OpenGraphicsSettings();
 	UFUNCTION(BlueprintCallable, Category="Settings") void ApplyAIViewSettings();
+	UFUNCTION(BlueprintCallable, Category="Settings") bool SetAIVehiclePanel(AWarehouseForklift* Vehicle, bool bVisible);
 	UFUNCTION(BlueprintCallable, Category="Settings") void ToggleWarehouseMenu();
 	UFUNCTION(BlueprintCallable, Category="Play mode") bool OpenPlayMode(int32 StageIndex);
 	UFUNCTION(BlueprintPure, Category="Play mode") bool IsMainMenu() const;
