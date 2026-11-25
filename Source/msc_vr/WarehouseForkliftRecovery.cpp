@@ -243,7 +243,7 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
      FTransform Pose=GetActorTransform();Pose.AddToTranslation(Delta);
      if (!PhysicalPoseClear(Pose,true) || (FleetCoordinator && !FleetCoordinator->PlanningClear(this,Body.TransformBy(Pose.ToMatrixWithScale())))) return false;
      for (auto* Part : Parts)
-      if (WarehousePhysics::IsPhysicalContact(Part) && !PerceivedMotionClear(Part,Delta,Loads)) return false;
+      if (WarehousePhysics::IsPhysicalContact(Part) && !PerceivedMotionClear(Part,Delta,Loads,Direction<0)) return false;
      return true;
     };
     bSwap=!CanSeparate(RecoveryDirection) && CanSeparate(-RecoveryDirection);
@@ -288,6 +288,11 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
   {
    UE_LOG(LogTemp,Log,TEXT("AGV_RECOVERY_RETREAT_CAPPED %s %.0f -> %.0f cm"),*VehicleName,RecoveryDistance,Free);
    RecoveryDistance=Free;
+  }
+  if (RecoveryDistance<=0.f)
+  {
+   RecoveryFault(TEXT("NO SAFE RECOVERY START - OPERATOR REQUIRED"),TEXT("후퇴를 시작할 공간이 확보되지 않았습니다. 차량 주변과 바닥을 확인해 주세요."));
+   return false;
   }
  }
  TransitionAI(bRetryInsertion ? EWarehouseAIState::RecoverLower : EWarehouseAIState::RecoverWithdraw,

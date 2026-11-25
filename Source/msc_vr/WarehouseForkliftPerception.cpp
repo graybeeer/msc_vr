@@ -13,6 +13,9 @@
 #include "PhysicsEngine/BodySetup.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+#endif
 
 namespace
 {
@@ -92,6 +95,79 @@ bool SeparatingFromMeasuredPoint(const UBodySetup* Shape,FVector Point,const FTr
  }
  return !Normal.IsNearlyZero() && FVector::DotProduct(Delta,Normal)<=.001f;
 }
+
+int32 ClearMeasuredRetreatPrefix(const UBodySetup* Shape,FVector Point,const FTransform& Start,
+ FVector Delta,int32 Steps,float& Distance)
+{
+ constexpr float Margin=2.f;
+ constexpr float MaxEscapeCm=12.f;
+ const double StepCm=Delta.Size()/Steps;
+ const int32 Substeps=FMath::Max(1,FMath::CeilToInt(StepCm/.25));
+ const double SubstepCm=StepCm/Substeps;
+ if (Distance<=.05f || StepCm<=UE_SMALL_NUMBER || StepCm>Margin) return 0;
+ // A corner can first move toward a nearby measured point and still pass
+ // without contact. Distances from both ends bound clearance over the
+ // entire segment because distance to a translated shape is 1-Lipschitz.
+ for (int32 Step=1;Step<=Steps && Step*StepCm<=MaxEscapeCm;++Step)
+ {
+  for (int32 I=1;I<=Substeps;++I)
+  {
+   const double Along=Step-1+double(I)/Substeps;
+   FTransform Pose=Start;Pose.AddToTranslation(Delta*(Along/Steps));
+   const float Next=Shape->GetShortestDistanceToPoint(Point,Pose,true);
+   if (!FMath::IsFinite(Next) || Next==MAX_flt || Next<=.05f || Distance+Next<=SubstepCm+.1) return 0;
+   if (Distance>Margin && Next<=Margin) return 0;
+   Distance=Next;
+  }
+  if (Distance>Margin) return Step;
+ }
+ return 0;
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWarehouseSkewedPalletRetreatTest,"Warehouse.Navigation.SkewedPalletRetreat",
+ EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FWarehouseSkewedPalletRetreatTest::RunTest(const FString& Parameters)
+{
+ UStaticMesh* Mesh=LoadObject<UStaticMesh>(nullptr,TEXT("/Game/Warehouse/Physics/SM_Pallet_110.SM_Pallet_110"));
+ UBodySetup* Shape=Mesh ? Mesh->GetBodySetup() : nullptr;
+ if (!TestNotNull(TEXT("Standard pallet collision"),Shape)) return false;
+ Shape->CreatePhysicsMeshes();
+ // Recovery snapshots from job #000009. Use the actual pallet's compound
+ // collision, with the recorded pitch/yaw/roll and straight withdrawal.
+ const FTransform Start(FRotator(-.102274,-160.295210,-.508645),FVector(665.408188,-1876.183346,9.478673));
+ const FVector Delta(-45.719708,-26.311040,0);
+ const int32 Steps=FMath::CeilToInt(Delta.Size()/2.);
+ for (const FVector Point : {FVector(734.779,-1910.815,14.277),FVector(733.416,-1910.963,15.177),
+                             FVector(733.338,-1911.395,15.269),FVector(734.127,-1910.823,14.348)})
+ {
+  float Distance=Shape->GetShortestDistanceToPoint(Point,Start,true);
+  TestTrue(TEXT("Recorded point was outside the pallet but within the 2 cm margin"),Distance>0 && Distance<=2.f);
+  TestFalse(TEXT("Previous nearest-normal check rejects the withdrawal"),SeparatingFromMeasuredPoint(Shape,Point,Start,Delta));
+  const int32 Cleared=ClearMeasuredRetreatPrefix(Shape,Point,Start,Delta,Steps,Distance);
+  TestTrue(TEXT("Safe withdrawal clears the margin"),Cleared>0 && Distance>2.f);
+  for (int32 I=Cleared+1;Cleared>0 && I<=Steps;++I)
+  {
+   FTransform Pose=Start;Pose.AddToTranslation(Delta*(double(I)/Steps));
+   if (!TestTrue(TEXT("Remaining withdrawal stays clear"),Shape->GetShortestDistanceToPoint(Point,Pose,true)>2.f)) break;
+  }
+ }
+ UBodySetup* BoxShape=NewObject<UBodySetup>();
+ FKBoxElem& Box=BoxShape->AggGeom.BoxElems.AddDefaulted_GetRef();
+ Box.X=Box.Y=Box.Z=100.f;
+ const FVector NearSide(0,51,0);
+ float Distance=1.f;
+ TestEqual(TEXT("Reject a point that enters the collision shape"),
+  ClearMeasuredRetreatPrefix(BoxShape,NearSide,FTransform::Identity,FVector(0,4,0),2,Distance),0);
+ Distance=1.f;
+ TestEqual(TEXT("Reject a retreat that remains inside the margin"),
+  ClearMeasuredRetreatPrefix(BoxShape,NearSide,FTransform::Identity,FVector(30,0,0),15,Distance),0);
+ Distance=0.f;
+ TestEqual(TEXT("No relaxed check for an initially penetrating point"),
+  ClearMeasuredRetreatPrefix(BoxShape,FVector::ZeroVector,FTransform::Identity,FVector(0,-20,0),10,Distance),0);
+ return true;
+}
+#endif
 
 bool CatalogBoxesOverlap(const FTransform& A,const FBox& BoxA,const FTransform& B,const FBox& BoxB)
 {
@@ -410,7 +486,7 @@ bool AWarehouseForklift::PerceivedPartClear(UStaticMeshComponent* Part,const FTr
 }
 
 bool AWarehouseForklift::PerceivedMotionClear(UStaticMeshComponent* Part,FVector Delta,
- const TArray<AActor*>& Ignored) const
+ const TArray<AActor*>& Ignored,bool bLoadedRetreat) const
 {
  if (!Part || !SensorKit || !AutonomousSensorsReady()) return false;
  // At the one-second decision boundary sweep the cached measured surfaces.
@@ -431,6 +507,7 @@ bool AWarehouseForklift::PerceivedMotionClear(UStaticMeshComponent* Part,FVector
  FAgvObstacleIndices Candidates;
  SensorKit->FindObservedCandidates(Swept,Candidates);
  const bool RackInsertion=ActiveJob.bRackDestination && (AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::LowerLoad);
+ const bool CheckLoadedRetreat=bLoadedRetreat && bSupportingPallet && Part->GetOwner()==TargetPallet.Get();
  if (RackInsertion) AddObservedPalletCandidates(SensorKit,SensorObservedPalletModels,Swept,Candidates);
  for (int32 Index : Candidates)
  {
@@ -450,10 +527,16 @@ bool AWarehouseForklift::PerceivedMotionClear(UStaticMeshComponent* Part,FVector
    const float InitialDistance=Shape->GetShortestDistanceToPoint(Point,Start,true);
    float LastDistance=InitialDistance;
    const bool InitiallyOverlapping=LastDistance<=2.f;
+   int32 ClearedStep=0;
    if (InitiallyOverlapping && !SeparatingFromMeasuredPoint(Shape,Point,Start,Delta))
-    return Reject(Obstacle,Point,TEXT("INITIAL_POINT_NOT_SEPARATING"),InitialDistance,Shape->GetShortestDistanceToPoint(Point,End,true),End);
-   bool Cleared=!InitiallyOverlapping;
-   for (int32 I=1;I<=Steps;++I)
+   {
+    if (CheckLoadedRetreat && IsObservedPallet(Obstacle))
+     ClearedStep=ClearMeasuredRetreatPrefix(Shape,Point,Start,Delta,Steps,LastDistance);
+    if (ClearedStep==0)
+     return Reject(Obstacle,Point,TEXT("INITIAL_POINT_NOT_SEPARATING"),InitialDistance,Shape->GetShortestDistanceToPoint(Point,End,true),End);
+   }
+   bool Cleared=!InitiallyOverlapping || ClearedStep>0;
+   for (int32 I=ClearedStep+1;I<=Steps;++I)
    {
     FTransform Pose=Start;Pose.AddToTranslation(Delta*(float(I)/Steps));
     const float Distance=Shape->GetShortestDistanceToPoint(Point,Pose,true);

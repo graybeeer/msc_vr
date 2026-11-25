@@ -21,7 +21,7 @@ def is_building(actor):
         return False
     name = actor.get_actor_label()
     return (
-        name in {'Floor', 'WH_InboundFloor', 'MZ_LiftPitBase', 'EXT_HeaderCladding'}
+        name in {'Floor', 'WH_InboundFloor', 'MZ_LiftPitBase', 'EXT_HeaderCladding', 'EXT_DockPlatform'}
         or name.startswith(('WH_Wall_', 'WH_Roof', 'WH_Column_', 'MZ_GroundRear',
                             'EXT_FrontCladding_', 'EXT_SideCladding_',
                             'EXT_SideParapet_', 'EXT_FrontParapet'))

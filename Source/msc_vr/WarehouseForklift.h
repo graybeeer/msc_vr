@@ -199,7 +199,7 @@ private:
  bool ConsumeObstacleSnapshot(int32& LastConsumedSnapshot);
  bool PerceivedBoxClear(const FTransform& Pose,const FBox& LocalBox,const TArray<AActor*>& Ignored,bool PeopleOnly=false) const;
  bool PerceivedPartClear(UStaticMeshComponent* Part,const FTransform& Pose,const TArray<AActor*>& Ignored,const UPrimitiveComponent* Bearing=nullptr) const;
- bool PerceivedMotionClear(UStaticMeshComponent* Part,FVector Delta,const TArray<AActor*>& Ignored) const;
+ bool PerceivedMotionClear(UStaticMeshComponent* Part,FVector Delta,const TArray<AActor*>& Ignored,bool bLoadedRetreat=false) const;
  bool PerceivedFloorSupport(FVector Point,FHitResult* Surface=nullptr) const;
  FTransform TaskSourcePose() const;
  UPROPERTY(Transient) TObjectPtr<AWarehouseFleetCoordinator> FleetCoordinator;

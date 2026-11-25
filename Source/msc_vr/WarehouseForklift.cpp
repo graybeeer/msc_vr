@@ -399,7 +399,9 @@ bool AWarehouseForklift::ClearToMove(FVector Delta, bool LiftOnly)
     const float Ahead=FMath::Min(Speed*1.1f+Speed*Speed/100.f+2.f,SensorPrecisionDistanceCm);
     ForecastDelta=PartDelta.GetSafeNormal()*FMath::Max(float(PartDelta.Size()),Ahead);
    }
-   if (!PerceivedMotionClear(Part,ForecastDelta,Ignored)) return Blocked(TEXT("OBSTACLE / SENSOR OBSERVATION"));
+   const bool LoadedRetreat=!LiftOnly && AIState==EWarehouseAIState::RecoverWithdraw &&
+    FVector::DotProduct(PartDelta,GetActorForwardVector())<0;
+   if (!PerceivedMotionClear(Part,ForecastDelta,Ignored,LoadedRetreat)) return Blocked(TEXT("OBSTACLE / SENSOR OBSERVATION"));
   }
   // A welded child still contributes its own known geometry to point-cloud
   // prediction. Its parent's native Chaos sweep already contains the child;
