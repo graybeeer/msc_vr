@@ -293,124 +293,127 @@ void Amsc_vrPlayerController::BeginPlay()
 			.OnEnded_Lambda([this]() { if (!(ConstructionEditor && ConstructionEditor->bActive && ConstructionEditor->IsTileBrush())) { SetObserverRoofVisibility(false);SetObserverRoofVisibility(true); } })
 			.Visibility_Lambda([this]() { return bObserverView && LayoutEditor && LayoutEditor->bEditing && !IsWarehouseMenuOpen() ? EVisibility::Visible:EVisibility::Collapsed; });
 		GetWorld()->GetGameViewport()->AddViewportWidgetContent(LayoutCanvas.ToSharedRef(),10);
+		const FSlateFontInfo ToolFont=WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize);
+		const FMargin ToolButtonPadding(8,4);
+		constexpr float CategoryIconSize=22.f;
 		auto Floors=SNew(SWrapBox).UseAllottedSize(true);
 		for (int32 Floor=-1;Floor<4;++Floor)
-			Floors->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(FMargin(10,5))
+			Floors->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 				.Visibility(AWarehousePlayStage::IsPlay(this) && Floor>0 ? EVisibility::Collapsed : EVisibility::Visible)
 				.ToolTipText(FText::FromString(Floor<0 ? TEXT("전체 층 관찰 · 재배치를 끄고 시뮬레이션을 재개합니다.") : TEXT("선택한 층을 관찰하고 같은 층 안에서 편집합니다.")))
 				.OnClicked_Lambda([this,Floor]() { SetObserverFloor(Floor);return FReply::Handled(); })
-				[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize))
+				[SNew(STextBlock).Font(ToolFont)
 					.ColorAndOpacity_Lambda([this,Floor]() { return ObserverFloor==Floor ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; })
 					.Text(FText::FromString(Floor<0 ? FString(TEXT("전체 보기")) : FString::Printf(TEXT("%d층"),Floor+1)))]];
 		Tools->AddSlot().AutoHeight()[Floors];
 		auto Actions=SNew(SHorizontalBox);
 		const TCHAR* ActionNames[]={TEXT("재배치"),TEXT("삭제"),TEXT("추가")};
 		for (int32 I=0;I<3;++I)
-			Actions->AddSlot().FillWidth(1).Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(12)
+			Actions->AddSlot().FillWidth(1).Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 				.OnClicked_Lambda([this,I]() { SetLayoutAction(I);return FReply::Handled(); })
-				[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity_Lambda([this,I]() { return LayoutEditor && !(ConstructionEditor && ConstructionEditor->bActive) && int32(LayoutEditor->Action)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(ActionNames[I]))]];
-		Actions->AddSlot().FillWidth(1).Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(12).Visibility(AWarehousePlayStage::IsPlay(this) ? EVisibility::Collapsed : EVisibility::Visible)
+				[SNew(STextBlock).Font(ToolFont).ColorAndOpacity_Lambda([this,I]() { return LayoutEditor && !(ConstructionEditor && ConstructionEditor->bActive) && int32(LayoutEditor->Action)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(ActionNames[I]))]];
+		Actions->AddSlot().FillWidth(1).Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding).Visibility(AWarehousePlayStage::IsPlay(this) ? EVisibility::Collapsed : EVisibility::Visible)
 			.OnClicked_Lambda([this]() { SetConstructionEditing(true);return FReply::Handled(); })
-			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity_Lambda([this]() { return ConstructionEditor && ConstructionEditor->bActive ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(TEXT("건물 · 복층")))]];
+			[SNew(STextBlock).Font(ToolFont).ColorAndOpacity_Lambda([this]() { return ConstructionEditor && ConstructionEditor->bActive ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(TEXT("건물 · 복층")))]];
 		Tools->AddSlot().AutoHeight()[Actions];
 		auto BuildingTools=SNew(SVerticalBox).Visibility_Lambda([this]() { return ConstructionEditor && ConstructionEditor->bActive ? EVisibility::Visible : EVisibility::Collapsed; });
 		auto BuildingTargets=SNew(SWrapBox).UseAllottedSize(true);
 		const TCHAR* BuildingNames[]={TEXT("건물 외곽"),TEXT("2층 바닥"),TEXT("3층 바닥"),TEXT("4층 바닥"),TEXT("계단")};
 		for (int32 I=0;I<UE_ARRAY_COUNT(BuildingNames);++I)
-			BuildingTargets->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			BuildingTargets->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 				.OnClicked_Lambda([this,I]() { if (I<4) SetObserverFloor(I);ConstructionEditor->SetTarget(EWarehouseConstructionTarget(I));return FReply::Handled(); })
-				[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity_Lambda([this,I]() { return ConstructionEditor && int32(ConstructionEditor->Target)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(BuildingNames[I]))]];
+				[SNew(STextBlock).Font(ToolFont).ColorAndOpacity_Lambda([this,I]() { return ConstructionEditor && int32(ConstructionEditor->Target)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(BuildingNames[I]))]];
 		BuildingTools->AddSlot().AutoHeight()[BuildingTargets];
 		auto TileTools=SNew(SWrapBox).UseAllottedSize(true)
 			.Visibility_Lambda([this]() { return ConstructionEditor && ConstructionEditor->IsFloorTarget() ? EVisibility::Visible : EVisibility::Collapsed; });
 		const TCHAR* TileBrushNames[]={TEXT("크기 · 위치"),TEXT("타일 추가"),TEXT("타일 제거")};
 		for (int32 I=0;I<UE_ARRAY_COUNT(TileBrushNames);++I)
-			TileTools->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			TileTools->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 				.OnClicked_Lambda([this,I]() { ConstructionEditor->SetBrushMode(EWarehouseConstructionBrush(I));return FReply::Handled(); })
-				[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity_Lambda([this,I]() { return ConstructionEditor && int32(ConstructionEditor->BrushMode)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; })
+				[SNew(STextBlock).Font(ToolFont).ColorAndOpacity_Lambda([this,I]() { return ConstructionEditor && int32(ConstructionEditor->BrushMode)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; })
 				.Text(FText::FromString(TileBrushNames[I]))]];
-		TileTools->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+		TileTools->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 			.IsEnabled_Lambda([this]() { return ConstructionEditor && ConstructionEditor->bHasPendingTiles; })
 			.ToolTipText(FText::FromString(TEXT("모든 미확정 타일을 한 번에 적용하고 난간·장식·지지대를 재배치합니다.")))
 			.OnClicked_Lambda([this]() { if (ConstructionEditor->ApplyPendingTiles()) { SetObserverRoofVisibility(false);SetObserverRoofVisibility(true); }return FReply::Handled(); })
-			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("편집 적용")))]];
-		TileTools->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			[SNew(STextBlock).Font(ToolFont).ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("편집 적용")))]];
+		TileTools->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 			.IsEnabled_Lambda([this]() { return ConstructionEditor && (ConstructionEditor->bHasPendingTiles || ConstructionEditor->bDragging); })
 			.OnClicked_Lambda([this]() { ConstructionEditor->CancelPendingTiles();return FReply::Handled(); })
-			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text(FText::FromString(TEXT("취소")))]];
+			[SNew(STextBlock).Font(ToolFont).Text(FText::FromString(TEXT("취소")))]];
 		BuildingTools->AddSlot().AutoHeight()[TileTools];
 		auto BuildingActions=SNew(SWrapBox).UseAllottedSize(true);
 		for (int32 Direction:{-1,1})
-			BuildingActions->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			BuildingActions->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 				.OnClicked_Lambda([this,Direction]() { ConstructionEditor->AdjustRoofHeight(Direction*100.f);SetObserverRoofVisibility(false);SetObserverRoofVisibility(true);return FReply::Handled(); })
-				[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text(FText::FromString(Direction<0 ? TEXT("건물 높이 −1m") : TEXT("건물 높이 +1m")))]];
-		BuildingActions->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+				[SNew(STextBlock).Font(ToolFont).Text(FText::FromString(Direction<0 ? TEXT("건물 높이 −1m") : TEXT("건물 높이 +1m")))]];
+		BuildingActions->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 			.Visibility_Lambda([this]() { return ConstructionEditor && ConstructionEditor->Target!=EWarehouseConstructionTarget::Building ? EVisibility::Visible : EVisibility::Collapsed; })
 			.OnClicked_Lambda([this]() { ConstructionEditor->ToggleSelectedFloor();SetObserverRoofVisibility(false);SetObserverRoofVisibility(true);return FReply::Handled(); })
-			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text(FText::FromString(TEXT("선택층 켜기 / 끄기")))]];
+			[SNew(STextBlock).Font(ToolFont).Text(FText::FromString(TEXT("선택층 켜기 / 끄기")))]];
 		for (int32 Floor=1;Floor<=3;++Floor)
-			BuildingActions->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			BuildingActions->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 				.Visibility_Lambda([this]() { return ConstructionEditor && ConstructionEditor->Target==EWarehouseConstructionTarget::Stairs ? EVisibility::Visible : EVisibility::Collapsed; })
 				.OnClicked_Lambda([this,Floor]() { SetObserverFloor(Floor);ConstructionEditor->SetStairFloor(Floor);return FReply::Handled(); })
-				[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity_Lambda([this,Floor]() { return ConstructionEditor && ConstructionEditor->StairFloor==Floor ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(FString::Printf(TEXT("%d층 계단"),Floor+1)))]];
+				[SNew(STextBlock).Font(ToolFont).ColorAndOpacity_Lambda([this,Floor]() { return ConstructionEditor && ConstructionEditor->StairFloor==Floor ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(FString::Printf(TEXT("%d층 계단"),Floor+1)))]];
 		for (int32 Direction:{-1,1})
-			BuildingActions->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			BuildingActions->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 				.Visibility_Lambda([this]() { return ConstructionEditor && ConstructionEditor->Target==EWarehouseConstructionTarget::Stairs ? EVisibility::Visible : EVisibility::Collapsed; })
 				.OnClicked_Lambda([this,Direction]() { ConstructionEditor->RotateStairs(Direction*90.f);return FReply::Handled(); })
-				[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text(FText::FromString(Direction<0 ? TEXT("계단 좌측 90°") : TEXT("계단 우측 90°")))]];
+				[SNew(STextBlock).Font(ToolFont).Text(FText::FromString(Direction<0 ? TEXT("계단 좌측 90°") : TEXT("계단 우측 90°")))]];
 		BuildingTools->AddSlot().AutoHeight()[BuildingActions];
-		BuildingTools->AddSlot().AutoHeight().Padding(3)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Accent)
+		BuildingTools->AddSlot().AutoHeight().Padding(3,2)[SNew(STextBlock).Font(ToolFont).AutoWrapText(true).ColorAndOpacity(WarehouseUIStyle::Accent)
 			.Text_Lambda([this]() { return FText::FromString(ConstructionEditor ? ConstructionEditor->GetReadout() : FString()); })];
 		Tools->AddSlot().AutoHeight()[BuildingTools];
 		auto OrdinaryTools=SNew(SVerticalBox).Visibility_Lambda([this]() { return ConstructionEditor && ConstructionEditor->bActive ? EVisibility::Collapsed : EVisibility::Visible; });
 		Tools->AddSlot().AutoHeight()[OrdinaryTools];
 		auto Row=SNew(SWrapBox).UseAllottedSize(true);
-		Row->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+		Row->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 			.Visibility_Lambda([this]() { return LayoutEditor && LayoutEditor->Action!=EWarehouseLayoutAction::Add ? EVisibility::Visible : EVisibility::Collapsed; })
 			.ToolTipText(FText::FromString(TEXT("현재 층의 모든 편집 가능한 종류를 함께 선택합니다.")))
 			.OnClicked_Lambda([this]() { SetLayoutCategory(int32(EWarehouseLayoutCategory::All));return FReply::Handled(); })
-			[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize))
+			[SNew(STextBlock).Font(ToolFont)
 				.ColorAndOpacity_Lambda([this]() { return LayoutEditor && LayoutEditor->Category==EWarehouseLayoutCategory::All ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; })
 				.Text(FText::FromString(TEXT("모두")))]];
 		const TCHAR* Labels[]={TEXT("랙"),TEXT("지게차"),TEXT("승강기"),TEXT("입출고 구역"),TEXT("기타 물건"),TEXT("충전기"),TEXT("일반 대기 자리"),TEXT("상자"),TEXT("팔레트")};
 		for (int32 I=0;I<UE_ARRAY_COUNT(Labels);++I)
-			Row->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			Row->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 				.Visibility(AWarehousePlayStage::IsPlay(this) && AWarehousePlayStage::RequiredStage(EWarehouseLayoutCategory(I))>3 ? EVisibility::Collapsed : EVisibility::Visible)
 				.OnClicked_Lambda([this,I]() { SetLayoutCategory(I);return FReply::Handled(); })
 				[SNew(SHorizontalBox)
-				 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[MakeWarehouseLayoutIcon([I](){return EWarehouseLayoutCategory(I);})]
-				 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(5,0)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity_Lambda([this,I]() { return LayoutEditor && int32(LayoutEditor->Category)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(Labels[I]))]]];
-		Row->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+				 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[MakeWarehouseLayoutIcon([I](){return EWarehouseLayoutCategory(I);},[](){return FString();},CategoryIconSize)]
+				 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4,0)[SNew(STextBlock).Font(ToolFont).ColorAndOpacity_Lambda([this,I]() { return LayoutEditor && int32(LayoutEditor->Category)==I ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(Labels[I]))]]];
+		Row->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 			.OnClicked_Lambda([this]() { SetLayoutCategory(int32(EWarehouseLayoutCategory::Conveyor));return FReply::Handled(); })
 			[SNew(SHorizontalBox)
-			 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[MakeWarehouseLayoutIcon([](){return EWarehouseLayoutCategory::Conveyor;})]
-			 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(5,0)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity_Lambda([this]() { return LayoutEditor && LayoutEditor->Category==EWarehouseLayoutCategory::Conveyor ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(TEXT("컨베이어")))]]];
+			 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[MakeWarehouseLayoutIcon([](){return EWarehouseLayoutCategory::Conveyor;},[](){return FString();},CategoryIconSize)]
+			 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4,0)[SNew(STextBlock).Font(ToolFont).ColorAndOpacity_Lambda([this]() { return LayoutEditor && LayoutEditor->Category==EWarehouseLayoutCategory::Conveyor ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; }).Text(FText::FromString(TEXT("컨베이어")))]]];
 		OrdinaryTools->AddSlot().AutoHeight()[Row];
-		auto SelectionRow=SNew(SHorizontalBox);
-		SelectionRow->AddSlot().AutoWidth().Padding(3)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Accent)
+		auto SelectionRow=SNew(SWrapBox).UseAllottedSize(true);
+		SelectionRow->AddSlot().VAlign(VAlign_Center).Padding(3)[SNew(STextBlock).Font(ToolFont).ColorAndOpacity(WarehouseUIStyle::Accent)
 			.Text_Lambda([this]() { return FText::FromString(FString::Printf(TEXT("선택 %d개 그룹"),LayoutEditor ? LayoutEditor->SelectionCount:0)); })];
-		SelectionRow->AddSlot().AutoWidth().Padding(8,0)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+		SelectionRow->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 			.OnClicked_Lambda([this]() { if (LayoutEditor) LayoutEditor->ClearSelection();return FReply::Handled(); })
-			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text(FText::FromString(TEXT("선택 해제")))]];
-		SelectionRow->AddSlot().AutoWidth().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			[SNew(STextBlock).Font(ToolFont).Text(FText::FromString(TEXT("선택 해제")))]];
+		SelectionRow->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 			.OnClicked_Lambda([this]() { if (LayoutEditor) LayoutEditor->bEdgeSnapEnabled=!LayoutEditor->bEdgeSnapEnabled;return FReply::Handled(); })
-			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text_Lambda([this]() { return FText::FromString(LayoutEditor && LayoutEditor->bEdgeSnapEnabled ? TEXT("스냅 켜짐"):TEXT("스냅 꺼짐")); })]];
-		SelectionRow->AddSlot().AutoWidth().Padding(12,0)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize))
-			.ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(TEXT("선택 후 우클릭 · 좌우 90도 회전 / 삭제")))];
-		OrdinaryTools->AddSlot().AutoHeight()[SelectionRow];
-		OrdinaryTools->AddSlot().AutoHeight().Padding(3,6)[SNew(SButton).IsFocusable(false).ContentPadding(8).Visibility(AWarehousePlayStage::IsPlay(this) ? EVisibility::Collapsed : EVisibility::Visible)
+			[SNew(STextBlock).Font(ToolFont).Text_Lambda([this]() { return FText::FromString(LayoutEditor && LayoutEditor->bEdgeSnapEnabled ? TEXT("스냅 켜짐"):TEXT("스냅 꺼짐")); })]];
+		SelectionRow->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding).Visibility(AWarehousePlayStage::IsPlay(this) ? EVisibility::Collapsed : EVisibility::Visible)
 			.OnClicked_Lambda([this]() { OpenWarehouseExperiments();return FReply::Handled(); })
-			[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity(WarehouseUIStyle::Accent)
+			[SNew(STextBlock).Font(ToolFont).ColorAndOpacity(WarehouseUIStyle::Accent)
 				.Text(FText::FromString(TEXT("배치 저장 · 실험")))]];
+		SelectionRow->AddSlot().VAlign(VAlign_Center).Padding(6,2)[SNew(STextBlock).Font(ToolFont)
+			.ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(TEXT("선택 후 우클릭 · 회전 / 삭제")))];
+		OrdinaryTools->AddSlot().AutoHeight()[SelectionRow];
 		auto ConveyorTools=SNew(SVerticalBox).Visibility_Lambda([this]() { return LayoutEditor && LayoutEditor->GetSelectedConveyor() && LayoutEditor->Action!=EWarehouseLayoutAction::Add ? EVisibility::Visible : EVisibility::Collapsed; });
 		auto ConveyorValues=SNew(SWrapBox).UseAllottedSize(true);
 		const TCHAR* ConveyorFields[]={TEXT("방향 °"),TEXT("경사 °"),TEXT("바닥 높이 cm"),TEXT("길이 cm"),TEXT("폭 cm"),TEXT("속도 cm/s")};
 		const float Minimum[]={0,-20,0,125,50,1},Maximum[]={360,20,2000,1200,200,50};
 		for (int32 Field=0;Field<UE_ARRAY_COUNT(ConveyorFields);++Field)
 			ConveyorValues->AddSlot().Padding(3)[SNew(SHorizontalBox)
-				+SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(3)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(ConveyorFields[Field]))]
-				+SHorizontalBox::Slot().AutoWidth()[SNew(SNumericEntryBox<float>).MinDesiredValueWidth(78).AllowSpin(false)
-					.Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).MinValue(Minimum[Field])
+				+SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(3)[SNew(STextBlock).Font(ToolFont).ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(ConveyorFields[Field]))]
+				+SHorizontalBox::Slot().AutoWidth()[SNew(SNumericEntryBox<float>).MinDesiredValueWidth(64).AllowSpin(false)
+					.Font(ToolFont).MinValue(Minimum[Field])
 					.MaxValue_Lambda([this,Field,Limit=Maximum[Field]]() -> TOptional<float>
 					{
 						const auto* Conveyor=LayoutEditor ? LayoutEditor->GetSelectedConveyor() : nullptr;
@@ -429,37 +432,37 @@ void Amsc_vrPlayerController::BeginPlay()
 					})
 					.OnValueCommitted_Lambda([this,Field](float Value,ETextCommit::Type) { ConfigureLayoutConveyor(Field,Value); })]];
 		ConveyorTools->AddSlot().AutoHeight()[ConveyorValues];
-		ConveyorTools->AddSlot().AutoHeight().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+		ConveyorTools->AddSlot().AutoHeight().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 			.Visibility_Lambda([this]() { const auto* Conveyor=LayoutEditor ? LayoutEditor->GetSelectedConveyor() : nullptr;return Conveyor && Conveyor->Kind==EWarehouseConveyorKind::RotaryTransfer ? EVisibility::Visible : EVisibility::Collapsed; })
 			.OnClicked_Lambda([this]() { if (const auto* Conveyor=LayoutEditor->GetSelectedConveyor()) LayoutEditor->SetSelectedConveyorTurnDirection(!Conveyor->bTurnRight);return FReply::Handled(); })
-			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).ColorAndOpacity(WarehouseUIStyle::Accent)
+			[SNew(STextBlock).Font(ToolFont).ColorAndOpacity(WarehouseUIStyle::Accent)
 				.Text_Lambda([this]() { const auto* Conveyor=LayoutEditor ? LayoutEditor->GetSelectedConveyor() : nullptr;return FText::FromString(Conveyor && Conveyor->bTurnRight ? TEXT("회전 출구: 우측 90° · 클릭하여 좌측으로") : TEXT("회전 출구: 좌측 90° · 클릭하여 우측으로")); })]];
-		ConveyorTools->AddSlot().AutoHeight().Padding(3)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
+		ConveyorTools->AddSlot().AutoHeight().Padding(3)[SNew(STextBlock).Font(ToolFont).ColorAndOpacity(WarehouseUIStyle::Text)
 			.Visibility_Lambda([this]() { const auto* Conveyor=LayoutEditor ? LayoutEditor->GetSelectedConveyor() : nullptr;return Conveyor && Conveyor->Kind==EWarehouseConveyorKind::RotaryTransfer ? EVisibility::Visible : EVisibility::Collapsed; })
 			.Text(FText::FromString(TEXT("회전 이송대는 수평 2 × 2m 규격 · 화물을 중심에 정렬한 후 실제로 90° 회전하여 반출")))];
-		ConveyorTools->AddSlot().AutoHeight().Padding(3)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
+		ConveyorTools->AddSlot().AutoHeight().Padding(3)[SNew(STextBlock).Font(ToolFont).ColorAndOpacity(WarehouseUIStyle::Text)
 			.AutoWrapText(true).Text(FText::FromString(TEXT("값 입력 후 Enter · 비어 있는 설비만 변경 · Ctrl로 2개 선택 후 우클릭하여 순서대로 연결\n직결은 같은 방향·경사(오차 1° 이내) · 방향 전환에는 90° 회전 이송대 사용")))];
 		auto LiftTools=SNew(SVerticalBox).Visibility_Lambda([this]() { const auto* Conveyor=LayoutEditor ? LayoutEditor->GetSelectedConveyor() : nullptr;return Conveyor && Conveyor->Kind==EWarehouseConveyorKind::PalletRoller ? EVisibility::Visible : EVisibility::Collapsed; });
 		auto LiftActions=SNew(SWrapBox).UseAllottedSize(true);
 		for (bool Infeed:{true,false})
-			LiftActions->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			LiftActions->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 				.OnClicked_Lambda([this,Infeed]() { bConveyorLiftInfeedDraft=Infeed;return FReply::Handled(); })
-				[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity_Lambda([this,Infeed]() { return bConveyorLiftInfeedDraft==Infeed ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; })
+				[SNew(STextBlock).Font(ToolFont).ColorAndOpacity_Lambda([this,Infeed]() { return bConveyorLiftInfeedDraft==Infeed ? WarehouseUIStyle::Accent : WarehouseUIStyle::Text; })
 					.Text(FText::FromString(Infeed ? TEXT("승강기로 공급") : TEXT("승강기에서 수신")))]];
 		LiftActions->AddSlot().Padding(6,3)[SNew(SHorizontalBox)
-			+SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(3)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(TEXT("상대층")))]
+			+SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(3)[SNew(STextBlock).Font(ToolFont).ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(TEXT("상대층")))]
 			+SHorizontalBox::Slot().AutoWidth()[SNew(SNumericEntryBox<int32>).MinDesiredValueWidth(45).AllowSpin(true)
-				.Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).MinValue(1).MaxValue(4)
+				.Font(ToolFont).MinValue(1).MaxValue(4)
 				.Value_Lambda([this]() -> TOptional<int32> { return ConveyorLiftDestinationDraft; })
 				.OnValueChanged_Lambda([this](int32 Value) { ConveyorLiftDestinationDraft=FMath::Clamp(Value,1,4); })]];
-		LiftActions->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+		LiftActions->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 			.OnClicked_Lambda([this]() { LayoutEditor->LinkSelectedConveyorToNearestLift(bConveyorLiftInfeedDraft,ConveyorLiftDestinationDraft-1);SetObserverRoofVisibility(false);SetObserverRoofVisibility(true);return FReply::Handled(); })
-			[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).Text(FText::FromString(TEXT("가장 가까운 화물용 승강기에 연결")))]];
-		LiftActions->AddSlot().Padding(3)[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			[SNew(STextBlock).Font(ToolFont).Text(FText::FromString(TEXT("가장 가까운 화물용 승강기에 연결")))]];
+		LiftActions->AddSlot().Padding(2)[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 			.OnClicked_Lambda([this]() { LayoutEditor->DisconnectSelectedConveyorLift();return FReply::Handled(); })
-			[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).Text(FText::FromString(TEXT("승강기 연결 해제")))]];
+			[SNew(STextBlock).Font(ToolFont).Text(FText::FromString(TEXT("승강기 연결 해제")))]];
 		LiftTools->AddSlot().AutoHeight()[LiftActions];
-		LiftTools->AddSlot().AutoHeight().Padding(3)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
+		LiftTools->AddSlot().AutoHeight().Padding(3,2)[SNew(STextBlock).Font(ToolFont).AutoWrapText(true).ColorAndOpacity(WarehouseUIStyle::Text)
 			.Text_Lambda([this]()
 			{
 				const auto* Conveyor=LayoutEditor ? LayoutEditor->GetSelectedConveyor() : nullptr;
@@ -468,17 +471,17 @@ void Amsc_vrPlayerController::BeginPlay()
 			})];
 		ConveyorTools->AddSlot().AutoHeight()[LiftTools];
 		OrdinaryTools->AddSlot().AutoHeight()[ConveyorTools];
-		OrdinaryTools->AddSlot().AutoHeight()[SNew(SButton).IsFocusable(false).ContentPadding(8)
+		OrdinaryTools->AddSlot().AutoHeight()[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 			.Visibility_Lambda([this]() { return LayoutEditor && LayoutEditor->Action==EWarehouseLayoutAction::Delete ? EVisibility::Visible : EVisibility::Collapsed; })
 			.OnClicked_Lambda([this]() { DeleteLayoutSelection();return FReply::Handled(); })
-			[SNew(STextBlock).Font(WarehouseUIStyle::Font()).Text(FText::FromString(TEXT("선택한 요소 모두 삭제 · 상자는 보류 목록으로")))]];
-		OrdinaryTools->AddSlot().AutoHeight()[SNew(SButton).IsFocusable(false).ContentPadding(8)
+			[SNew(STextBlock).Font(ToolFont).Text(FText::FromString(TEXT("선택한 요소 모두 삭제 · 상자는 보류 목록으로")))]];
+		OrdinaryTools->AddSlot().AutoHeight()[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 			.Visibility_Lambda([this]() { return LayoutEditor && LayoutEditor->Action==EWarehouseLayoutAction::Add ? EVisibility::Visible : EVisibility::Collapsed; })
 			.OnClicked_Lambda([this]() { if (LayoutEditor) LayoutEditor->CycleAddChoice();return FReply::Handled(); })
 			[SNew(SHorizontalBox)
-			 +SHorizontalBox::Slot().AutoWidth().Padding(0,0,10,0)[MakeWarehouseLayoutIcon([this](){return LayoutEditor ? LayoutEditor->Category : EWarehouseLayoutCategory::All;},[this](){return LayoutEditor ? LayoutEditor->GetAddChoiceLabel() : FString();},72)]
-			 +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(STextBlock).Font(WarehouseUIStyle::Font()).AutoWrapText(true).Text_Lambda([this]() { return FText::FromString(LayoutEditor ? TEXT("추가 대상: ")+LayoutEditor->GetAddChoiceLabel()+TEXT(" · 클릭하면 다음 종류") : FString()); })]]];
-		OrdinaryTools->AddSlot().AutoHeight().Padding(3)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
+			 +SHorizontalBox::Slot().AutoWidth().Padding(0,0,10,0)[MakeWarehouseLayoutIcon([this](){return LayoutEditor ? LayoutEditor->Category : EWarehouseLayoutCategory::All;},[this](){return LayoutEditor ? LayoutEditor->GetAddChoiceLabel() : FString();},44)]
+			 +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(STextBlock).Font(ToolFont).AutoWrapText(true).Text_Lambda([this]() { return FText::FromString(LayoutEditor ? TEXT("추가 대상: ")+LayoutEditor->GetAddChoiceLabel()+TEXT(" · 클릭하면 다음 종류") : FString()); })]]];
+		OrdinaryTools->AddSlot().AutoHeight().Padding(3,2)[SNew(STextBlock).Font(ToolFont).AutoWrapText(true).ColorAndOpacity(WarehouseUIStyle::Text)
 			.Text_Lambda([this]()
 			{
 				if(AWarehousePlayStage::IsPlay(this)) return FText::FromString(TEXT("고정 창고 · 설비 추가는 예산에서 결제 · 취소 무료 · 철거 환불 없음"));
@@ -487,24 +490,28 @@ void Amsc_vrPlayerController::BeginPlay()
 					? FString::Printf(TEXT("보류된 물류 %d개 · 추가에서 다시 배치할 수 있습니다. 새 입고 물류는 자동으로 준비됩니다."),Count)
 					: FString::Printf(TEXT("보류된 물류 %d개 · 상자 데이터 생성·영구 삭제는 중앙 컴퓨터에서"),Count));
 			})];
-		Tools->AddSlot().AutoHeight().Padding(3,8)[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::LabelSize)).ColorAndOpacity(WarehouseUIStyle::Text).WrapTextAt(740)
+		Tools->AddSlot().AutoHeight().Padding(3,2)[SNew(STextBlock).Font(ToolFont).ColorAndOpacity(WarehouseUIStyle::Text).AutoWrapText(true)
 			.Text_Lambda([this]() { return FText::FromString(ConstructionEditor && ConstructionEditor->bActive ? ConstructionEditor->Status : LayoutEditor ? LayoutEditor->Status : FString()); })];
 		auto ObserverTools=SNew(SVerticalBox)
-			+SVerticalBox::Slot().AutoHeight()
-			[SNew(SBorder).Padding(WarehouseUIStyle::PanelPadding).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(WarehouseUIStyle::Panel)
-				.Visibility_Lambda([this]() { return IsLayoutEditing() ? EVisibility::Visible : EVisibility::Collapsed; })[Tools]]
-			+SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right).Padding(0,6,0,0)
-			[SNew(SButton).IsFocusable(false).ContentPadding(FMargin(16,8))
+			+SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
+			[SNew(SBox).WidthOverride(1000.f).MaxDesiredHeight(390.f)
+				.Visibility_Lambda([this]() { return IsLayoutEditing() ? EVisibility::Visible : EVisibility::Collapsed; })
+				[SNew(SBorder).Padding(FMargin(8,6)).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(WarehouseUIStyle::Panel)
+					[SNew(SScrollBox)+SScrollBox::Slot()[Tools]]]]
+			+SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right).Padding(0,4,0,0)
+			[SNew(SHorizontalBox)
+			+SHorizontalBox::Slot().AutoWidth().Padding(0,0,4,0)
+			[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 				.Visibility_Lambda([this]() {return AWarehouseFocusDirector::Find(this) ? EVisibility::Visible : EVisibility::Collapsed;})
 				.ToolTipText(FText::FromString(TEXT("재배치를 마치고 시뮬레이션을 재개한 뒤 지게차 명령 화면을 엽니다.")))
 				.OnClicked_Lambda([this]() {OpenForkliftCommands();return FReply::Handled();})
-				[SNew(STextBlock).Font(WarehouseUIStyle::Font(18)).ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("지게차 명령")))]]
-			+SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right).Padding(0,6,0,0)
-			[SNew(SButton).IsFocusable(false).ContentPadding(FMargin(10,5))
+				[SNew(STextBlock).Font(ToolFont).ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("지게차 명령")))]]
+			+SHorizontalBox::Slot().AutoWidth()
+			[SNew(SButton).IsFocusable(false).ContentPadding(ToolButtonPadding)
 				.ToolTipText_Lambda([this]() { return FText::FromString(IsLayoutEditing() ? TEXT("편집 도구를 숨기고 시뮬레이션을 재개합니다.") : TEXT("마지막 편집층의 배치 도구를 열고 시뮬레이션을 일시정지합니다.")); })
 				.OnClicked_Lambda([this]() { ToggleLayoutEditing();return FReply::Handled(); })
-				[SNew(STextBlock).Font(WarehouseUIStyle::Font(WarehouseUIStyle::CompactSize)).ColorAndOpacity(WarehouseUIStyle::Text)
-					.Text_Lambda([this]() { return FText::FromString(IsLayoutEditing() ? TEXT("재배치 모드 끄기") : TEXT("재배치 모드 켜기")); })]];
+				[SNew(STextBlock).Font(ToolFont).ColorAndOpacity(WarehouseUIStyle::Text)
+					.Text_Lambda([this]() { return FText::FromString(IsLayoutEditing() ? TEXT("재배치 모드 끄기") : TEXT("재배치 모드 켜기")); })]]];
 		LayoutToolbar=SNew(SBox).HAlign(HAlign_Fill).VAlign(VAlign_Bottom).Padding(FMargin(20,0,20,20))
 			.Visibility_Lambda([this]() { return bObserverView && LayoutEditor && !IsWarehouseMenuOpen() ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed; })
 			[ObserverTools];

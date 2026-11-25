@@ -1461,6 +1461,7 @@ void UAgvLocalizationSubsystem::DrawPanel(UCanvas* Canvas, APlayerController* Pl
 	const int32 Shown = GetVehiclePanelCount();
 	if (Shown == 0 || !Canvas || !Canvas->Canvas || !Player || Player->GetWorld() != GetWorld()) return;
 	const auto* WarehousePlayer = Cast<Amsc_vrPlayerController>(Player);
+	if (WarehousePlayer && WarehousePlayer->IsLayoutEditing()) return;
 	const bool bMenuOpen = WarehousePlayer && WarehousePlayer->IsWarehouseMenuOpen();
 	const int32 Columns = Shown > 2 ? 2 : 1;
 	const int32 Rows = FMath::DivideAndRoundUp(Shown, Columns);

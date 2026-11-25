@@ -11,14 +11,20 @@
 #include "msc_vrPlayerController.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/Texture2D.h"
 #include "Engine/GameInstance.h"
 #include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "Slate/DeferredCleanupSlateBrush.h"
+#include "Brushes/SlateRoundedBoxBrush.h"
+#include "Widgets/Images/SImage.h"
+#include "Widgets/SOverlay.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SScaleBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Text/STextBlock.h"
@@ -173,6 +179,26 @@ namespace
  {return SNew(STextBlock).Font(WarehouseUIStyle::Font(Size)).ColorAndOpacity(Color).Text_Lambda([Value](){return FText::FromString(Value());}).AutoWrapText(true);}
  TSharedRef<SWidget> PlayButton(FString Label,TFunction<void()> Action,TFunction<bool()> Enabled=[](){return true;})
  {return SNew(SButton).IsFocusable(false).ContentPadding(FMargin(10,7)).IsEnabled_Lambda([Enabled](){return Enabled();}).OnClicked_Lambda([Action](){Action();return FReply::Handled();})[PlayText([Label](){return Label;})];}
+
+ TSharedRef<SWidget> MenuButton(const FString& Label,TFunction<void()> Action,TFunction<bool()> Enabled,bool bPrimary=false)
+ {
+  static const FButtonStyle Primary=FButtonStyle()
+   .SetNormal(FSlateRoundedBoxBrush(FLinearColor(.25f,.76f,.79f),6.f))
+   .SetHovered(FSlateRoundedBoxBrush(FLinearColor(.42f,.91f,.93f),6.f))
+   .SetPressed(FSlateRoundedBoxBrush(FLinearColor(.16f,.56f,.61f),6.f))
+   .SetNormalPadding(FMargin(0)).SetPressedPadding(FMargin(0,1,0,0));
+  static const FButtonStyle Stage=FButtonStyle()
+   .SetNormal(FSlateRoundedBoxBrush(FLinearColor(.045f,.075f,.10f),6.f))
+   .SetHovered(FSlateRoundedBoxBrush(FLinearColor(.075f,.17f,.21f),6.f))
+   .SetPressed(FSlateRoundedBoxBrush(FLinearColor(.035f,.10f,.13f),6.f))
+   .SetDisabled(FSlateRoundedBoxBrush(FLinearColor(.025f,.04f,.055f),6.f))
+   .SetNormalPadding(FMargin(0)).SetPressedPadding(FMargin(0,1,0,0));
+  return SNew(SButton).ButtonStyle(bPrimary ? &Primary : &Stage).ContentPadding(FMargin(16,bPrimary ? 12 : 8))
+   .IsEnabled_Lambda([Enabled](){return Enabled();})
+   .OnClicked_Lambda([Action](){Action();return FReply::Handled();})
+   [SNew(STextBlock).Font(WarehouseUIStyle::Font(bPrimary ? 22 : 18,true))
+    .ColorAndOpacity(bPrimary ? FLinearColor(.012f,.032f,.04f) : WarehouseUIStyle::Text).AutoWrapText(true).Text(FText::FromString(Label))];
+ }
 }
 TSharedRef<SWidget> MakeWarehousePlayPanel(Amsc_vrPlayerController* PC,AWarehousePlayStage* Stage)
 {
@@ -180,19 +206,29 @@ TSharedRef<SWidget> MakeWarehousePlayPanel(Amsc_vrPlayerController* PC,AWarehous
  auto* Progress=PC->GetGameInstance()->GetSubsystem<UWarehousePlayProgress>();const TWeakObjectPtr<UWarehousePlayProgress> P=Progress;
  if (Stage->StageIndex==0)
  {
+  static const FSlateRoundedBoxBrush MenuPanel(FLinearColor(.012f,.025f,.038f,.86f),12.f);
+  auto* Texture=LoadObject<UTexture2D>(nullptr,TEXT("/Game/Warehouse/UI/MainMenu/T_WarehouseMenuBackground.T_WarehouseMenuBackground"));
+  TSharedPtr<FDeferredCleanupSlateBrush> Backdrop;
+  if (Texture) Backdrop=FDeferredCleanupSlateBrush::CreateBrush(Texture,FVector2D(1600,900));
   auto Body=SNew(SVerticalBox);
-  Body->AddSlot().AutoHeight().Padding(0,0,0,14)[PlayText([](){return TEXT("WAREHOUSE / 물류창고 운영");},28,WarehouseUIStyle::Accent)];
-  Body->AddSlot().AutoHeight().Padding(0,6)[PlayText([](){return TEXT("창고 시뮬레이션 · 지게차 명령, 플레이어 조작, 창고 지형·물체 재배치에 집중합니다. 나머지 창고 업무는 자동으로 처리합니다.");})];
-  Body->AddSlot().AutoHeight().Padding(0,6,0,20)[PlayButton(TEXT("창고 시뮬레이션 시작"),[Owner](){if(Owner.IsValid()) Owner->OpenPlayMode(-1);})];
-  Body->AddSlot().AutoHeight().Padding(0,6)[PlayText([](){return TEXT("플레이 모드 · 고정된 창고에서 예산 안에 설비를 배치하고 입고 목표를 달성하세요.");},18)];
+  Body->AddSlot().AutoHeight().Padding(0,0,0,15)[SNew(STextBlock).Font(WarehouseUIStyle::Font(37,true)).AutoWrapText(true)
+   .ColorAndOpacity(WarehouseUIStyle::Text).Text(FText::FromString(TEXT("무인 지게차\n시뮬레이터")))];
+  Body->AddSlot().AutoHeight().Padding(0,0,0,20)[MenuButton(TEXT("창고 시뮬레이션 시작"),[Owner](){if(Owner.IsValid()) Owner->OpenPlayMode(-1);},[](){return true;},true)];
+  Body->AddSlot().AutoHeight().Padding(0,0,0,3)[SNew(STextBlock).Font(WarehouseUIStyle::Font(19,true)).ColorAndOpacity(WarehouseUIStyle::Accent)
+   .Text(FText::FromString(TEXT("플레이 모드")))];
   for(int32 I=1;I<=3;++I)
-  {
-   Body->AddSlot().AutoHeight().Padding(0,7,0,2)[PlayButton(AWarehousePlayStage::StageTitle(I),[Owner,I](){if(Owner.IsValid()) Owner->OpenPlayMode(I);},[P,I](){return P.IsValid() && P->UnlockedStage>=I;})];
-   Body->AddSlot().AutoHeight().Padding(4,0,0,5)[PlayText([P,I](){return AWarehousePlayStage::UnlockDescription(I)+(P.IsValid() && P->UnlockedStage<I ? TEXT(" · 앞 스테이지 완료 필요") : TEXT(""));},13,WarehouseUIStyle::Accent)];
-  }
-  Body->AddSlot().AutoHeight().Padding(0,14)[PlayText([](){return TEXT("가벼운 3단계 프로토타입 · 해금은 자동 저장됩니다. 각 스테이지는 초기 예산과 배치로 새로 시작합니다.");},13)];
-  return SNew(SBorder).HAlign(HAlign_Center).VAlign(VAlign_Center).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.025f,.04f,.055f,1))
-   [SNew(SBox).WidthOverride(720).MaxDesiredHeight(720)[SNew(SScrollBox)+SScrollBox::Slot()[Body]]];
+   Body->AddSlot().AutoHeight().Padding(0,6,0,0)[MenuButton(AWarehousePlayStage::StageTitle(I),[Owner,I](){if(Owner.IsValid()) Owner->OpenPlayMode(I);},[P,I](){return P.IsValid() && P->UnlockedStage>=I;})];
+  return SNew(SBorder).Padding(0).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+   .BorderBackgroundColor(FLinearColor(.01f,.02f,.03f))
+   [SNew(SOverlay)
+    +SOverlay::Slot()
+    [SNew(SScaleBox).Stretch(EStretch::ScaleToFill).Clipping(EWidgetClipping::ClipToBounds)
+     .Visibility(EVisibility::HitTestInvisible)
+     [SNew(SImage).Image_Lambda([Backdrop](){return FDeferredCleanupSlateBrush::TrySlateBrush(Backdrop);})]]
+    +SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Center).Padding(FMargin(26,26,52,26))
+    [SNew(SBox).WidthOverride(488.f).MaxDesiredHeight(690.f)
+     [SNew(SBorder).BorderImage(&MenuPanel).Padding(FMargin(28,22))
+      [SNew(SScrollBox)+SScrollBox::Slot()[Body]]]]];
  }
  auto Body=SNew(SVerticalBox);
  Body->AddSlot().AutoHeight()[PlayText([S](){return S.IsValid() ? FString::Printf(TEXT("%s  |  예산 %s원  |  운반 %d/%d"),*AWarehousePlayStage::StageTitle(S->StageIndex),*FText::AsNumber(S->BudgetWon).ToString(),S->Delivered,S->DeliveryGoal) : FString();},17,WarehouseUIStyle::Accent)];
