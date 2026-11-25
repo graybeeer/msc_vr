@@ -114,6 +114,7 @@ public:
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Operations") int32 GeneratedUnits=0;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Transient,Category="Operations") FString OperationsStatus;
  UFUNCTION(BlueprintCallable,Category="Operations") bool SetContinuousOperations(bool Enabled);
+ UFUNCTION(BlueprintPure,Category="Operations") float GetTruckVisitInterval(bool bInbound) const;
  UFUNCTION(BlueprintPure,Category="Operations") FString GetOperationsSummary() const;
  UFUNCTION(BlueprintCallable,Category="Shipping") bool CreateOutbound(const FString& Name,const TArray<AWarehousePallet*>& Pallets,const FString& ZoneId,AWarehouseLogisticsTruck* Truck);
  UFUNCTION(BlueprintCallable,Category="Shipping") bool StartInbound(AWarehouseLogisticsTruck* Truck,const FString& ZoneId);
@@ -132,7 +133,8 @@ private:
  int32 NextShippingPlan=1;
  double NextShippingPlanCheck=0;
  double NextOperationsAt=0;
- double NextVisitAt=-1;
+ double InboundVisitWaitStartedAt=-1;
+ int32 WaitingInboundVisit=0;
  TWeakObjectPtr<AWarehouseLogisticsTruck> ActiveInboundTruck;
  void AdvanceOperations();
  void AdvanceShippingPlans();

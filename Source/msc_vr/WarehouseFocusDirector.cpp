@@ -79,6 +79,7 @@ void AWarehouseFocusDirector::SetManualOperations(bool bManual,bool bPersist)
  if (bManual)
  {
   if (auto* Shipping=Existing<AWarehouseShippingSystem>(this)) Shipping->SetContinuousOperations(false);
+  OutboundVisitWaitStartedAt.Reset();
   // Nothing accepted by shipping is cancelled. Only unsubmitted automatic orders are removed.
   PendingOrders.RemoveAll([](const auto& O){return !O.bUserRequested;});
   OperationsStatus=TEXT("모든 작업 수동 처리 · 이미 접수된 운반·배송은 계속 진행");
@@ -290,17 +291,17 @@ bool AWarehouseFocusDirector::DispatchPending(AWarehouseShippingSystem* Shipping
 void AWarehouseFocusDirector::UpdateOutbound(AWarehouseShippingSystem* Shipping,AWarehouseDamageSystem* Strength)
 {
  const double Now=GetWorld()->GetTimeSeconds();
- for (auto It=ReturnAt.CreateIterator();It;++It) if (!It.Key().IsValid()) It.RemoveCurrent();
+ const float VisitInterval=Shipping->GetTruckVisitInterval(false);
+ for (auto It=OutboundVisitWaitStartedAt.CreateIterator();It;++It) if (!It.Key().IsValid()) It.RemoveCurrent();
  for (AWarehouseLogisticsTruck* Truck:Shipping->Trucks)
  {
   if (!IsValid(Truck) || IsInboundTruck(Truck,Shipping) || Busy(Shipping,Truck)) continue;
   if (Truck->State==EWarehouseTruckState::Departed)
   {
-   auto* Due=ReturnAt.Find(Truck);
-   if (!Due) ReturnAt.Add(Truck,Now+FMath::Max(5.f,Shipping->VisitIntervalSeconds));
-   else if (Now>=*Due && Truck->ReturnForNextVisit()) ReturnAt.Remove(Truck);
+   const double StartedAt=OutboundVisitWaitStartedAt.FindOrAdd(Truck,Now);
+   if (Now-StartedAt>=VisitInterval && Truck->ReturnForNextVisit()) OutboundVisitWaitStartedAt.Remove(Truck);
   }
-  else ReturnAt.Remove(Truck);
+  else OutboundVisitWaitStartedAt.Remove(Truck);
  }
  DispatchPending(Shipping,Strength);
  // Actual support contacts identify rack storage, not display names or fixed map coordinates.

@@ -79,7 +79,7 @@ public:
     +SVerticalBox::Slot().AutoHeight()[CachedText(OperationsSummary,18,WarehouseUIStyle::Accent)]
     +SVerticalBox::Slot().AutoHeight().Padding(0,8)[CachedText(OperationsSettings)]
     +SVerticalBox::Slot().AutoHeight()[SNew(SWrapBox).UseAllottedSize(true)
-     +SWrapBox::Slot().Padding(0,0,12,8)[Setting(TEXT("방문 간격 (초)"),VisitInterval,5,3600)]
+     +SWrapBox::Slot().Padding(0,0,12,8)[Setting(TEXT("3단계 기준 간격 (초)"),VisitInterval,5,3600)]
      +SWrapBox::Slot().Padding(0,0,12,8)[Setting(TEXT("생성 한도 (묶음)"),UnitLimit,1,1000)]
      +SWrapBox::Slot().Padding(0,0,12,8)[Setting(TEXT("물량 조건 번호"),RecipeSeed,0,MAX_int32)]
      +SWrapBox::Slot().Padding(0,0,12,8)[Action(TEXT("설정 적용"),[this]() { ApplySettings(); },[this]() { return CanConfigure(); })]]
@@ -243,7 +243,7 @@ private:
    }
    PreparationSummary=FText::FromString(FString::Printf(TEXT("출고 검품·라벨 %d자리 · 팔레트당 %.1f초"),Shipping->OutboundPreparationStations,Shipping->OutboundPreparationSeconds));
    OperationsSummary=FText::FromString(Shipping->GetOperationsSummary());
-   OperationsSettings=FText::FromString(FString::Printf(TEXT("추가 방문 간격 %.0f초 · 생성 한도 %d묶음 · 생성됨 %d묶음 · 물량 조건 번호 %d"),Shipping->VisitIntervalSeconds,Shipping->MaxGeneratedUnits,Shipping->GeneratedUnits,Shipping->ScenarioSeed));
+   OperationsSettings=FText::FromString(FString::Printf(TEXT("입고 방문 간격 %.1f초 · 생성 한도 %d묶음 · 생성됨 %d묶음 · 물량 조건 번호 %d"),Shipping->GetTruckVisitInterval(true),Shipping->MaxGeneratedUnits,Shipping->GeneratedUnits,Shipping->ScenarioSeed));
   }
   else
   {

@@ -14,6 +14,10 @@ public:
  UFUNCTION(BlueprintPure) bool IsManualOperations() const { return bManualOperations; }
  // Tests may change a session without overwriting the player's saved preference.
  UFUNCTION(BlueprintCallable) void SetManualOperations(bool bManual,bool bPersist=true);
+ UFUNCTION(BlueprintPure,Category="Truck Visits") int32 GetTruckVisitLevel(bool bInbound) const;
+ UFUNCTION(BlueprintCallable,Category="Truck Visits") void SetTruckVisitLevel(bool bInbound,int32 Level,bool bPersist=true);
 private:
  UPROPERTY(Config) bool bManualOperations=false;
+ UPROPERTY(Config) int32 InboundTruckVisitLevel=3;
+ UPROPERTY(Config) int32 OutboundTruckVisitLevel=3;
 };

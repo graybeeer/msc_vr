@@ -28,6 +28,8 @@
 #include "WarehouseComputer.h"
 #include "WarehouseComputerDashboard.h"
 #include "WarehouseFocusDirector.h"
+#include "WarehouseOperationsSettings.h"
+#include "WarehouseShippingSystem.h"
 #include "WarehouseExperimentUI.h"
 #include "WarehouseExperimentSubsystem.h"
 #include "WarehousePlayMode.h"
@@ -688,6 +690,39 @@ void Amsc_vrPlayerController::OpenWarehouseSettings()
 		.ColorAndOpacity(WarehouseUIStyle::Accent).Text(FText::FromString(TEXT("물류창고 · 설정 / 관찰")))];
 	Button(TEXT("지게차 실시간 센서 화면"),[this]() { OpenAIViewSettings(); });
 	Button(TEXT("그래픽 설정"),[this]() { OpenGraphicsSettings(); });
+	const TWeakObjectPtr<UWarehouseOperationsSettings> VisitSettings=UWarehouseOperationsSettings::Find(this);
+	const TActorIterator<AWarehouseShippingSystem> ShippingIt(GetWorld());
+	if (VisitSettings.IsValid() && ShippingIt && !AWarehousePlayStage::IsPlay(this))
+	{
+		const TWeakObjectPtr<AWarehouseShippingSystem> Shipping=*ShippingIt;
+		const FCheckBoxStyle* ToggleStyle=&FCoreStyle::Get().GetWidgetStyle<FCheckBoxStyle>("ToggleButtonCheckbox");
+		auto Visits=SNew(SVerticalBox);
+		Visits->AddSlot().AutoHeight().Padding(0,0,0,6)[SNew(STextBlock)
+			.Font(WarehouseUIStyle::Font(18,true)).ColorAndOpacity(WarehouseUIStyle::Accent)
+			.Text(FText::FromString(TEXT("트럭 방문 주기 · 1 느림 / 5 빠름")))];
+		for (bool bInbound:{true,false})
+		{
+			auto Bar=SNew(SHorizontalBox);
+			Bar->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,12,0)
+				[SNew(STextBlock).Font(WarehouseUIStyle::Font(18)).Text(FText::FromString(bInbound ? TEXT("입고") : TEXT("출고")))];
+			for (int32 Level=1;Level<=5;++Level)
+				Bar->AddSlot().FillWidth(1).Padding(1)[SNew(SCheckBox).Style(ToggleStyle).HAlign(HAlign_Center).Padding(FMargin(6,4))
+					.IsChecked_Lambda([VisitSettings,bInbound,Level]() { return VisitSettings.IsValid() && VisitSettings->GetTruckVisitLevel(bInbound)==Level ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+					.OnCheckStateChanged_Lambda([VisitSettings,bInbound,Level](ECheckBoxState State) { if (VisitSettings.IsValid() && State==ECheckBoxState::Checked) VisitSettings->SetTruckVisitLevel(bInbound,Level); })
+					[SNew(STextBlock).Font(WarehouseUIStyle::Font(16,true)).Text(FText::AsNumber(Level))]];
+			Bar->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(12,0,0,0)
+				[SNew(SBox).WidthOverride(122)[SNew(STextBlock).Font(WarehouseUIStyle::Font(16)).Justification(ETextJustify::Right)
+					.ColorAndOpacity(WarehouseUIStyle::Accent).Text_Lambda([Shipping,bInbound]()
+					{
+						if (!Shipping.IsValid()) return FText::GetEmpty();
+						FNumberFormattingOptions SecondsFormat;SecondsFormat.MaximumFractionalDigits=1;
+						return FText::Format(NSLOCTEXT("Warehouse", "TruckVisitSeconds", "{0}초"),FText::AsNumber(Shipping->GetTruckVisitInterval(bInbound),&SecondsFormat));
+					})]];
+			Visits->AddSlot().AutoHeight().Padding(0,2)[Bar];
+		}
+		Panel->AddSlot().AutoHeight().Padding(8,6)[SNew(SBorder).Padding(FMargin(12,8))
+			.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(WarehouseUIStyle::Panel)[Visits]];
+	}
 	auto CargoResetResult=SNew(STextBlock).Font(WarehouseUIStyle::Font(16)).ColorAndOpacity(WarehouseUIStyle::Accent).AutoWrapText(true);
 	Button(TEXT("물품 올바른 위치로 초기화"),[this,CargoResetResult]()
 	{

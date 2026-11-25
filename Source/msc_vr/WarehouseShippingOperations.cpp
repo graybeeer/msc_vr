@@ -158,6 +158,7 @@ bool AWarehouseShippingSystem::SetContinuousOperations(bool Enabled)
   return Fail(TEXT("방문 간격은 5초 이상, 생성 한도는 1~1000묶음으로 설정하세요."));
  if (!Zones.ContainsByPredicate([](const auto& Z){return Z.bInbound && IsValid(Z.Anchor) && !Z.Slots.IsEmpty();}))
   return Fail(TEXT("입고 구역이 없습니다. [NO_STAGING_ZONE]"));
+ const auto PreviousInboundTruck=ActiveInboundTruck;
  if (IsValid(RepeatingInboundTruck)) ActiveInboundTruck=RepeatingInboundTruck;
  if (!ActiveInboundTruck.IsValid())
  {
@@ -167,8 +168,18 @@ bool AWarehouseShippingSystem::SetContinuousOperations(bool Enabled)
   if (!ActiveInboundTruck.IsValid()) for (AWarehouseLogisticsTruck* T:Trucks) if (IsValid(T) && T->IsReady() && T->ManifestPallets.IsEmpty()) {ActiveInboundTruck=T;break;}
  }
  if (!ActiveInboundTruck.IsValid() || !Trucks.Contains(ActiveInboundTruck.Get())) return Fail(TEXT("방문 가능한 입고 트럭이 없습니다. [NO_TRUCK]"));
+ if (PreviousInboundTruck!=ActiveInboundTruck) InboundVisitWaitStartedAt=-1;
  if (GeneratedUnits>=MaxGeneratedUnits) return Fail(TEXT("이번 실행의 생성 한도에 도달했습니다. 한도를 늘리거나 초기 배치를 다시 불러오세요."));
  bContinuousOperations=true;NextOperationsAt=0;OperationsStatus=TEXT("반복 입고 시작 · 도크와 입고 자리 확인");return true;
+}
+
+float AWarehouseShippingSystem::GetTruckVisitInterval(bool bInbound) const
+{
+ static constexpr float IntervalScale[]={2.f,4.f/3.f,1.f,2.f/3.f,1.f/3.f};
+ const auto* Settings=UWarehouseOperationsSettings::Find(this);
+ const int32 Level=Settings ? Settings->GetTruckVisitLevel(bInbound) : 3;
+ const float BaseInterval=FMath::IsFinite(VisitIntervalSeconds) ? FMath::Max(5.f,VisitIntervalSeconds) : 45.f;
+ return BaseInterval*IntervalScale[Level-1];
 }
 
 FString AWarehouseShippingSystem::GetOperationsSummary() const
@@ -203,10 +214,12 @@ void AWarehouseShippingSystem::AdvanceOperations()
  if (GeneratedUnits>=MaxGeneratedUnits) { SetContinuousOperations(false);OperationsStatus=TEXT("설정한 신규 물량 공급 완료");return; }
  if (Truck->State==EWarehouseTruckState::Departed)
  {
-  if (NextVisitAt<0) NextVisitAt=Now+FMath::Max(5.f,VisitIntervalSeconds);
-  if (Now<NextVisitAt) {OperationsStatus=FString::Printf(TEXT("다음 입고 방문까지 %.0f초"),NextVisitAt-Now);return;}
+  if (InboundVisitWaitStartedAt<0 || WaitingInboundVisit!=Truck->VisitNumber)
+  { InboundVisitWaitStartedAt=Now;WaitingInboundVisit=Truck->VisitNumber; }
+  const double Remaining=InboundVisitWaitStartedAt+GetTruckVisitInterval(true)-Now;
+  if (Remaining>0) {OperationsStatus=FString::Printf(TEXT("다음 입고 방문까지 %.0f초"),Remaining);return;}
   if (!Truck->ReturnForNextVisit()) {OperationsStatus=Truck->Status;return;}
-  NextVisitAt=-1;OperationsStatus=TEXT("다음 입고 트럭 도착 중");return;
+  InboundVisitWaitStartedAt=-1;OperationsStatus=TEXT("다음 입고 트럭 도착 중");return;
  }
  if (!Truck->IsReady()) { OperationsStatus=Truck->Status;return; }
  // A cancelled outbound visit can leave an empty dock secured. Complete that

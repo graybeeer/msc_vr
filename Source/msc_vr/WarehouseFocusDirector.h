@@ -48,7 +48,7 @@ private:
  TArray<FPendingOrder> PendingOrders;
  TSet<TWeakObjectPtr<AWarehousePallet>> StoppedOutboundPallets;
  TMap<TWeakObjectPtr<AWarehousePallet>,double> StoredSince;
- TMap<TWeakObjectPtr<AWarehouseLogisticsTruck>,double> ReturnAt;
+ TMap<TWeakObjectPtr<AWarehouseLogisticsTruck>,double> OutboundVisitWaitStartedAt;
  TWeakObjectPtr<AWarehouseLogisticsTruck> InboundTruck;
  double NextAutomaticOrderAt=0;
 
