@@ -239,11 +239,15 @@ FTransform AWarehouseForklift::PalletApproach(const FTransform& Pose,float Dista
 {
  // Task/observed pallet poses stay in their original frame. Entry selection
  // changes the truck pose only; known carried-load geometry sets the drop heading.
+ // The drop standoff follows the load's measured yaw on the forks, not the nearest quarter turn: a load shifted
+ // 7-13 degrees otherwise left the truck square to the slot and beside its line, so the last 1.5m in front of the
+ // rack could neither join the line nor pivot onto it (QA 2026-11-18, NO CLEAR PRECISE RACK APPROACH).
+ const bool CarriedLoad=!Pickup && bSupportingPallet && IsValid(TargetPallet);
+ const FTransform Carried=CarriedLoad ? TargetPallet->GetActorTransform().GetRelativeTransform(GetActorTransform()) : FTransform::Identity;
  const float Offset=Pickup ? PickupEntryQuarterTurns*90.f :
-  RackDeliveryQuarterTurns*90.f+(bSupportingPallet && IsValid(TargetPallet) ? -90.f*FMath::RoundToInt(
-   TargetPallet->GetActorTransform().GetRelativeTransform(GetActorTransform()).Rotator().Yaw/90.f) : 0.f);
+  RackDeliveryQuarterTurns*90.f-(CarriedLoad ? Carried.Rotator().Yaw : 0.f);
  const FRotator Rotation(0,Pose.Rotator().Yaw+Offset,0);
- FVector Point=Pose.GetLocation()-Rotation.Vector()*Distance;
+ FVector Point=Pose.GetLocation()-Rotation.Vector()*Distance-(CarriedLoad ? Rotation.RotateVector(FVector(0,Carried.GetLocation().Y,0)) : FVector::ZeroVector);
  Point.Z=FloorBase(Pose.GetLocation().Z);
  return FTransform(Rotation,Point);
 }
@@ -361,6 +365,8 @@ bool AWarehouseForklift::PlanDeliveryApproach()
  // Keep the last usable face for recovery if none of the new candidates connects.
  const int32 PreviousFace=RackDeliveryQuarterTurns;
  RackDeliveryQuarterTurns=0;
+ StandoffLoadYaw.Reset();
+ if (bSupportingPallet && IsValid(TargetPallet)) StandoffLoadYaw=TargetPallet->GetActorTransform().GetRelativeTransform(GetActorTransform()).Rotator().Yaw;
  if (!ActiveJob.bRackDestination || ActiveJob.Destination.GetLocation().Z-FloorBase(ActiveJob.Destination.GetLocation().Z)<=5.f)
  {
   const bool Outbound=ActiveJob.SourceSystem==TEXT("FMS-COMPUTER");
@@ -994,7 +1000,8 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
   if (!bRouteTurning && FMath::Abs(CurrentSpeedCm)>1.f) return false;
   bRouteTurning=true;
   if (FMath::Abs(Angle)>HeadingTolerance)
-  { CommandTurn(FMath::Sign(Angle)*FMath::Clamp(FMath::Abs(Angle)*2.f,.02f,WarehouseWorkTurn(.15f)),Dt);return false; }
+  { TGuardValue<float> TurnLeft(TurnRemainingDeg,FMath::RadiansToDegrees(FMath::Abs(Angle)));
+    CommandTurn(FMath::Sign(Angle)*FMath::Clamp(FMath::Abs(Angle)*2.f,.02f,WarehouseWorkTurn(.15f)),Dt);return false; }
   if (FMath::Abs(CurrentSpeedCm)>1.f) return false;
   if (ChassisBody && FMath::Abs(ChassisBody->GetPhysicsAngularVelocityInDegrees().Z)>.5f) return false;
   bRouteTurning=false;
@@ -1092,7 +1099,8 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
   if (!bRouteTurning && FMath::Abs(CurrentSpeedCm)>=1.f) return false;
   bRouteTurning=true;
   if (FMath::Abs(HeadingError)>=HeadingTolerance)
-  { CommandTurn(FMath::Sign(HeadingError)*FMath::Clamp(FMath::Abs(HeadingError)*2.f,.02f,WarehouseWorkTurn(.2f)),Dt);return false; }
+  { TGuardValue<float> TurnLeft(TurnRemainingDeg,FMath::RadiansToDegrees(FMath::Abs(HeadingError)));
+    CommandTurn(FMath::Sign(HeadingError)*FMath::Clamp(FMath::Abs(HeadingError)*2.f,.02f,WarehouseWorkTurn(.2f)),Dt);return false; }
   if (FMath::Abs(CurrentSpeedCm)>=1.f) return false;
   if (ChassisBody && FMath::Abs(ChassisBody->GetPhysicsAngularVelocityInDegrees().Z)>=.5f) return false;
   bRouteTurning=false;
@@ -1117,6 +1125,7 @@ bool AWarehouseForklift::FollowRoute(float Speed,float Dt)
    if (SegmentEnd==PlannedRoute.Num()-1) return true;
    RouteIndex=SegmentEnd+1;return false;
   }
+  TGuardValue<float> TurnLeft(TurnRemainingDeg,FMath::RadiansToDegrees(FMath::Abs(HeadingError)));
   CommandTurn(FMath::Sign(HeadingError)*FMath::Clamp(FMath::Abs(HeadingError)*2.f,.02f,WarehouseWorkTurn(.15f)),Dt);
   return false;
  }
@@ -1904,6 +1913,26 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
   }
   // Follow the sensed load position; contact can shift it along the tines.
   // Correct by driving the vehicle, without repositioning the physical pallet.
+  // The standoff was chosen square to the slot for the load as it sat then. A load that has since turned on the forks
+  // needs the truck turned the same amount, which the last 1.5m in front of a rack cannot give: the follower arrived
+  // 6.5 degrees short and dithered there with the load raised (2026-11-24, 7.4 degree load). Before raising it, re-plan
+  // the standoff for the load as it is now; a loose load can turn again on the way, so up to twice per job.
+  if (PreciseRealignJobId!=ActiveJob.JobId) { PreciseRealignJobId=ActiveJob.JobId;PreciseRealignCount=0; }
+  if (ActiveJob.bRackDestination && DropHeight>5.f && !bRouteStarted && PreciseRealignCount<2)
+  {
+   const float LoadYaw=TargetPallet->GetActorTransform().GetRelativeTransform(GetActorTransform()).Rotator().Yaw;
+   const float NeedYaw=ActiveJob.Destination.Rotator().Yaw+RackDeliveryQuarterTurns*90.f-LoadYaw;
+   // Only a load that turned since the standoff was planned: the follower's usual 2-3 degree arrival error is the
+   // final alignment's job, and re-planning for it alone repeated twice on every rack drop (2026-11-24 regression).
+   const bool LoadTurned=StandoffLoadYaw.IsSet() && FMath::Abs(FMath::FindDeltaAngleDegrees(LoadYaw,StandoffLoadYaw.GetValue()))>2.f;
+   if (LoadTurned && FMath::Abs(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,NeedYaw))>2.f)
+   {
+    ++PreciseRealignCount;
+    UE_LOG(LogTemp,Log,TEXT("AGV_DROP_STANDOFF_REALIGN %s try=%d yaw=%.2f need=%.2f load_yaw=%.2f planned_load_yaw=%.2f"),*VehicleName,PreciseRealignCount,GetActorRotation().Yaw,NeedYaw,LoadYaw,StandoffLoadYaw.GetValue());
+    Next(EWarehouseAIState::PlanDelivery,TEXT("LOAD SHIFTED ON FORKS - REALIGN DROP APPROACH"));
+    break;
+   }
+  }
   if (!LiftTo(DropHeight+10.5f)) break;
   TArray<AActor*> FloorLoads{TargetPallet};
   for (AActor* Cargo : CarriedCargo) FloorLoads.Add(Cargo);
@@ -2005,8 +2034,76 @@ void AWarehouseForklift::AdvanceAutonomy(float Dt)
    float Cost;
    if (!ConnectPoses(GetActorTransform(),FTransform(Heading,Point),PlannedRoute,Cost))
    {
-    UE_LOG(LogTemp,Log,TEXT("AGV_PRECISE_APPROACH_FAIL %s from=%s yaw=%.2f to=%s yaw=%.2f rack=%d drop=%.1f"),*VehicleName,*GetActorLocation().ToCompactString(),GetActorRotation().Yaw,
-     *Point.ToCompactString(),Heading.Yaw,ActiveJob.bRackDestination,DropHeight);
+    const FString DirectBlock=NavigationBlockDetail;
+    // The delivery standoff faces the slot square, but the slot heading follows the load's measured yaw on the forks.
+    // A shifted load (QA 2026-11-18: 7.4 degrees) left the truck 32cm beside that line only 1.5m out, which one curve
+    // cannot join. Back straight out along the travelled lane and approach again from farther away.
+    // Right at a floor slot the bounded floor recovery below handles it; a back-off there only met the floor dock again
+    // and repeated (2026-11-24, 40 times). Two back-offs per job, the second from farther away.
+    const FTransform Target(Heading,Point);
+    const FRotator Facing(0,GetActorRotation().Yaw,0);
+    if (PreciseBackoffJobId!=ActiveJob.JobId) { PreciseBackoffJobId=ActiveJob.JobId;PreciseBackoffCount=0; }
+    const bool NearFloorSlot=!ActiveJob.bRackDestination && FVector::Dist2D(GetActorLocation(),Point)<60.f;
+    bool Joined=false;
+    // A hybrid route hands over up to 4 degrees off the standoff heading for this state to take up, but 1.5m in front of
+    // a rack one curve cannot remove that and the matching side offset (2026-11-25, 13 degree load: 3.6 degrees short,
+    // no curve, no back-off). Turn in place onto the slot heading first, then drive straight in.
+    // Shares the back-off budget so a turn that still leaves the line unjoinable cannot repeat.
+    if (!NearFloorSlot && PreciseBackoffCount<2)
+    {
+     const FWarehouseNavigationQuery Query=BuildNavigationQuery();
+     if (Query.bHasPivot && FMath::Abs(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw,Heading.Yaw))>.5f)
+     {
+      const FVector Axle=GetActorTransform().TransformPosition(Query.Pivot);
+      FVector PivotPoint=Axle-Heading.RotateVector(Query.Pivot);PivotPoint.Z=GetActorLocation().Z;
+      const FTransform PivotPose(Heading,PivotPoint);
+      TArray<FWarehouseRoutePoint> Turn,Approach;float TurnCost,ApproachCost;
+      const bool TurnOk=ConnectPoses(GetActorTransform(),PivotPose,Turn,TurnCost,&Query);
+      const FString TurnBlock=NavigationBlockDetail;
+      bool ApproachOk=TurnOk && ConnectPoses(PivotPose,Target,Approach,ApproachCost,&Query);
+      // Checked before the turn, every pose on that leg differs in heading from the truck, so each part is tested
+      // statically against the slot (0-1cm of side clearance with the load square to it) and the leg is refused,
+      // although the same straight drive started from that heading is not part-checked at all: a straight move is
+      // guarded by its swept contact test (2026-11-25, rack side panel). A leg that is already straight along the
+      // slot heading is therefore driven as such, as it would be once the turn is done.
+      const FVector Leg=Target.GetLocation()-PivotPoint;
+      const float LegAlong=FVector::DotProduct(Leg,Heading.Vector()),LegSide=FVector::DotProduct(Leg,FRotationMatrix(Heading).GetUnitAxis(EAxis::Y));
+      if (TurnOk && !ApproachOk && LegAlong>1.f && LegAlong<250.f && FMath::Abs(LegSide)<2.f)
+      {
+       Approach.Reset();
+       const int32 Samples=FMath::Max(2,FMath::CeilToInt(LegAlong/5.f));
+       for (int32 I=1;I<=Samples;++I)
+       { FWarehouseRoutePoint Step;Step.Pose=FTransform(Heading,FMath::Lerp(PivotPoint,Target.GetLocation(),float(I)/Samples));Approach.Add(Step); }
+       ApproachOk=true;
+      }
+      const bool Straight=ApproachOk && !Approach.ContainsByPredicate([](const FWarehouseRoutePoint& Step){ return Step.bReverse || Step.bPivot; });
+      if (!Straight)
+       UE_LOG(LogTemp,Log,TEXT("AGV_PRECISE_APPROACH_PIVOT_FAIL %s turn=%d approach=%d straight=%d turn_block=%s approach_block=%s pivot_pose=%s"),*VehicleName,TurnOk,ApproachOk,Straight,
+        *TurnBlock,TurnOk ? *NavigationBlockDetail : TEXT(""),*PivotPoint.ToCompactString());
+      if (Straight)
+      {
+       UE_LOG(LogTemp,Log,TEXT("AGV_PRECISE_APPROACH_PIVOT %s from_yaw=%.2f to=%s yaw=%.2f rack=%d direct_block=%s"),*VehicleName,GetActorRotation().Yaw,
+        *Point.ToCompactString(),Heading.Yaw,ActiveJob.bRackDestination,*DirectBlock);
+       PlannedRoute=MoveTemp(Turn);PlannedRoute.Append(Approach);Joined=true;++PreciseBackoffCount;
+      }
+     }
+    }
+    if (!Joined && !NearFloorSlot && PreciseBackoffCount<2)
+    for (const float Backoff : {60.f,100.f,150.f,200.f,250.f,300.f})
+    {
+     if (PreciseBackoffCount>0 && Backoff<150.f) continue;
+     const FTransform BackPose(Facing,GetActorLocation()-Facing.Vector()*Backoff);
+     TArray<FWarehouseRoutePoint> Back,Approach;float BackCost,ApproachCost;
+     if (!ConnectPoses(GetActorTransform(),BackPose,Back,BackCost) || !ConnectPoses(BackPose,Target,Approach,ApproachCost) ||
+         Approach.ContainsByPredicate([](const FWarehouseRoutePoint& Step){ return Step.bReverse || Step.bPivot; })) continue;
+     UE_LOG(LogTemp,Log,TEXT("AGV_PRECISE_APPROACH_BACKOFF %s backoff=%.0f try=%d to=%s yaw=%.2f rack=%d direct_block=%s"),*VehicleName,Backoff,PreciseBackoffCount+1,
+      *Point.ToCompactString(),Heading.Yaw,ActiveJob.bRackDestination,*DirectBlock);
+     PlannedRoute=MoveTemp(Back);PlannedRoute.Append(Approach);Joined=true;++PreciseBackoffCount;
+     break;
+    }
+    if (Joined) { RouteIndex=0;bRouteStarted=true;break; }
+    UE_LOG(LogTemp,Log,TEXT("AGV_PRECISE_APPROACH_FAIL %s from=%s yaw=%.2f to=%s yaw=%.2f rack=%d drop=%.1f block=%s"),*VehicleName,*GetActorLocation().ToCompactString(),GetActorRotation().Yaw,
+     *Point.ToCompactString(),Heading.Yaw,ActiveJob.bRackDestination,DropHeight,*DirectBlock);
     // Right at a floor slot a few centimetres and degrees off cannot be joined by any curve: back off and
     // approach again through the bounded recovery instead of stopping for an operator at once.
     if (!ActiveJob.bRackDestination && FVector::Dist2D(GetActorLocation(),Point)<60.f && BeginRecovery(EWarehouseAIState::AlignUnload,TEXT("FLOOR LOAD ALIGNMENT OUTSIDE SLOT"))) break;

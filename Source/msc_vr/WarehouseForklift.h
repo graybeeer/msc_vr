@@ -261,6 +261,14 @@ private:
  bool bFloorTransfer=false;
  TOptional<FTransform> ElevatorQueuePose;
  double NextElevatorRouteAttemptAt=0.0;
+ // Precise slot approach: straight back-offs used for the current job (bounded, farther each time).
+ FString PreciseBackoffJobId; int32 PreciseBackoffCount=0;
+ // Job whose drop standoff was re-planned (at most twice) for a load that shifted on the forks after the standoff was chosen.
+ FString PreciseRealignJobId; int32 PreciseRealignCount=0;
+ // Load yaw on the forks when the drop standoff was last planned; only a turn of the load since then re-plans it.
+ TOptional<float> StandoffLoadYaw;
+ // Degrees left in the current route turn (negative: unknown); bounds the turn clearance forecast.
+ float TurnRemainingDeg=-1.f;
  void AdvanceAutonomy(float Dt);
  void ToggleAutonomy();
  void TransitionAI(EWarehouseAIState Next,const FString& Message);

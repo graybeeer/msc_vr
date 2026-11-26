@@ -184,6 +184,9 @@ bool AWarehouseForklift::RemotePoseClear(const FTransform& Pose)
  {
   const FVector Pivot=(Wheels[1]->GetComponentLocation()+Wheels[2]->GetComponentLocation())*.5f;
   HorizonYaw=FMath::Clamp(StepYaw*1.1f/FMath::Max(.008f,GetWorld()->GetDeltaSeconds()),-35.f,35.f);
+  // A route turn onto a known heading stops there: checking a full second of turning beyond it rejected a load-shifted
+  // truck's last few degrees in front of a rack slot whose target heading was clear (2026-11-24).
+  if (TurnRemainingDeg>=0.f) HorizonYaw=FMath::Sign(HorizonYaw)*FMath::Min(FMath::Abs(HorizonYaw),FMath::Max(TurnRemainingDeg,FMath::Abs(StepYaw)));
   for (float Alpha=.2f;Alpha<=1.001f;Alpha+=.2f)
   {
    const FQuat Turn(FVector::UpVector,FMath::DegreesToRadians(HorizonYaw*Alpha));
@@ -193,8 +196,8 @@ bool AWarehouseForklift::RemotePoseClear(const FTransform& Pose)
   }
  }
  if (!bTurnObstacleClear && SensorMode==EWarehouseSensorMode::Autonomous && bRouteTurning)
-  UE_LOG(LogTemp,Log,TEXT("AGV_TURN_CLEARANCE_BLOCK %s pose=%s forecast=%s requested=%.2f"),
-   *VehicleName,*GetActorTransform().ToString(),*LastCandidate.ToString(),HorizonYaw);
+  UE_LOG(LogTemp,Log,TEXT("AGV_TURN_CLEARANCE_BLOCK %s pose=%s forecast=%s requested=%.2f remaining=%.2f"),
+   *VehicleName,*GetActorTransform().ToString(),*LastCandidate.ToString(),HorizonYaw,TurnRemainingDeg);
  if ((AIState==EWarehouseAIState::NavigateCharge || AIState==EWarehouseAIState::DockCharge) && FParse::Param(FCommandLine::Get(),TEXT("DriveDiagnostics")))
   UE_LOG(LogTemp,Log,TEXT("AGV_CHARGE_TURN_SCAN %s clear=%d stepYaw=%.4f horizonYaw=%.4f candidate=%s routeGoal=%s route=%d/%d snapshot=%d"),
    *VehicleName,bTurnObstacleClear,StepYaw,HorizonYaw,*LastCandidate.ToString(),

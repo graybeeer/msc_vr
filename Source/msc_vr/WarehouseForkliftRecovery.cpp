@@ -45,7 +45,9 @@ bool AWarehouseForklift::BeginRecovery(EWarehouseAIState From,const FString& Rea
  if (IsRemoteControlled() || IsRecovering()) return false;
  bObservedPickupEscape=false;
  if (bFloorTransfer || (bSupportingPallet && LiftOffset>20.f))
- { RecoveryFault(TEXT("RECOVERY REQUIRES SAFE FLOOR / LOW LOAD - OPERATOR REQUIRED"),TEXT("승강기 또는 높은 적재 상태에서 자동 탈출할 수 없습니다.")); return false; }
+ { UE_LOG(LogTemp,Log,TEXT("AGV_RECOVERY_REFUSED_RAISED %s reason=%s from=%d lift=%.1f pose=%s yaw=%.2f route=%d/%d"),*VehicleName,*Reason,int32(From),LiftOffset,
+    *GetActorLocation().ToCompactString(),GetActorRotation().Yaw,RouteIndex,PlannedRoute.Num());
+   RecoveryFault(TEXT("RECOVERY REQUIRES SAFE FLOOR / LOW LOAD - OPERATOR REQUIRED"),TEXT("승강기 또는 높은 적재 상태에서 자동 탈출할 수 없습니다.")); return false; }
  // A hybrid route is not tied to the lanes and can meet something the sensors could not see when it was planned.
  // Route around it from where the vehicle stands: backing away blindly once ended up against a pallet behind it (2026-10-30).
  if ((Reason==TEXT("OBSTACLE ON ROUTE") || Reason==TEXT("OBSTACLE / TURN CLEARANCE")) && TryHybridReplanHere(From)) return true;

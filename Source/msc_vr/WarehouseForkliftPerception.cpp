@@ -59,13 +59,45 @@ bool PointCloudOverlaps(const FAgvObservedObstacle& Obstacle,const FTransform& P
  return false;
 }
 
-bool PointCloudOverlapsPart(const FAgvObservedObstacle& Obstacle,UStaticMeshComponent* Part,const FTransform& Pose,FVector* BlockingPoint=nullptr)
+// An object standing on the floor is solid below what was measured of it. The scanners see a low box's top and far
+// edges only; a fork tine passing under those points was never within 2cm of one, so the box was pushed for 10s without
+// a single blocked check (QA 2026-11-25, 20cm box beside the forks). Points of an observed object whose lowest point is
+// this close to the floor stand for a column down to it. A pallet on a rack shelf keeps its measured points only.
+constexpr float FloorRestingCm=30.f;
+bool RestsOnFloor(const FAgvObservedObstacle& Obstacle,float FloorZ)
+{
+ return Obstacle.WorldBounds.IsValid && Obstacle.WorldBounds.Min.Z-FloorZ<=FloorRestingCm;
+}
+FBox SolidBounds(const FAgvObservedObstacle& Obstacle,float FloorZ)
+{
+ FBox Bounds=Obstacle.WorldBounds;
+ if (RestsOnFloor(Obstacle,FloorZ)) Bounds.Min.Z=FMath::Min(Bounds.Min.Z,FloorZ);
+ return Bounds;
+}
+// The point of the measured point's column nearest the middle height of a part. Only low points: an object reaching from
+// near the floor up to an overhang at 90cm is not solid under the overhang, and treating it so closed the logged rack
+// column pickup corridor (2026-11-26).
+constexpr float LowPointCm=40.f;
+FVector SolidPoint(const FAgvObservedObstacle& Obstacle,const FVector& Point,float FloorZ,float PartMidZ)
+{
+ if (!RestsOnFloor(Obstacle,FloorZ) || Point.Z<=PartMidZ || Point.Z-FloorZ>LowPointCm) return Point;
+ return FVector(Point.X,Point.Y,FMath::Max(FloorZ,PartMidZ));
+}
+// A query box raised far enough to find a floor-standing object first measured above the part.
+FBox WithFloorObjectsAbove(FBox Box,float FloorZ)
+{
+ Box.Max.Z=FMath::Max(Box.Max.Z,FloorZ+FloorRestingCm);
+ return Box;
+}
+
+bool PointCloudOverlapsPart(const FAgvObservedObstacle& Obstacle,UStaticMeshComponent* Part,const FTransform& Pose,float FloorZ,FVector* BlockingPoint=nullptr)
 {
  const auto* Setup=Part->GetPhysicsBodySetup();
  if (!Setup) return PointCloudOverlaps(Obstacle,Pose,Part->GetStaticMesh()->GetBoundingBox(),BlockingPoint);
- if (!Obstacle.WorldBounds.Intersect(Setup->AggGeom.CalcAABB(Pose))) return false;
+ const FBox PartBox=Setup->AggGeom.CalcAABB(Pose);
+ if (!SolidBounds(Obstacle,FloorZ).Intersect(PartBox)) return false;
  for (const FVector& WorldPoint : Obstacle.WorldPoints)
-  if (Setup->GetShortestDistanceToPoint(WorldPoint,Pose,true)<=2.f)
+  if (Setup->GetShortestDistanceToPoint(SolidPoint(Obstacle,WorldPoint,FloorZ,PartBox.GetCenter().Z),Pose,true)<=2.f)
   { if (BlockingPoint) *BlockingPoint=WorldPoint;return true; }
  return false;
 }
@@ -392,7 +424,8 @@ bool AWarehouseForklift::PerceivedPartClear(UStaticMeshComponent* Part,const FTr
  }
  // PointCloudOverlapsPart uses AggGeom's bounds, which may differ from the
  // current native body's transformed bounds used for fixed-shape overlap.
- SensorKit->FindObservedCandidates(Setup ? Setup->AggGeom.CalcAABB(Pose) : Local.TransformBy(Pose.ToMatrixWithScale()),Candidates);
+ const float FloorZ=FloorBase(GetActorLocation().Z);
+ SensorKit->FindObservedCandidates(WithFloorObjectsAbove(Setup ? Setup->AggGeom.CalcAABB(Pose) : Local.TransformBy(Pose.ToMatrixWithScale()),FloorZ),Candidates);
  const bool RackInsertion=ActiveJob.bRackDestination && (AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::LowerLoad);
  if (RackInsertion) AddObservedPalletCandidates(SensorKit,SensorObservedPalletModels,Broad,Candidates);
  for (int32 Index : Candidates)
@@ -403,7 +436,7 @@ bool AWarehouseForklift::PerceivedPartClear(UStaticMeshComponent* Part,const FTr
   if (RackInsertion && Obstacle.Actor.Get()!=this && !Ignored.Contains(Obstacle.Actor.Get()) && PalletPose &&
       ObservedPalletOverlapsPart(*PalletPose,Part,Pose))
    return Reject(Obstacle,TEXT("observed-pallet-catalog"),FVector::ZeroVector);
-  if (Obstacle.Component.Get()!=Bearing && Obstacle.Actor.Get()!=this && !Ignored.Contains(Obstacle.Actor.Get()) && PointCloudOverlapsPart(Obstacle,Part,Pose,&Point))
+  if (Obstacle.Component.Get()!=Bearing && Obstacle.Actor.Get()!=this && !Ignored.Contains(Obstacle.Actor.Get()) && PointCloudOverlapsPart(Obstacle,Part,Pose,FloorZ,&Point))
    return Reject(Obstacle,TEXT("observed-point"),Point);
  }
  return true;
@@ -429,7 +462,8 @@ bool AWarehouseForklift::PerceivedMotionClear(UStaticMeshComponent* Part,FVector
   return false;
  };
  FAgvObstacleIndices Candidates;
- SensorKit->FindObservedCandidates(Swept,Candidates);
+ const float FloorZ=FloorBase(GetActorLocation().Z);
+ SensorKit->FindObservedCandidates(WithFloorObjectsAbove(Swept,FloorZ),Candidates);
  const bool RackInsertion=ActiveJob.bRackDestination && (AIState==EWarehouseAIState::AlignUnload || AIState==EWarehouseAIState::LowerLoad);
  if (RackInsertion) AddObservedPalletCandidates(SensorKit,SensorObservedPalletModels,Swept,Candidates);
  for (int32 Index : Candidates)
@@ -444,9 +478,11 @@ bool AWarehouseForklift::PerceivedMotionClear(UStaticMeshComponent* Part,FVector
     if (ObservedPalletOverlapsPart(*PalletPose,Part,Pose))
      return Reject(Obstacle,FVector::ZeroVector,TEXT("OBSERVED_PALLET_CATALOG"),0,0,Pose);
    }
-  if (!Obstacle.WorldBounds.Intersect(Swept)) continue;
-  for (const FVector& Point : Obstacle.WorldPoints) if (Swept.IsInsideOrOn(Point))
+  if (!SolidBounds(Obstacle,FloorZ).Intersect(Swept)) continue;
+  for (const FVector& Measured : Obstacle.WorldPoints)
   {
+   const FVector Point=SolidPoint(Obstacle,Measured,FloorZ,Swept.GetCenter().Z);
+   if (!Swept.IsInsideOrOn(Point)) continue;
    const float InitialDistance=Shape->GetShortestDistanceToPoint(Point,Start,true);
    float LastDistance=InitialDistance;
    const bool InitiallyOverlapping=LastDistance<=2.f;
